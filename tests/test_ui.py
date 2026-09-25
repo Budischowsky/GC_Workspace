@@ -102,3 +102,58 @@ def test_theme_applied(qtbot, win):
     assert app.property("gcws_theme")
     assert theme.ACCENT.lower() in app.styleSheet().lower()
     assert win.ws.next_color() in theme.RUN_COLORS
+
+
+def _view_pos(plot_widget, vb, x, y):
+    from PySide6.QtCore import QPointF
+    scene = vb.mapViewToScene(QPointF(x, y))
+    return plot_widget.mapFromScene(scene)
+
+
+def test_right_click_shows_scan_spectrum(qtbot, win, samples):
+    from PySide6.QtCore import Qt
+    _load(qtbot, win, samples, ["07_"])
+    st = win.ws.active
+    win.ws.set_signal_key("TIC")
+    sig = st.run.signal("TIC")
+    t = 15.8
+    y = float(sig.y[sig.index_of(t)])
+    qtbot.mouseClick(win.chrom.plot.viewport(), Qt.RightButton, pos=_view_pos(win.chrom.plot, win.chrom.vb, t, y))
+    sp = win.spectrum
+    assert sp.source == "scan" and sp.spec is not None and len(sp.spec.apex_scans) == 1
+    assert abs(sp.spec.rt - t) < 0.03              # one screen pixel is ~0.02 min here
+    assert sp.points()
+    s0 = sp.spec.apex_scans[0]
+    sp.step(+1)
+    assert sp.spec.apex_scans == [s0 + 1]
+    # right-drag: mean over a range; Shift+right-drag: background
+    from gcws.ms.spectra import ScanRequest
+    sp.show_range(ScanRequest(st.id, None, None, (15.0, 15.05)))
+    sp.show_range(ScanRequest(st.id, 15.75, 15.85, None))
+    assert len(sp.spec.apex_scans) > 3 and sp.spec.bg_scans
+    # selecting a peak returns to peak mode
+    win.ws.select_peak(3)
+    assert sp.source == "peak"
+    sp.show_range(ScanRequest(st.id, t, t, None))
+    target_st, peak = sp.target_peak()
+    assert target_st is st
+    res = win.ws.active_result()
+    assert (peak is None) == (res.peak_at(t) is None)
+
+
+def test_right_drag_does_not_scale(qtbot, win, samples):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    _load(qtbot, win, samples, ["07_"])
+    win.ws.set_signal_key("TIC")
+    vp = win.chrom.plot.viewport()
+    before = win.chrom.vb.viewRange()
+    a = _view_pos(win.chrom.plot, win.chrom.vb, 15.0, before[1][0] + 0.5 * (before[1][1] - before[1][0]))
+    b = a + QPoint(60, 0)
+    QTest.mousePress(vp, Qt.RightButton, Qt.NoModifier, a)
+    for k in range(1, 7):
+        QTest.mouseMove(vp, a + QPoint(10 * k, 0))
+    QTest.mouseRelease(vp, Qt.RightButton, Qt.NoModifier, b)
+    after = win.chrom.vb.viewRange()
+    assert after == before
+    assert win.spectrum.source == "scan" and len(win.spectrum.spec.apex_scans) > 1

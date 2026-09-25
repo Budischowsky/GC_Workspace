@@ -67,10 +67,11 @@ def save_unknown(win) -> None:
     import gc_export
     import gc_register as R
     ws = win.ws
-    st, peak = ws.active, ws.selected_peak()
+    st, peak = win.spectrum.target_peak()
     points = win.spectrum.points() if win.spectrum.spec is not None else []
     if st is None or peak is None or not points:
-        QMessageBox.information(win, "Register unknown", "Select a peak with a mass spectrum first.")
+        QMessageBox.information(win, "Register unknown", "Select a peak with a mass spectrum first (a scan "
+                                                         "spectrum must lie inside an integrated peak).")
         return
     if not R.significant_ions(points):
         QMessageBox.warning(win, "Register unknown", "The spectrum has no significant ions.")

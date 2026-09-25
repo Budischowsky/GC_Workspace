@@ -180,11 +180,23 @@ class ToolController(QObject):
 
 
 class ToolViewBox(pg.ViewBox):
-    """ViewBox that hands mouse gestures to the active integration tool."""
+    """ViewBox that hands mouse gestures to the active integration tool.
 
-    def __init__(self, controller: ToolController, **kw):
+    Right button (all boxes): a click asks for the mass spectrum at that time,
+    a drag for the mean spectrum over the range, Shift+drag marks a background
+    range; ``spectrumRequested(t0, t1, bg)`` is emitted in this box's x frame.
+    Right-drag on an axis still scales it. A non-interactive box (the
+    companion trace) never runs integration tools: a left click is emitted as
+    ``clicked(x)`` and left drags zoom or pan.
+    """
+    spectrumRequested = QtSignal(object, object, object, object)   # t0, t1, bg (t0, t1) or None, (x, y)
+    clicked = QtSignal(float, float)
+
+    def __init__(self, controller: ToolController, interactive: bool = True, **kw):
         super().__init__(**kw)
         self.ctl = controller
+        self.interactive = interactive
+        self._rdrag = None
         self.transform = (1.0, 0.0)      # display = data * scale + offset (active run)
         self.on_reset = None             # double-click: plot's default view
         self._grab = None
@@ -202,10 +214,18 @@ class ToolViewBox(pg.ViewBox):
         self.addItem(self.band, ignoreBounds=True)
 
     def mouseClickEvent(self, ev):
+        pos = self.mapSceneToView(ev.scenePos())
+        if ev.button() == Qt.RightButton:
+            self.spectrumRequested.emit(pos.x(), pos.x(), None, (pos.x(), pos.y()))
+            ev.accept()
+            return
         if ev.button() == Qt.LeftButton:
-            pos = self.mapSceneToView(ev.scenePos())
             if ev.double():
                 (self.on_reset or self.autoRange)()
+                ev.accept()
+                return
+            if not self.interactive:
+                self.clicked.emit(pos.x(), pos.y())
                 ev.accept()
                 return
             if self.ctl.click(self, pos.x(), pos.y(), ev.modifiers(), self.transform):
@@ -213,10 +233,35 @@ class ToolViewBox(pg.ViewBox):
                 return
         super().mouseClickEvent(ev)
 
+    def _right_drag(self, ev):
+        ev.accept()
+        pos = self.mapSceneToView(ev.scenePos())
+        if ev.isStart():
+            start = self.mapSceneToView(ev.buttonDownScenePos(Qt.RightButton))
+            self._rdrag = (start.x(), start.y(), bool(ev.modifiers() & Qt.ShiftModifier))
+        if self._rdrag is None:
+            return
+        x0, y0, bg = self._rdrag
+        self.band.setBrush(pg.mkBrush(*theme.PLOT["band_bg" if bg else "band"]))
+        self.band.setRegion((min(x0, pos.x()), max(x0, pos.x())))
+        self.band.show()
+        if ev.isFinish():
+            self.band.hide()
+            self._rdrag = None
+            lo, hi = sorted((x0, pos.x()))
+            if bg:
+                self.spectrumRequested.emit(None, None, (lo, hi), (x0, y0))
+            else:
+                self.spectrumRequested.emit(lo, hi, None, (x0, y0))
+
     def mouseDragEvent(self, ev, axis=None):
-        if ev.button() != Qt.LeftButton:
+        if ev.button() == Qt.RightButton and axis is None:
+            self._right_drag(ev)
+            return
+        if ev.button() != Qt.LeftButton or not self.interactive:
             super().mouseDragEvent(ev, axis)
             return
+        self.band.setBrush(pg.mkBrush(*theme.PLOT["band_bg"]))
         tool = self.ctl.tool
         pos = self.mapSceneToView(ev.scenePos())
         if ev.isStart():

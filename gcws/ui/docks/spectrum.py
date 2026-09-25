@@ -1,4 +1,15 @@
-"""Mass spectrum of the selected peak, m/z table and library hits."""
+"""Mass spectrum panel: the selected peak's spectrum, or any scan / time range.
+
+Two sources feed the panel:
+
+* **peak** -- the selected integrated peak (spectrum mode from the combo);
+* **scan** -- a right-click (one scan) or right-drag (mean over a range) in any
+  chromatogram; Shift+right-drag sets a background range that is subtracted
+  from every scan spectrum until it is cleared.
+
+Library search, NIST, MSP export and the unknown register all work on the
+spectrum on display, whatever its source.
+"""
 from __future__ import annotations
 
 import numpy as np
@@ -10,8 +21,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QHBoxL
                                QVBoxLayout, QWidget)
 
 from gcws.core.keys import is_fid
+from gcws.ms.spectra import MODES, ScanRequest, extract, extract_range, from_ms, ms_times
 from gcws.ui import theme
-from gcws.ms.spectra import MODES, extract, ms_times
 
 
 class StickPlot(pg.PlotWidget):
@@ -24,7 +35,8 @@ class StickPlot(pg.PlotWidget):
         self.getPlotItem().getViewBox().setMouseMode(pg.ViewBox.RectMode)
         self.texts = []
 
-    def show_spectrum(self, mz, ab, ref=None, title=""):
+    def show_spectrum(self, mz, ab, ref=None, title="", marks=None):
+        """``marks``: optional {m/z: (label, colour)} drawn above the bars (interpretation)."""
         self.clear()
         for t in self.texts:
             self.removeItem(t)
@@ -32,15 +44,26 @@ class StickPlot(pg.PlotWidget):
         if mz is None or len(mz) == 0:
             self.setTitle(title or "no spectrum")
             return
+        mz = np.asarray(mz, float)
         ab = np.asarray(ab, float)
         rel = ab / ab.max() * 100.0
         self.addItem(pg.BarGraphItem(x=mz, height=rel, width=0.6, brush=theme.PLOT["spectrum"], pen=None))
-        order = np.argsort(rel)[::-1][:8]
+        marks = marks or {}
+        order = [i for i in np.argsort(rel)[::-1][:8] if int(mz[i]) not in marks]
         for i in order:
             t = pg.TextItem(str(int(mz[i])), color=theme.PLOT["spectrum"], anchor=(0.5, 1))
             t.setPos(float(mz[i]), float(rel[i]))
             self.addItem(t)
             self.texts.append(t)
+        lookup = {int(m): r for m, r in zip(mz, rel)}
+        for m, (label, color) in marks.items():
+            y = lookup.get(int(m), 0.0)
+            t = pg.TextItem(html=f'<span style="color:{color}; font-weight:600;">{label}</span>', anchor=(0.5, 1))
+            t.setPos(float(m), float(y) + 2)
+            self.addItem(t)
+            self.texts.append(t)
+            if int(m) in lookup:
+                self.addItem(pg.BarGraphItem(x=[float(m)], height=[y], width=0.6, brush=color, pen=None))
         if ref:
             rmz = np.array([p[0] for p in ref], float)
             rab = np.array([p[1] for p in ref], float)
@@ -60,7 +83,7 @@ class StickPlot(pg.PlotWidget):
 
 
 class SpectrumDock(QWidget):
-    regionsChanged = QtSignal(list)           # [(t0, t1, colour)] on the displayed signal axis
+    regionsChanged = QtSignal(list)           # [(t0, t1, colour)] on the MS time axis
     nistRequested = QtSignal(list, str)
     atlasRequested = QtSignal(list, str)
     registerRequested = QtSignal()
@@ -70,9 +93,14 @@ class SpectrumDock(QWidget):
         super().__init__(parent)
         self.ws = ws
         self.spec = None
+        self.source = "peak"                   # "peak" | "scan"
+        self.scan_req: ScanRequest | None = None
+        self.bg_range: tuple[float, float] | None = None
+        self.setFocusPolicy(Qt.StrongFocus)
         self.mode = QComboBox()
         for k, v in MODES.items():
             self.mode.addItem(v, k)
+        self.mode.setToolTip("How the spectrum of a selected peak is formed")
         self.mode.currentIndexChanged.connect(lambda *_: self.refresh())
         b_atlas = QToolButton()
         b_atlas.setText("EI Atlas")
@@ -101,9 +129,39 @@ class SpectrumDock(QWidget):
         for b in (b_atlas, b_res, b_nist, b_copy, b_save, b_reg):
             top.addWidget(b)
 
+        # scan-mode bar: where the spectrum comes from, stepping, background
+        self.source_chip = theme.chip("", "info")
+        self.source_text = QLabel()
+        self.b_prev = QToolButton()
+        self.b_prev.setText("◀")
+        self.b_prev.setToolTip("Previous scan  [←]")
+        self.b_prev.clicked.connect(lambda: self.step(-1))
+        self.b_next = QToolButton()
+        self.b_next.setText("▶")
+        self.b_next.setToolTip("Next scan  [→]")
+        self.b_next.clicked.connect(lambda: self.step(+1))
+        self.bg_chip = theme.chip("", "bad")
+        self.b_clear_bg = QToolButton()
+        self.b_clear_bg.setText("Clear background")
+        self.b_clear_bg.clicked.connect(self.clear_background)
+        self.b_back = QToolButton()
+        self.b_back.setText("Back to peak")
+        self.b_back.setToolTip("Show the selected peak's spectrum again  [Esc]")
+        self.b_back.clicked.connect(self.back_to_peak)
+        self.source_bar = QWidget()
+        sb = QHBoxLayout(self.source_bar)
+        sb.setContentsMargins(0, 0, 0, 0)
+        for w in (self.source_chip, self.b_prev, self.b_next, self.source_text):
+            sb.addWidget(w)
+        sb.addStretch(1)
+        for w in (self.bg_chip, self.b_clear_bg, self.b_back):
+            sb.addWidget(w)
+        self.source_bar.hide()
+
         self.plot = StickPlot()
         self.info = QLabel()
         self.info.setObjectName("hint")
+        self.info.setWordWrap(True)
 
         # scan selection
         self.scan_plot = pg.PlotWidget()
@@ -119,12 +177,13 @@ class SpectrumDock(QWidget):
         use.setToolTip("Blue: scans averaged, red: background scans subtracted")
         use.clicked.connect(self._use_regions)
         auto = QPushButton("Automatic")
+        auto.setToolTip("Selected peak: automatic scan choice again")
         auto.clicked.connect(self._clear_override)
         sl = QVBoxLayout()
         sl.setContentsMargins(0, 0, 0, 0)
         sl.addWidget(self.scan_plot)
         h = QHBoxLayout()
-        h.addWidget(QLabel("Drag the regions to choose apex (blue) and background (red) scans"))
+        h.addWidget(theme.hint("Drag the regions to choose the averaged (blue) and background (red) scans", False))
         h.addStretch(1)
         h.addWidget(auto)
         h.addWidget(use)
@@ -158,12 +217,102 @@ class SpectrumDock(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(2, 2, 2, 2)
         lay.addLayout(top)
+        lay.addWidget(self.source_bar)
         lay.addWidget(self.info)
         lay.addWidget(split, 1)
 
-        for sig in (ws.selectionChanged, ws.activeRunChanged, ws.signalKeyChanged, ws.identsChanged):
+        ws.selectionChanged.connect(self._on_selection)
+        ws.activeRunChanged.connect(self._on_active)
+        for sig in (ws.signalKeyChanged, ws.identsChanged):
             sig.connect(lambda *_: self.refresh())
         ws.resultChanged.connect(lambda rid, key: self.refresh() if rid == ws.active_id else None)
+        ws.runRemoved.connect(self._on_removed)
+
+    # -- source switching --------------------------------------------------------
+
+    def _on_selection(self, run_id, index):
+        if index >= 0:
+            self.source = "peak"
+        if index >= 0 or self.source == "peak":
+            self.refresh()
+
+    def _on_active(self, *_):
+        self.source = "peak"
+        self.scan_req = None
+        self.bg_range = None
+        self.refresh()
+
+    def _on_removed(self, run_id):
+        if self.scan_req is not None and self.scan_req.run_id == run_id:
+            self.scan_req = None
+            self.source = "peak"
+            self.refresh()
+
+    def show_range(self, req: ScanRequest) -> None:
+        """Right-click / right-drag in a chromatogram (times on the MS axis)."""
+        if req.t0 is None:                       # Shift+right-drag: background only
+            self.bg_range = req.bg
+            if self.source == "scan" and self.scan_req is not None:
+                self.refresh()
+            else:
+                self.ws.message.emit(f"Background {req.bg[0]:.3f}-{req.bg[1]:.3f} min set: right-click a time "
+                                     "for its background-subtracted spectrum")
+                self._update_source_bar()
+            return
+        self.scan_req = req
+        self.source = "scan"
+        self.refresh()
+
+    def back_to_peak(self):
+        self.source = "peak"
+        self.refresh()
+
+    def clear_background(self):
+        self.bg_range = None
+        self.refresh()
+
+    def step(self, delta: int) -> None:
+        """Move a scan spectrum by ``delta`` scans (a range keeps its width)."""
+        req = self.scan_req
+        st = self.ws.runs.get(req.run_id) if req else None
+        if self.source != "scan" or st is None or st.run.ms is None or not self.spec or not self.spec.apex_scans:
+            return
+        ms = st.run.ms
+        a, b = min(self.spec.apex_scans), max(self.spec.apex_scans)
+        a, b = a + delta, b + delta
+        if a < 0 or b >= ms.n_scans:
+            return
+        t0, t1 = float(ms.rt[a]), float(ms.rt[b])
+        self.scan_req = ScanRequest(req.run_id, t0, t1 if b > a else t0, None)
+        self.refresh()
+
+    def keyPressEvent(self, ev):
+        if self.source == "scan" and ev.key() in (Qt.Key_Left, Qt.Key_Right):
+            self.step(-1 if ev.key() == Qt.Key_Left else 1)
+            ev.accept()
+            return
+        if self.source == "scan" and ev.key() == Qt.Key_Escape:
+            self.back_to_peak()
+            ev.accept()
+            return
+        super().keyPressEvent(ev)
+
+    def target_peak(self):
+        """``(RunState, Peak | None)``: the active run and the peak the spectrum on display belongs to.
+
+        In scan mode that is the integrated peak containing the scan time, if any.
+        """
+        st = self.ws.active
+        if st is None:
+            return None, None
+        if self.source == "peak":
+            return st, self.ws.selected_peak()
+        req = self.scan_req
+        res = self.ws.active_result()
+        if req is None or req.run_id != st.id or res is None or self.spec is None:
+            return st, None
+        t = from_ms(self.spec.rt, self.ws.signal_key, st.delay_value)
+        return st, res.peak_at(t)
 
     # -- data -----------------------------------------------------------------
 
@@ -171,15 +320,22 @@ class SpectrumDock(QWidget):
         return self.mode.currentData()
 
     def refresh(self):
+        self.hits.setRowCount(0)
+        if self.source == "scan" and self.scan_req is not None:
+            self._refresh_scan()
+            return
+        self.source = "peak"
+        self._update_source_bar()
         st = self.ws.active
         peak = self.ws.selected_peak()
-        self.hits.setRowCount(0)
         if st is None or peak is None or st.run.ms is None:
             self.spec = None
-            self.plot.show_spectrum(None, None, title="select a peak" if st and st.run.ms else "no MS data")
+            hint = "select a peak, or right-click a chromatogram" if st and st.run.ms else "no MS data"
+            self.plot.show_spectrum(None, None, title=hint)
             self.info.setText("")
             self.table.setRowCount(0)
             self.regionsChanged.emit([])
+            self._spectrum_changed()
             return
         key = self.ws.signal_key
         override = st.spectrum_overrides.get(round(peak.apex_rt, 4))
@@ -188,7 +344,7 @@ class SpectrumDock(QWidget):
         title = f"RT {peak.apex_rt:.3f}" + (f"  (MS {self.spec.rt:.3f})" if is_fid(key) else "")
         if ident and ident.name:
             title += f"  -  {ident.name}"
-        self.plot.show_spectrum(self.spec.mz, self.spec.ab, title=title)
+        self.plot.show_spectrum(self.spec.mz, self.spec.ab, title=title, marks=self._marks())
         self.info.setText(self.spec.note)
         self._fill_table()
         if ident is not None:
@@ -203,6 +359,74 @@ class SpectrumDock(QWidget):
                         item.setForeground(QColor(theme.OK))
                     self.hits.setItem(r, c, item)
         self._update_regions(st, peak, key)
+        self._spectrum_changed()
+
+    def _refresh_scan(self):
+        req = self.scan_req
+        st = self.ws.runs.get(req.run_id)
+        if st is None or st.run.ms is None:
+            self.scan_req = None
+            self.source = "peak"
+            self.refresh()
+            return
+        ms = st.run.ms
+        self.spec = extract_range(st.run, req.t0, req.t1, self.bg_range)
+        spec = self.spec
+        n = len(spec.apex_scans)
+        if n == 1:
+            s = spec.apex_scans[0]
+            what = f"Scan {s + 1}  ·  {ms.rt[s]:.3f} min"
+        else:
+            what = f"Mean of {n} scans  ·  {ms.rt[spec.apex_scans[0]]:.3f}-{ms.rt[spec.apex_scans[-1]]:.3f} min"
+        if spec.ab.size:
+            what += f"  ·  base m/z {int(spec.mz[int(np.argmax(spec.ab))])}"
+        if is_fid(self.ws.signal_key):
+            what += f"  (FID {from_ms(spec.rt, self.ws.signal_key, st.delay_value):.3f})"
+        if st.id != self.ws.active_id:
+            what = f"{st.name}:  " + what
+        self.plot.show_spectrum(spec.mz, spec.ab, title=what, marks=self._marks())
+        self.info.setText(spec.note)
+        self._fill_table()
+        self._update_source_bar(what)
+        self._show_scan_trace(st, spec)
+        self._spectrum_changed()
+
+    def _update_source_bar(self, text: str = ""):
+        scan = self.source == "scan"
+        self.source_bar.setVisible(scan or self.bg_range is not None)
+        theme.set_chip(self.source_chip, "Scan spectrum" if scan else "", "info")
+        for w in (self.b_prev, self.b_next, self.b_back):
+            w.setVisible(scan)
+        self.source_text.setText(text if scan else "")
+        bg = self.bg_range
+        theme.set_chip(self.bg_chip, f"BG {bg[0]:.3f}-{bg[1]:.3f} min" if bg else "", "bad")
+        self.b_clear_bg.setVisible(bg is not None)
+
+    def _show_scan_trace(self, st, spec):
+        ms = st.run.ms
+        scans = spec.apex_scans + spec.bg_scans
+        t0, t1 = float(ms.rt[min(scans)]), float(ms.rt[max(scans)])
+        w = max(t1 - t0, 0.15)
+        sl = (ms.rt >= t0 - w) & (ms.rt <= t1 + w)
+        sig = st.run.signal("TIC")
+        self.scan_curve.setData(ms.rt[sl], sig.y[sl] if sig is not None else ms.tic()[sl])
+        a0, a1 = float(ms.rt[min(spec.apex_scans)]), float(ms.rt[max(spec.apex_scans)])
+        self.apex_reg.setRegion((a0 - 0.001, a1 + 0.001))
+        regions = [(a0 - 0.001, a1 + 0.001, theme.PLOT["apex_region"])]
+        if spec.bg_scans:
+            b0, b1 = float(ms.rt[min(spec.bg_scans)]), float(ms.rt[max(spec.bg_scans)])
+            self.bg_reg.setRegion((b0 - 0.001, b1 + 0.001))
+            regions.append((b0 - 0.001, b1 + 0.001, theme.PLOT["bg_region"]))
+        self.bg_reg.setVisible(bool(spec.bg_scans))
+        self.scan_plot.getPlotItem().getViewBox().autoRange()
+        self.regionsChanged.emit(regions if st.id == self.ws.active_id else [])
+
+    def _marks(self):
+        """{m/z: (label, colour)} annotations for the stick plot (see interpretation)."""
+        return None
+
+    def _spectrum_changed(self):
+        """Hook: the spectrum on display changed (interpretation refreshes here)."""
 
     def _fill_table(self):
         self.table.setRowCount(0)
@@ -221,7 +445,7 @@ class SpectrumDock(QWidget):
         r = self.hits.currentRow()
         st = self.ws.active
         peak = self.ws.selected_peak()
-        if r < 0 or st is None or peak is None or self.spec is None:
+        if r < 0 or st is None or peak is None or self.spec is None or self.source != "peak":
             return
         ident = st.ident_set(self.ws.signal_key).for_peak(peak)
         if ident is None or r >= len(ident.hits):
@@ -240,11 +464,11 @@ class SpectrumDock(QWidget):
         self.scan_curve.setData(ms.rt[sl], sig.y[sl] if sig is not None else ms.tic()[sl])
         spec = self.spec
         regions = []
-        shift = st.delay_value if is_fid(key) else 0.0
+        self.bg_reg.setVisible(True)
         if spec and spec.apex_scans:
             a0, a1 = float(ms.rt[min(spec.apex_scans)]), float(ms.rt[max(spec.apex_scans)])
             self.apex_reg.setRegion((a0 - 0.001, a1 + 0.001))
-            regions.append((a0 + shift - 0.001, a1 + shift + 0.001, theme.PLOT["apex_region"]))
+            regions.append((a0 - 0.001, a1 + 0.001, theme.PLOT["apex_region"]))
         if spec and spec.bg_scans:
             b0, b1 = float(ms.rt[min(spec.bg_scans)]), float(ms.rt[max(spec.bg_scans)])
             self.bg_reg.setRegion((b0 - 0.001, b1 + 0.001))
@@ -252,19 +476,25 @@ class SpectrumDock(QWidget):
             post = [s for s in spec.bg_scans if s > max(spec.apex_scans or [0])]
             for grp in (pre, post):
                 if grp:
-                    regions.append((float(ms.rt[min(grp)]) + shift - 0.001,
-                                    float(ms.rt[max(grp)]) + shift + 0.001, theme.PLOT["bg_region"]))
+                    regions.append((float(ms.rt[min(grp)]) - 0.001, float(ms.rt[max(grp)]) + 0.001,
+                                    theme.PLOT["bg_region"]))
         self.scan_plot.getPlotItem().getViewBox().autoRange()
         self.regionsChanged.emit(regions)
 
     def _use_regions(self):
         st = self.ws.active
+        a0, a1 = self.apex_reg.getRegion()
+        b0, b1 = self.bg_reg.getRegion()
+        if self.source == "scan" and self.scan_req is not None:
+            self.scan_req = ScanRequest(self.scan_req.run_id, a0, a1, None)
+            if self.bg_reg.isVisible() and b1 > b0:
+                self.bg_range = (b0, b1)
+            self.refresh()
+            return
         peak = self.ws.selected_peak()
         if st is None or peak is None:
             return
         ms = st.run.ms
-        a0, a1 = self.apex_reg.getRegion()
-        b0, b1 = self.bg_reg.getRegion()
         apex = [int(s) for s in ms.scans_between(a0, a1)]
         bg = [int(s) for s in ms.scans_between(b0, b1) if s not in apex]
         if not apex:
@@ -288,6 +518,10 @@ class SpectrumDock(QWidget):
 
     def spectrum_name(self) -> str:
         st = self.ws.active
+        if self.source == "scan" and self.scan_req is not None and self.spec is not None:
+            run = self.ws.runs.get(self.scan_req.run_id)
+            name = run.name if run is not None else "GC"
+            return f"{name} MS {self.spec.rt:.3f}"
         p = self.ws.selected_peak()
         if st is None or p is None:
             return "GC unknown"
@@ -300,9 +534,9 @@ class SpectrumDock(QWidget):
 
     def msp(self) -> str:
         import gc_atlas
-        p = self.ws.selected_peak()
-        return gc_atlas.msp_text({"spectrum": self.points(), "rt": p.apex_rt if p else None,
-                                  "name": self.spectrum_name()})
+        _st, p = self.target_peak()
+        rt = p.apex_rt if p is not None else (self.spec.rt if self.spec is not None else None)
+        return gc_atlas.msp_text({"spectrum": self.points(), "rt": rt, "name": self.spectrum_name()})
 
     def copy_msp(self):
         if self.points():

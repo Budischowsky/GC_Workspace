@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal as QtSignal
 from PySide6.QtGui import QColor, QPen
 from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from gcws.integration.method import EventKind
+from gcws.ms.spectra import ScanRequest, from_ms, to_ms
 from gcws.ui import theme
 from gcws.ui.plot.items import LabelsItem, PeaksItem
 from gcws.ui.plot.tools import ToolViewBox
@@ -27,12 +28,15 @@ def _pen(color, width=1.0, alpha=255, style=Qt.SolidLine):
 
 class ChromPlot(QWidget):
     """Overlay of all visible runs; the active run is drawn bold with its peaks."""
+    spectrumRequested = QtSignal(object)        # ScanRequest (MS time axis)
 
     def __init__(self, ws, tools, detail: bool = False, parent=None):
         super().__init__(parent)
         self.ws = ws
         self.detail = detail
         self.vb = ToolViewBox(tools)
+        self.vb.spectrumRequested.connect(self._spectrum_request)
+        self._ms_regions_ms: list = []
         self.plot = pg.PlotWidget(viewBox=self.vb)
         self.plot.setLabel("bottom", "RT", units="min")
         self.plot.getAxis("left").enableAutoSIPrefix(True)
@@ -237,12 +241,44 @@ class ChromPlot(QWidget):
             self.vb.addItem(reg, ignoreBounds=True)
             self.regions.append(reg)
 
+    def _spectrum_request(self, t0, t1, bg, xy):
+        """Right-click / right-drag in this plot -> spectrum request in MS time."""
+        rid = self._run_at(*xy) if xy is not None else self.ws.active_id
+        st = self.ws.runs.get(rid) if rid else None
+        if st is None or st.run.ms is None:
+            self.ws.message.emit("No MS data for a spectrum here")
+            return
+        key, d = self.ws.signal_key, st.delay_value
+        conv = lambda t: None if t is None else to_ms(t, key, d)
+        bg_ms = (conv(bg[0]), conv(bg[1])) if bg is not None else None
+        self.spectrumRequested.emit(ScanRequest(st.id, conv(t0), conv(t1), bg_ms))
+
+    def _run_at(self, x: float, y: float):
+        """Run whose curve passes nearest to (x, y) within 12 px, else the active run."""
+        px = abs(self.vb.viewPixelSize()[1]) or 1e-12
+        best = None
+        for rid, curve in self.curves.items():
+            xs, ys = curve.getData()
+            if xs is None or len(xs) < 2 or not (xs[0] <= x <= xs[-1]):
+                continue
+            d = abs(float(np.interp(x, xs, ys)) - y) / px
+            if best is None or d < best[0]:
+                best = (d, rid)
+        if best is not None and best[0] <= 12:
+            return best[1]
+        return self.ws.active_id
+
     def set_ms_regions(self, regions):
-        """Shaded apex/background scan ranges (list of (t0, t1, color))."""
+        """Shaded apex/background scan ranges: [(t0, t1, colour)] on the MS time axis."""
+        self._ms_regions_ms = list(regions)
         for it in self.ms_regions:
             self.vb.removeItem(it)
         self.ms_regions = []
+        st = self.ws.active
+        d = st.delay_value if st is not None else 0.0
+        key = self.ws.signal_key
         for t0, t1, color in regions:
+            t0, t1 = from_ms(t0, key, d), from_ms(t1, key, d)
             c = QColor(color)
             reg = pg.LinearRegionItem((t0, t1), movable=False, brush=pg.mkBrush(c.red(), c.green(), c.blue(), 45),
                                       pen=pg.mkPen(None))

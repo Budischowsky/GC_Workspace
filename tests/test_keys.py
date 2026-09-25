@@ -108,3 +108,27 @@ def test_similarity():
     assert cosine(a, {91: 999.0}) == 0.0
     assert 0 < cosine(a, {57: 999.0, 71: 300.0}) < 1
     assert cosine(a, None) == 0.0
+
+
+def test_extract_range_mean_and_background(tmp_path):
+    from gcws.core.model import Run
+    from gcws.ms.spectra import extract_range, from_ms, to_ms
+    ms = _matrix(seed=5)
+    run = Run(path=tmp_path, meta=None, ms=ms)
+    t = float(ms.rt[7])
+    one = extract_range(run, t)
+    ref = _loop_spectrum(ms, [7])
+    assert one.apex_scans == [7] and one.mode == "scan"
+    assert dict(zip(one.mz.tolist(), one.ab.tolist())) == pytest.approx(ref)
+    rng = extract_range(run, float(ms.rt[10]), float(ms.rt[14]))
+    assert rng.apex_scans == [10, 11, 12, 13, 14]
+    assert dict(zip(rng.mz.tolist(), rng.ab.tolist())) == pytest.approx(_loop_spectrum(ms, range(10, 15)))
+    sub = extract_range(run, float(ms.rt[10]), float(ms.rt[14]), bg=(float(ms.rt[20]), float(ms.rt[22])))
+    bg = _loop_spectrum(ms, [20, 21, 22])
+    mean = _loop_spectrum(ms, range(10, 15))
+    expect = {m: v - bg.get(m, 0.0) for m, v in mean.items() if v - bg.get(m, 0.0) > 0}
+    assert dict(zip(sub.mz.tolist(), sub.ab.tolist())) == pytest.approx(expect)
+    assert sub.bg_scans == [20, 21, 22]
+    assert to_ms(10.0, "FID - Blank", 0.006) == pytest.approx(9.994)
+    assert from_ms(9.994, "FID", 0.006) == pytest.approx(10.0)
+    assert to_ms(10.0, "TIC", 0.006) == 10.0

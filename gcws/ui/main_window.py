@@ -325,7 +325,9 @@ class MainWindow(QMainWindow):
                                         self.registerUnknownAction, self.setIstdAction])
         self.table.searchRequested.connect(self.library_search)
         self.table.integrateRequested.connect(self.integrate)
-        self.spectrum.regionsChanged.connect(self.zoom.set_ms_regions)
+        for plot in (self.chrom, self.zoom):
+            self.spectrum.regionsChanged.connect(plot.set_ms_regions)
+            plot.spectrumRequested.connect(self._scan_spectrum)
         self.spectrum.nistRequested.connect(self.nist_search)
         self.spectrum.atlasRequested.connect(self.atlas_hits)
         self.spectrum.registerRequested.connect(self.register_unknown)
@@ -605,10 +607,20 @@ class MainWindow(QMainWindow):
     def nist_selected(self):
         self.spectrum._emit(self.spectrum.nistRequested)
 
+    def _scan_spectrum(self, req):
+        """Right-click / right-drag in a chromatogram: show that spectrum."""
+        if self.ws.runs.get(req.run_id) is None:
+            return
+        self.spectrum.show_range(req)
+        d = self.docks["spectrum"]
+        if not d.isVisible():
+            d.show()
+        d.raise_()
+
     def atlas_hits(self, points, name):
         from gcws.identify.service import search_methods
         from gcws.ui.dialogs.identify import AtlasHitsDialog
-        st, peak = self.ws.active, self.ws.selected_peak()
+        st, peak = self.spectrum.target_peak()
         store = search_methods()
         method = store.for_gc_method(st.run.meta.method if st and st.run.meta else "")
 
@@ -634,10 +646,11 @@ class MainWindow(QMainWindow):
         """The full EI Atlas investigation (native window, research tab)."""
         from gcws.identify.atlas_bridge import AtlasBridge
         from gcws.ui.dialogs.register import db_path
-        st, peak = self.ws.active, self.ws.selected_peak()
+        st, peak = self.spectrum.target_peak()
         points = self.spectrum.points()
-        if st is None or peak is None or not points:
-            QMessageBox.information(self, "EI Atlas", "Select a peak with a mass spectrum first.")
+        if st is None or not points:
+            QMessageBox.information(self, "EI Atlas", "Select a peak with a mass spectrum (or right-click a "
+                                                      "chromatogram) first.")
             return
         spec = self.spectrum.spec
         mig = self.ws.quant.get("migration") or {}
@@ -649,7 +662,8 @@ class MainWindow(QMainWindow):
         context = {"sample": st.run.path.name, "sample_name": st.name, "report_type": "GC Workspace",
                    "date": (st.run.meta.acquired or "")[:10], "analyst": mig.get("analyst", ""),
                    "simulant": mig.get("simulant", ""), "source_file": str(st.run.path), "label": st.name,
-                   "peak_no": peak.number, "peak_rt": peak.apex_rt, "area_pct": peak.area_pct,
+                   "peak_no": peak.number if peak else None, "peak_rt": peak.apex_rt if peak else spec.rt,
+                   "area_pct": peak.area_pct if peak else None,
                    "method": "GC Workspace", "tic": ([float(x) for x in ms.rt[sl]], [int(v) for v in ms.stored_tic[sl]])}
         bridge = AtlasBridge.instance()
         if not getattr(self, "_atlas_connected", False):
@@ -1033,8 +1047,14 @@ class MainWindow(QMainWindow):
         lines = [f"{key:>6}   {label}" for name, label, key, tip in TOOLS]
         lines += ["", "    F5   Integrate active", "Shift+F5   Integrate all", "Ctrl+F   Library search",
                   "Ctrl+E   EI Atlas hit list", "Ctrl+N   NIST search", "Ctrl+I   Extracted ion chromatogram",
-                  "Ctrl+Z / Ctrl+Y   Undo / Redo", "", "Mouse: wheel zooms, right-drag scales, double-click "
-                  "resets the view; Shift disables snapping."]
+                  "Ctrl+Z / Ctrl+Y   Undo / Redo", "",
+                  "Mouse in a chromatogram:",
+                  "  right-click              mass spectrum at that time",
+                  "  right-drag               mean spectrum over the range",
+                  "  Shift+right-drag         background range (subtracted from scan spectra)",
+                  "  wheel                    zoom; right-drag on an axis scales it",
+                  "  double-click             reset the view; Shift disables snapping",
+                  "Spectrum panel: ← / → step one scan, Esc returns to the peak."]
         QMessageBox.information(self, "Keyboard shortcuts", "\n".join(lines))
 
     def about(self):

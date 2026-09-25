@@ -47,6 +47,80 @@ class Spectrum:
         return [int(self.mz[i]) for i in order]
 
 
+@dataclass
+class ScanRequest:
+    """A spectrum asked for by time (right-click / right-drag), all times on the MS axis."""
+    run_id: str
+    t0: float | None
+    t1: float | None
+    bg: tuple[float, float] | None = None
+
+
+def to_ms(t: float, key: str, delay: float) -> float:
+    """Time on a ``key`` axis -> MS time (FID times are shifted by the delay)."""
+    return t - delay if is_fid(key) else t
+
+
+def from_ms(t_ms: float, key: str, delay: float) -> float:
+    """MS time -> time on a ``key`` axis."""
+    return t_ms + delay if is_fid(key) else t_ms
+
+
+def subtract(a: tuple[np.ndarray, np.ndarray], b: tuple[np.ndarray, np.ndarray],
+             f: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
+    """``a - f*b`` for nominal spectra given as sorted (mz, ab) arrays; keeps positives."""
+    ma, aa = a
+    mb, ab = b
+    if mb.size == 0:
+        return ma, aa
+    masses = np.union1d(ma, mb)
+    out = np.zeros(masses.size)
+    out[np.searchsorted(masses, ma)] += aa
+    out[np.searchsorted(masses, mb)] -= f * ab
+    keep = out > 0
+    return masses[keep].astype(np.int64), out[keep]
+
+
+def extract_range(run, t0_ms: float, t1_ms: float | None = None, bg: tuple[float, float] | None = None,
+                  blank=None) -> Spectrum | None:
+    """Spectrum of one scan (``t1_ms`` None or equal) or the mean over a time range.
+
+    ``bg``: an MS time range whose mean spectrum is subtracted (scans of the
+    range itself are never used as background). ``blank``: optional callable
+    ``blank(scans) -> (mz, ab)`` returning the aligned blank spectrum to subtract.
+    """
+    ms = run.ms
+    if ms is None or ms.n_scans == 0:
+        return None
+    if t1_ms is None or abs(t1_ms - t0_ms) < 1e-9:
+        scans = np.array([ms.scan_at_rt(t0_ms)])
+    else:
+        lo, hi = sorted((t0_ms, t1_ms))
+        scans = ms.scans_between(lo, hi)
+        if scans.size == 0:
+            scans = np.array([ms.scan_at_rt(0.5 * (lo + hi))])
+    mz, ab = ms.nominal_spectrum_arrays(scans)
+    notes = [f"scan {int(scans[0]) + 1}" if scans.size == 1 else
+             f"{scans.size} scans averaged ({ms.rt[scans[0]]:.3f}-{ms.rt[scans[-1]]:.3f} min)"]
+    bg_scans: list[int] = []
+    if bg is not None:
+        b0, b1 = sorted(bg)
+        cand = ms.scans_between(b0, b1)
+        if cand.size == 0:
+            cand = np.array([ms.scan_at_rt(0.5 * (b0 + b1))])
+        bg_scans = [int(s) for s in cand if s not in set(scans.tolist())]
+        if bg_scans:
+            mz, ab = subtract((mz, ab), ms.nominal_spectrum_arrays(bg_scans))
+            notes.append(f"minus background of {len(bg_scans)} scans ({b0:.3f}-{b1:.3f} min)")
+    if blank is not None:
+        bmz, bab = blank(scans)
+        if bmz.size:
+            mz, ab = subtract((mz, ab), (bmz, bab))
+            notes.append("blank spectrum subtracted")
+    return Spectrum(mz, ab, float(np.mean(ms.rt[scans])), "scan", [int(s) for s in scans], bg_scans,
+                    ", ".join(notes))
+
+
 def ms_times(peak, key: str, delay: float) -> tuple[float, float, float]:
     """Peak start/end/apex on the MS time axis (FID peaks are delay-shifted)."""
     if is_fid(key):
