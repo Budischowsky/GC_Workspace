@@ -332,6 +332,7 @@ class MainWindow(QMainWindow):
         self.spectrum.atlasRequested.connect(self.atlas_hits)
         self.spectrum.registerRequested.connect(self.register_unknown)
         self.spectrum.investigateRequested.connect(self.atlas_research)
+        self.spectrum.ionClicked.connect(self.show_ion_eic)
         self.replicates.reportRequested.connect(lambda kind, gid: self.report(kind, gid))
         self._tool_changed("select")
 
@@ -607,6 +608,21 @@ class MainWindow(QMainWindow):
 
     def nist_selected(self):
         self.spectrum._emit(self.spectrum.nistRequested)
+
+    def show_ion_eic(self, mz: int):
+        """Click on an ion in the spectrum: its EIC below the FID, or as the working signal."""
+        from gcws.core.keys import is_fid
+        key = eic_key([mz])
+        st = self.ws.active
+        if st is None or st.run.ms is None:
+            return
+        st.run.signal(key)
+        if self.chrom.dual_on() and is_fid(self.ws.signal_key):
+            self.chrom.companion.set_key(key)
+            self.statusBar().showMessage(f"EIC m/z {mz} shown below the FID", 5000)
+        else:
+            self.ws.set_signal_key(key)
+        self._refresh_signals()
 
     def _scan_spectrum(self, req):
         """Right-click / right-drag in a chromatogram: show that spectrum."""

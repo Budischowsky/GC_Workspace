@@ -185,3 +185,28 @@ def test_dual_fid_ms_view(qtbot, win, samples):
     assert abs(xs[0] - (st.run.fid.rt[0] - st.delay_value)) < 1e-9
     chrom.dual.setChecked(False)
     assert not comp.isVisible()
+
+
+def test_interpretation_tab_and_class_hints(qtbot, win, samples):
+    _load(qtbot, win, samples, ["07_"])
+    ws = win.ws
+    ws.set_signal_key("TIC")
+    res = ws.active_result()
+    idx = min(range(len(res.peaks)), key=lambda i: abs(res.peaks[i].apex_rt - 24.857))
+    ws.select_peak(idx)
+    sp = win.spectrum
+    assert sp.interp is not None and sp.interp.classes[0].id == "phosphite"
+    assert "Irgafos 168" in sp.interp_view.toPlainText()
+    assert sp.interp.m is not None and sp.interp.m.mz == 646
+    # the optional "Class hint" column fills in lazily
+    st, peak = ws.active, res.peaks[idx]
+    win.table.set_shown(win.table.shown_keys() + ["class_hint"])
+    ws.hints.get(st, "TIC", peak)                      # queues the computation
+    qtbot.waitUntil(lambda: ws.hints.get(st, "TIC", peak) is not None, timeout=20000)
+    text, tip = ws.hints.get(st, "TIC", peak)
+    assert "phosphite" in text.lower() and tip
+    # clicking an ion shows its EIC below the FID
+    ws.set_signal_key("FID")
+    win.chrom.dual.setChecked(True)
+    win.show_ion_eic(441)
+    assert win.chrom.companion.key == "EIC 441"

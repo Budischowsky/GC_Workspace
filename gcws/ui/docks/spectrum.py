@@ -23,9 +23,12 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QHBoxL
 from gcws.core.keys import is_fid
 from gcws.ms.spectra import MODES, ScanRequest, extract, extract_range, from_ms, ms_times
 from gcws.ui import theme
+from gcws.ui.docks.interpretation_view import InterpretationView
 
 
 class StickPlot(pg.PlotWidget):
+    ionClicked = QtSignal(int)                  # m/z of the bar clicked
+
     def __init__(self):
         super().__init__()
         self.setMenuEnabled(False)
@@ -33,14 +36,28 @@ class StickPlot(pg.PlotWidget):
         self.setLabel("left", "rel. abundance")
         self.showGrid(y=True, alpha=theme.PLOT["grid_alpha"])
         self.getPlotItem().getViewBox().setMouseMode(pg.ViewBox.RectMode)
+        self.setToolTip("Click an ion to show its extracted ion chromatogram; drag to zoom, double-click resets")
         self.texts = []
+        self._mz = np.zeros(0)
+        self.scene().sigMouseClicked.connect(self._clicked)
+
+    def _clicked(self, ev):
+        if ev.button() != Qt.LeftButton or ev.double() or self._mz.size == 0:
+            if ev.double():
+                self.getPlotItem().getViewBox().autoRange()
+            return
+        x = self.getPlotItem().getViewBox().mapSceneToView(ev.scenePos()).x()
+        i = int(np.argmin(np.abs(self._mz - x)))
+        if abs(self._mz[i] - x) <= 0.7:
+            self.ionClicked.emit(int(self._mz[i]))
 
     def show_spectrum(self, mz, ab, ref=None, title="", marks=None):
-        """``marks``: optional {m/z: (label, colour)} drawn above the bars (interpretation)."""
+        """``marks``: optional {m/z: (label, level)} drawn above the bars (interpretation)."""
         self.clear()
         for t in self.texts:
             self.removeItem(t)
         self.texts = []
+        self._mz = np.asarray(mz if mz is not None else [], float)
         if mz is None or len(mz) == 0:
             self.setTitle(title or "no spectrum")
             return
@@ -56,9 +73,12 @@ class StickPlot(pg.PlotWidget):
             self.addItem(t)
             self.texts.append(t)
         lookup = {int(m): r for m, r in zip(mz, rel)}
-        for m, (label, color) in marks.items():
+        x_lo, x_hi = float(min(mz)) - 5, float(max(mz)) + 5
+        for m, (label, level) in marks.items():
+            color = theme.status_color(level).name() if level in theme.LEVELS else level
             y = lookup.get(int(m), 0.0)
-            t = pg.TextItem(html=f'<span style="color:{color}; font-weight:600;">{label}</span>', anchor=(0.5, 1))
+            ax = 1.0 if m > x_hi - 0.12 * (x_hi - x_lo) else (0.0 if m < x_lo + 0.08 * (x_hi - x_lo) else 0.5)
+            t = pg.TextItem(html=f'<span style="color:{color}; font-weight:600;">{label}</span>', anchor=(ax, 1))
             t.setPos(float(m), float(y) + 2)
             self.addItem(t)
             self.texts.append(t)
@@ -88,6 +108,7 @@ class SpectrumDock(QWidget):
     atlasRequested = QtSignal(list, str)
     registerRequested = QtSignal()
     investigateRequested = QtSignal()
+    ionClicked = QtSignal(int)
 
     def __init__(self, ws, parent=None):
         super().__init__(parent)
@@ -159,6 +180,10 @@ class SpectrumDock(QWidget):
         self.source_bar.hide()
 
         self.plot = StickPlot()
+        self.plot.ionClicked.connect(self.ionClicked.emit)
+        self.interp = None
+        self._interp_cache: dict = {}
+        self.interp_view = InterpretationView()
         self.info = QLabel()
         self.info.setObjectName("hint")
         self.info.setWordWrap(True)
@@ -205,6 +230,7 @@ class SpectrumDock(QWidget):
         self.hits.currentCellChanged.connect(lambda *_: self._show_hit())
 
         self.tabs = QTabWidget()
+        self.tabs.addTab(self.interp_view, "Interpretation")
         self.tabs.addTab(self.hits, "Library hits")
         self.tabs.addTab(self.table, "m/z table")
         self.tabs.addTab(scans, "Scans")
@@ -422,11 +448,64 @@ class SpectrumDock(QWidget):
         self.regionsChanged.emit(regions if st.id == self.ws.active_id else [])
 
     def _marks(self):
-        """{m/z: (label, colour)} annotations for the stick plot (see interpretation)."""
-        return None
+        """{m/z: (label, level)} annotations for the stick plot from the interpretation."""
+        self.interp = self._interpret()
+        return self.interp.marks() if self.interp is not None else None
+
+    def _interpret(self):
+        """Interpretation of the spectrum on display (cached per spectrum and context)."""
+        spec = self.spec
+        if spec is None or spec.ab.size == 0:
+            return None
+        from gcws.ms.interpret import Context, interpret
+        rid = self.scan_req.run_id if (self.source == "scan" and self.scan_req) else self.ws.active_id
+        st = self.ws.runs.get(rid) if rid else None
+        if st is None or st.run.ms is None:
+            return None
+        ms = st.run.ms
+        hit = None
+        if self.source == "peak":
+            peak = self.ws.selected_peak()
+            ident = st.ident_set(self.ws.signal_key).for_peak(peak) if peak is not None else None
+            if ident is not None and ident.hits:
+                h = ident.hits[0]
+                hit = {"name": h.get("name", ""), "cas": h.get("cas", ""), "formula": h.get("formula", ""),
+                       "mw": h.get("mw")}
+        ri = None
+        ladder = (self.ws.quant.get("ri") or {}).get("ladder") or {}
+        if ladder:
+            try:
+                import gc_qc
+                ri = gc_qc.retention_index(spec.rt + st.delay_value, {int(k): float(v) for k, v in ladder.items()})
+            except Exception:  # noqa: BLE001 - RI is optional context
+                ri = None
+        key = (rid, spec.mode, tuple(spec.apex_scans), tuple(spec.bg_scans), spec.ab.size,
+               round(float(spec.ab.sum()), 3), ri, (hit or {}).get("name"))
+        res = self._interp_cache.get(key)
+        if res is None:
+            lo, hi = ms.mass_range()
+            ctx = Context(rt_ms=spec.rt, ri=ri, mass_range=(lo, hi), min_abundance=ms.min_abundance(),
+                          library_hit=hit)
+            try:
+                res = interpret(spec.mz, spec.ab, ctx)
+            except Exception:  # noqa: BLE001 - never break the spectrum panel
+                import logging
+                logging.getLogger(__name__).exception("interpretation failed")
+                return None
+            if len(self._interp_cache) > 64:
+                self._interp_cache.clear()
+            self._interp_cache[key] = res
+        return res
 
     def _spectrum_changed(self):
-        """Hook: the spectrum on display changed (interpretation refreshes here)."""
+        """The spectrum on display changed: refresh the interpretation tab."""
+        if self.spec is None or self.spec.ab.size == 0:
+            self.interp = None
+        label = self.plot.getPlotItem().titleLabel.text if self.spec is not None else ""
+        import re
+        self.interp_view.show_result(self.interp, re.sub(r"<[^>]+>", "", label or ""))
+        if self.hits.rowCount() == 0 and self.interp is not None and self.tabs.currentWidget() is self.hits:
+            self.tabs.setCurrentWidget(self.interp_view)
 
     def _fill_table(self):
         self.table.setRowCount(0)

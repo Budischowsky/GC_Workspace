@@ -106,6 +106,8 @@ class Workspace(QObject):
         self._quant_timer.timeout.connect(self.recompute_quant)
         for sig in (self.resultChanged, self.identsChanged, self.runChanged, self.runAdded, self.runRemoved):
             sig.connect(lambda *_: self.schedule_quant())
+        from gcws.ui.hint_cache import HintCache
+        self.hints = HintCache(self, self)
 
     # -- runs --------------------------------------------------------------
 

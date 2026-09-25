@@ -51,6 +51,14 @@ def _ms_rt(r: Row, ws):
     return r.peak.apex_rt - st.delay_value
 
 
+def _hint(r: Row, ws):
+    cache = getattr(ws, "hints", None)
+    if cache is None:
+        return ""
+    v = cache.get(ws.active, ws.signal_key, r.peak)
+    return "…" if v is None else v[0]
+
+
 COLUMNS: list[Column] = [
     Column("num", "#", lambda r, ws: r.peak.number, "d"),
     Column("rt", "RT [min]", lambda r, ws: r.peak.apex_rt, ".3f"),
@@ -83,6 +91,8 @@ COLUMNS: list[Column] = [
     Column("sml", "SML", lambda r, ws: r.quant.get("sml", ""), numeric=False, default=False),
     Column("qstatus", "Status", lambda r, ws: r.quant.get("status", ""), numeric=False),
     Column("origin", "Integration", lambda r, ws: r.peak.origin, numeric=False, default=False),
+    Column("class_hint", "Class hint", _hint, numeric=False, default=False,
+           tip="Substance-class clue from the MS interpreter (spectrum of the peak); hover for details"),
 ]
 COLUMN_KEYS = [c.key for c in COLUMNS]
 
@@ -109,6 +119,12 @@ class PeakTableModel(QAbstractTableModel):
         unit = getattr(self.ws, "quant_unit", lambda: "")()
         self.conc_header = f"Conc. [{unit}]" if unit else "Conc."
         self.endResetModel()
+
+    def refresh_column(self, key: str) -> None:
+        if not self.rows or key not in COLUMN_KEYS:
+            return
+        c = COLUMN_KEYS.index(key)
+        self.dataChanged.emit(self.index(0, c), self.index(len(self.rows) - 1, c))
 
     def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self.rows)
@@ -158,6 +174,10 @@ class PeakTableModel(QAbstractTableModel):
             f = QFont()
             f.setBold(True)
             return f
+        if role == Qt.ToolTipRole and col.key == "class_hint":
+            cache = getattr(self.ws, "hints", None)
+            v = cache.get(self.ws.active, self.ws.signal_key, row.peak) if cache is not None else None
+            return v[1] if v else None
         if role == Qt.ToolTipRole and col.key == "name" and row.ident is not None and row.ident.hits:
             lines = [f"{h.get('name', '')}  ({h.get('cas', '') or '-'})  {h.get('score', '')}"
                      for h in row.ident.hits[:6]]

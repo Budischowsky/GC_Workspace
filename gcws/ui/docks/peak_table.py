@@ -116,6 +116,7 @@ class PeakTable(QWidget):
         ws.resultChanged.connect(self._on_result)
         ws.selectionChanged.connect(self._on_selection)
         ws.runRemoved.connect(lambda *_: self.reload())
+        ws.hints.updated.connect(lambda rid: self.model.refresh_column("class_hint") if rid == ws.active_id else None)
         self.reload()
 
     # -- data ----------------------------------------------------------------
