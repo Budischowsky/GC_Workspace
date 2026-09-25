@@ -20,10 +20,48 @@ def bootstrap_legacy() -> None:
     os.environ.setdefault("GCWS_DATA", str(DATA))
 
 
+#: NIAS installation next to this one; its search methods and settings are
+#: taken over once so the standalone starts with the familiar configuration.
+NIAS_WORKING = ROOT.parent / "NIAS Working"
+
+
 def initialize() -> None:
     for folder in (DATA, DATA / "methods", DATA / "layouts", DATA / "logs",
                    DATA / "reports", DATA / "projects"):
         folder.mkdir(parents=True, exist_ok=True)
+    import_nias_settings()
+
+
+def import_nias_settings() -> list[str]:
+    """Copy NIAS search methods and settings once (never overwrites)."""
+    import json
+    import shutil
+    src = NIAS_WORKING / "data"
+    done = []
+    if not src.is_dir():
+        return done
+    for name in ("library_search_methods.json", "gc_nist.json"):
+        if (src / name).exists() and not (DATA / name).exists():
+            shutil.copy2(src / name, DATA / name)
+            done.append(name)
+    target = DATA / "settings.json"
+    if (src / "settings.json").exists() and not target.exists():
+        try:
+            data = json.loads((src / "settings.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        # the standalone keeps its own unknown register by default; the NIAS
+        # register folder is remembered so Preferences can offer to share it
+        value = data.get("unknown_register_dir")
+        if value:
+            nias_dir = Path(value) if Path(value).is_absolute() else (NIAS_WORKING / value).resolve()
+            data["nias_unknown_register_dir"] = str(nias_dir)
+        data["unknown_register_dir"] = str(DATA)
+        data.pop("previous_unknown_register_dir", None)
+        data["standard_cas_path"] = "CASINFO.xlsx"
+        target.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        done.append("settings.json")
+    return done
 
 
 def methods_dir() -> Path:

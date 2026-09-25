@@ -1,0 +1,121 @@
+{
+  "default": "NIAS Standard",
+  "by_gc_method": {},
+  "run": {
+    "all_samples": false,
+    "review": false,
+    "rescan_below": true,
+    "rescan_limit": 80
+  },
+  "methods": [
+    {
+      "name": "NIAS Standard",
+      "libraries": [
+        {
+          "name": "Library\\CCALU_GCMS_1.L",
+          "enabled": true,
+          "min_score": 0
+        },
+        {
+          "name": "Library\\NIST05a.L",
+          "enabled": true,
+          "min_score": 0
+        },
+        {
+          "name": "Library\\NIST17.L",
+          "enabled": true,
+          "min_score": 0
+        },
+        {
+          "name": "Library\\W12_N20_Combo\\W12N20_LEG.lib",
+          "enabled": true,
+          "min_score": 0
+        },
+        {
+          "name": "Library\\W12_N20_Combo\\W12N20_LQ.lib",
+          "enabled": true,
+          "min_score": 0
+        },
+        {
+          "name": "Library\\W12_N20_Combo\\W12N20_MAIN_1.lib",
+          "enabled": true,
+          "min_score": 0
+        },
+        {
+          "name": "Library\\W12_N20_Combo\\W12N20_MAIN_2.lib",
+          "enabled": true,
+          "min_score": 0
+        },
+        {
+          "name": "Library\\W12_N20_Combo\\W12N20_MAIN_3.lib",
+          "enabled": true,
+          "min_score": 0
+        },
+        {
+          "name": "Library\\W12_N20_Combo\\W12N20_MAIN_4.lib",
+          "enabled": true,
+          "min_score": 0
+        },
+        {
+          "name": "Library\\W12_N20_Combo\\W12N20_REP.lib",
+          "enabled": true,
+          "min_score": 0
+        },
+        {
+          "name": "Library\\CCAlu_GCMS",
+          "enabled": true,
+          "min_score": 0
+        },
+        {
+          "name": "Library\\CCALU_Thermo",
+          "enabled": true,
+          "min_score": 0
+        },
+        {
+          "name": "Library\\FreeLibraries\\NIST\\FreeLibraries",
+          "enabled": false,
+          "min_score": 0
+        },
+        {
+          "name": "Library\\mainlib",
+          "enabled": true,
+          "min_score": 0
+        },
+        {
+          "name": "Library\\replib",
+          "enabled": true,
+          "min_score": 0
+        },
+        {
+          "name": "Library\\Wiley7N",
+          "enabled": true,
+          "min_score": 0
+        },
+        {
+          "name": "Library\\PredictedSpectra_GCMS_ID\\PredictedSpectra_GCMS_ID.msp",
+          "enabled": false,
+          "min_score": 0
+        }
+      ],
+      "algorithm": "pbm",
+      "mode": "combined",
+      "stop_score": 80,
+      "top_n": 5,
+      "min_score": 70,
+      "mz_auto": true,
+      "min_mz": 35,
+      "max_mz": 600,
+      "threshold": 0.0,
+      "background": "peak",
+      "mw_min": null,
+      "mw_max": null,
+      "elements_required": "",
+      "elements_allowed": "",
+      "name_include": "",
+      "name_exclude": "",
+      "require_cas": false,
+      "dedupe": true,
+      "hydrocarbons": false
+    }
+  ]
+}

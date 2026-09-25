@@ -1,0 +1,770 @@
+"""Main window: dock panels, run tabs, menus and workflows."""
+from __future__ import annotations
+
+from pathlib import Path
+
+from PySide6.QtCore import QSettings, Qt, QTimer
+from PySide6.QtGui import QAction, QActionGroup, QKeySequence
+from PySide6.QtWidgets import (QApplication, QComboBox, QDockWidget, QFileDialog, QInputDialog, QLabel,
+                               QMainWindow, QMessageBox, QProgressBar, QPushButton, QToolBar, QWidget)
+
+import gcws
+from gcws.core import project as P
+from gcws.core.model import FID, TIC, eic_key
+from gcws.io.sequence import ROLE_LABELS
+from gcws.ui import workers
+from gcws.ui.docks.audit import AuditDock
+from gcws.ui.docks.events import EventsDock
+from gcws.ui.docks.folder_tree import FolderTree
+from gcws.ui.docks.peak_table import PeakTable
+from gcws.ui.docks.properties import PropertiesDock
+from gcws.ui.docks.spectrum import SpectrumDock
+from gcws.ui.icons import icon
+from gcws.ui.layout import presets
+from gcws.ui.layout.drop_overlay import DropOverlay
+from gcws.ui.plot.chrom import ChromPlot
+from gcws.ui.plot.tools import TOOLS, ToolController
+from gcws.ui.run_tabs import RunTabBar
+from gcws.ui.undo import IdentCommand, ValueCommand, add_event
+from gcws.ui.workspace import Workspace
+
+DOCKS = [  # key, title
+    ("tree", "Folders"), ("chrom", "Chromatogram"), ("zoom", "Peak zoom / integration"),
+    ("table", "Peaks / substances"), ("spectrum", "Mass spectrum"), ("events", "Integration method"),
+    ("props", "Properties"), ("audit", "Audit trail"),
+]
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("GC Workspace")
+        self.setWindowIcon(icon("integrate"))
+        self.resize(1600, 950)
+        self.ws = Workspace(self)
+        self.tools = ToolController(self.ws)
+        self.docks: dict[str, QDockWidget] = {}
+        self.loading = 0
+        self._pending_project = None
+        central = QWidget()
+        central.hide()
+        self.setCentralWidget(central)
+        self.setDockOptions(QMainWindow.AllowNestedDocks | QMainWindow.AllowTabbedDocks
+                            | QMainWindow.AnimatedDocks | QMainWindow.GroupedDragging)
+        self.setDockNestingEnabled(True)
+        self.setTabPosition(Qt.AllDockWidgetAreas, QTabWidgetNorth())
+
+        # panels
+        self.tree = FolderTree()
+        self.chrom = ChromPlot(self.ws, self.tools)
+        self.zoom = ChromPlot(self.ws, self.tools, detail=True)
+        self.table = PeakTable(self.ws)
+        self.spectrum = SpectrumDock(self.ws)
+        self.events = EventsDock(self.ws)
+        self.props = PropertiesDock(self.ws)
+        self.audit = AuditDock(self.ws)
+        widgets = {"tree": self.tree, "chrom": self.chrom, "zoom": self.zoom, "table": self.table,
+                   "spectrum": self.spectrum, "events": self.events, "props": self.props, "audit": self.audit}
+        self.overlay = DropOverlay(self)
+        for key, title in DOCKS:
+            self._add_dock(key, title, widgets[key])
+
+        self._build_actions()
+        self._build_toolbars()
+        self._build_menus()
+        self._build_status()
+        self._connect()
+        presets.apply_preset(self, "Chromatogram top")
+        if not self._restore_session_state():
+            # dock sizes only take effect once the window has its real size
+            QTimer.singleShot(0, lambda: presets.apply_preset(self, "Chromatogram top"))
+
+    # -- construction ----------------------------------------------------------
+
+    def _add_dock(self, key, title, widget):
+        d = QDockWidget(title, self)
+        d.setObjectName("dock." + key)
+        d.setWidget(widget)
+        d.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable
+                      | QDockWidget.DockWidgetFloatable)
+        self.overlay.watch(d)
+        self.docks[key] = d
+        return d
+
+    def _action(self, text, slot=None, shortcut=None, ic=None, tip=None, checkable=False):
+        a = QAction(text, self)
+        if ic is not None:
+            a.setIcon(ic)
+        if shortcut:
+            a.setShortcut(QKeySequence(shortcut))
+        if tip:
+            a.setToolTip(tip)
+            a.setStatusTip(tip)
+        a.setCheckable(checkable)
+        if slot is not None:
+            a.triggered.connect(slot)
+        return a
+
+    def _build_actions(self):
+        A = self._action
+        self.a_open_folder = A("Open folder...", self.open_folder, "Ctrl+Shift+O", icon("folder"),
+                               "Show a folder in the tree")
+        self.a_load = A("Load chromatograms...", self.load_dialog, "Ctrl+L", icon("run"))
+        self.a_open = A("Open project...", self.open_project, "Ctrl+O")
+        self.a_save = A("Save project", self.save_project, "Ctrl+S")
+        self.a_save_as = A("Save project as...", lambda: self.save_project(True), "Ctrl+Shift+S")
+        self.a_close_all = A("Close all chromatograms", self.close_all)
+        self.a_quit = A("Exit", self.close, "Ctrl+Q")
+        self.a_undo = self.ws.undo_group.createUndoAction(self, "Undo")
+        self.a_undo.setShortcut(QKeySequence.Undo)
+        self.a_redo = self.ws.undo_group.createRedoAction(self, "Redo")
+        self.a_redo.setShortcut(QKeySequence.Redo)
+        self.a_integrate = A("Integrate", lambda: self.integrate(False), "F5", icon("integrate"),
+                             "Re-integrate the active chromatogram")
+        self.a_integrate_all = A("Integrate all", lambda: self.integrate(True), "Shift+F5",
+                                 icon("integrate", "#8e44ad"), "Re-integrate all loaded chromatograms")
+        self.a_search = A("Library search...", self.library_search, "Ctrl+F", icon("search"),
+                          "Automatic library search (EI Atlas) of all integrated peaks")
+        self.a_search_method = A("Search methods...", self.edit_search_methods)
+        self.spectrumSearchAtlasAction = A("EI Atlas hit list (selected peak)", self.atlas_selected, "Ctrl+E")
+        self.spectrumSearchNistAction = A("Search selected peak in NIST", self.nist_selected, "Ctrl+N")
+        self.a_eic = A("Extracted ion chromatogram...", self.ask_eic, "Ctrl+I")
+        self.tool_actions = {}
+        group = QActionGroup(self)
+        group.setExclusive(True)
+        for name, label, key, tip in TOOLS:
+            a = A(label, lambda _=False, n=name: self.tools.set_tool(n), key, icon(name), f"{tip}  [{key}]", True)
+            group.addAction(a)
+            self.tool_actions[name] = a
+        self.tool_actions["select"].setChecked(True)
+
+    def _build_toolbars(self):
+        tb = QToolBar("Main")
+        tb.setObjectName("tb.main")
+        tb.setMovable(False)
+        tb.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        for a in (self.a_load, self.a_open, self.a_save):
+            tb.addAction(a)
+        tb.addSeparator()
+        tb.addAction(self.a_undo)
+        tb.addAction(self.a_redo)
+        tb.addSeparator()
+        tb.addWidget(QLabel(" Signal: "))
+        self.signal_box = QComboBox()
+        self.signal_box.setMinimumWidth(110)
+        self.signal_box.activated.connect(self._signal_picked)
+        tb.addWidget(self.signal_box)
+        tb.addSeparator()
+        tb.addAction(self.a_integrate)
+        tb.addAction(self.a_search)
+        self.addToolBar(Qt.TopToolBarArea, tb)
+
+        tools = QToolBar("Integration tools")
+        tools.setObjectName("tb.tools")
+        tools.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        for a in self.tool_actions.values():
+            tools.addAction(a)
+        self.addToolBar(Qt.TopToolBarArea, tools)
+
+        self.addToolBarBreak(Qt.TopToolBarArea)
+        runs = QToolBar("Chromatograms")
+        runs.setObjectName("tb.runs")
+        runs.setMovable(False)
+        self.run_tabs = RunTabBar(self.ws)
+        runs.addWidget(self.run_tabs)
+        self.addToolBar(Qt.TopToolBarArea, runs)
+
+    def _build_menus(self):
+        mb = self.menuBar()
+        m = mb.addMenu("&File")
+        for a in (self.a_open_folder, self.a_load):
+            m.addAction(a)
+        m.addSeparator()
+        for a in (self.a_open, self.a_save, self.a_save_as):
+            m.addAction(a)
+        self.recent_menu = m.addMenu("Recent projects")
+        self.recent_menu.aboutToShow.connect(self._fill_recent)
+        m.addSeparator()
+        m.addAction("Export peak table...", self.table.export)
+        m.addSeparator()
+        m.addAction(self.a_close_all)
+        m.addAction(self.a_quit)
+
+        m = mb.addMenu("&Edit")
+        m.addAction(self.a_undo)
+        m.addAction(self.a_redo)
+        m.addSeparator()
+        m.addAction("Preferences...", self.preferences)
+
+        self.view_menu = mb.addMenu("&View")
+        for key, d in self.docks.items():
+            self.view_menu.addAction(d.toggleViewAction())
+        self.view_menu.addSeparator()
+        self.view_menu.addAction(self.a_eic)
+
+        m = mb.addMenu("&Integration")
+        m.addAction(self.a_integrate)
+        m.addAction(self.a_integrate_all)
+        m.addSeparator()
+        for a in self.tool_actions.values():
+            m.addAction(a)
+        m.addSeparator()
+        m.addAction("Integration method panel", lambda: self._show_dock("events"))
+
+        m = mb.addMenu("I&dentify")
+        m.addAction(self.a_search)
+        m.addAction(self.a_search_method)
+        m.addSeparator()
+        m.addAction(self.spectrumSearchAtlasAction)
+        m.addAction(self.spectrumSearchNistAction)
+        self.identify_menu = m
+
+        self.quant_menu = mb.addMenu("&Quantify")
+        roles = self.quant_menu.addMenu("Role of active chromatogram")
+        for role, label in ROLE_LABELS.items():
+            roles.addAction(label, lambda r=role: self.ws.active_id and self.set_role(self.ws.active_id, r))
+        self.quant_menu.addAction("Assign blanks...", lambda: self.ws.active_id and self.assign_blanks(self.ws.active_id))
+
+        self.report_menu = mb.addMenu("&Report")
+
+        m = mb.addMenu("&Layout")
+        for name, tip in presets.PRESETS.items():
+            a = m.addAction(name, lambda n=name: presets.apply_preset(self, n))
+            a.setStatusTip(tip)
+        m.addSeparator()
+        m.addAction("Save layout...", self.save_layout)
+        self.saved_layouts_menu = m.addMenu("Saved layouts")
+        self.saved_layouts_menu.aboutToShow.connect(self._fill_layouts)
+        self.delete_layouts_menu = m.addMenu("Delete saved layout")
+        self.delete_layouts_menu.aboutToShow.connect(self._fill_delete_layouts)
+        m.addSeparator()
+        a = m.addAction("Suggest docking position when dragging panels")
+        a.setCheckable(True)
+        a.setChecked(True)
+        a.toggled.connect(lambda on: setattr(self.overlay, "enabled", on))
+        a = m.addAction("Lock panels")
+        a.setCheckable(True)
+        a.toggled.connect(self._lock)
+
+        m = mb.addMenu("&Help")
+        m.addAction("Keyboard shortcuts", self.show_shortcuts)
+        m.addAction("About GC Workspace", self.about)
+
+    def _build_status(self):
+        sb = self.statusBar()
+        self.progress = QProgressBar()
+        self.progress.setMaximumWidth(220)
+        self.progress.setTextVisible(True)
+        self.progress.hide()
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.hide()
+        self.tool_label = QLabel()
+        sb.addPermanentWidget(self.tool_label)
+        sb.addPermanentWidget(self.progress)
+        sb.addPermanentWidget(self.cancel_btn)
+
+    def _connect(self):
+        self.tree.loadRequested.connect(self.load_runs)
+        self.tools.eventCreated.connect(self._manual_event)
+        self.tools.toolChanged.connect(self._tool_changed)
+        self.ws.message.connect(lambda t: self.statusBar().showMessage(t, 8000))
+        self.ws.runAdded.connect(lambda *_: self._refresh_signals())
+        self.ws.runRemoved.connect(lambda *_: self._refresh_signals())
+        self.ws.activeRunChanged.connect(lambda *_: self._refresh_signals())
+        self.ws.signalKeyChanged.connect(lambda *_: self._refresh_signals())
+        self.run_tabs.closeRequested.connect(self.close_run)
+        self.run_tabs.roleRequested.connect(self.set_role)
+        self.run_tabs.blanksRequested.connect(self.assign_blanks)
+        self.run_tabs.revealRequested.connect(lambda rid: (self._show_dock("tree"),
+                                                           self.tree.reveal(self.ws.runs[rid].run.path)))
+        self.run_tabs.eicRequested.connect(self.ask_eic)
+        self.table.searchRequested.connect(self.library_search)
+        self.table.integrateRequested.connect(self.integrate)
+        self.spectrum.regionsChanged.connect(self.zoom.set_ms_regions)
+        self.spectrum.nistRequested.connect(self.nist_search)
+        self.spectrum.atlasRequested.connect(self.atlas_hits)
+        self._tool_changed("select")
+
+    # -- helpers -------------------------------------------------------------
+
+    def _show_dock(self, key):
+        d = self.docks[key]
+        d.show()
+        d.raise_()
+
+    def _tool_changed(self, name):
+        label = next((t[1] for t in TOOLS if t[0] == name), name)
+        self.tool_label.setText(f"Tool: {label}")
+        if name in self.tool_actions:
+            self.tool_actions[name].setChecked(True)
+        mode = {"pan": "PanMode"}.get(name, "RectMode")
+        import pyqtgraph as pg
+        for plot in (self.chrom, self.zoom):
+            plot.vb.setMouseMode(getattr(pg.ViewBox, mode))
+
+    def _refresh_signals(self):
+        self.signal_box.blockSignals(True)
+        self.signal_box.clear()
+        keys = []
+        for st in self.ws.states():
+            for k in st.run.available_signals() + [k for k in st.run._signals if k.startswith("EIC")]:
+                if k not in keys:
+                    keys.append(k)
+        if self.ws.signal_key not in keys and keys:
+            keys.append(self.ws.signal_key)
+        self.signal_box.addItems(keys)
+        if any(st.run.ms is not None for st in self.ws.states()):
+            self.signal_box.addItem("EIC ...")
+        self.signal_box.setCurrentText(self.ws.signal_key)
+        self.signal_box.blockSignals(False)
+
+    def _signal_picked(self, i):
+        text = self.signal_box.itemText(i)
+        if text == "EIC ...":
+            self.ask_eic()
+        else:
+            self.ws.set_signal_key(text)
+
+    def ask_eic(self):
+        text, ok = QInputDialog.getText(self, "Extracted ion chromatogram",
+                                        "m/z (several: summed, e.g. 149, 57):")
+        if not ok:
+            self._refresh_signals()
+            return
+        import re
+        masses = [float(v) for v in re.findall(r"\d+(?:\.\d+)?", text)]
+        if masses:
+            self.ws.set_signal_key(eic_key(masses))
+        self._refresh_signals()
+
+    # -- loading -----------------------------------------------------------------
+
+    def load_dialog(self):
+        d = QFileDialog.getExistingDirectory(self, "Run folder (.D) or analysis folder", self.tree.root)
+        if not d:
+            return
+        from gcws.io import folders
+        paths = [d] if folders.is_run_dir(d) else [str(p) for p in folders.list_runs(d)]
+        if not paths:
+            QMessageBox.information(self, "Load", "No GC run folders (.D) found there.")
+            return
+        self.load_runs(paths, "")
+
+    def open_folder(self):
+        d = QFileDialog.getExistingDirectory(self, "Show folder in the tree", self.tree.root)
+        if d:
+            self.tree.set_root(d)
+            self._show_dock("tree")
+
+    def load_runs(self, paths, role="", after=None):
+        todo = []
+        for p in paths:
+            if self.ws.find_by_path(p) is not None:
+                st = self.ws.find_by_path(p)
+                if role:
+                    self.set_role(st.id, role)
+                self.ws.set_active(st.id)
+                continue
+            todo.append(p)
+        for p in todo:
+            self._loading(+1)
+            workers.submit(workers.load_and_integrate, p, role, self.ws.methods,
+                           on_done=lambda res, p=p: self._loaded(res, after),
+                           on_error=lambda err, p=p: self._load_failed(p, err))
+
+    def _loading(self, delta):
+        self.loading += delta
+        if self.loading > 0:
+            self.progress.setRange(0, 0)
+            self.progress.setFormat(f"loading {self.loading}")
+            self.progress.show()
+        else:
+            self.progress.hide()
+
+    def _loaded(self, result, after=None):
+        run, results, delay = result
+        entry = after(run) if after else None
+        st = self.ws.add_run(run, results, delay=delay)
+        if entry is not None:
+            notes = P.apply_run_state(st, entry)
+            for n in notes:
+                self.ws.message.emit(n)
+            for key in list(st.results):
+                self.ws.integrate(st.id, key, emit=False)
+            self.ws.runChanged.emit(st.id)
+        self.ws.log("Chromatogram loaded", st.name, str(run.path))
+        self._loading(-1)
+        self.statusBar().showMessage(f"Loaded {st.name}", 4000)
+        if self.loading == 0 and self._pending_project is not None:
+            self._finish_project_load()
+
+    def _load_failed(self, path, err):
+        self._loading(-1)
+        QMessageBox.warning(self, "Load failed", f"{Path(path).name}\n\n{err.splitlines()[0]}")
+        if self.loading == 0 and self._pending_project is not None:
+            self._finish_project_load()
+
+    def close_run(self, run_id):
+        st = self.ws.runs.get(run_id)
+        if st is None:
+            return
+        self.ws.log("Chromatogram closed", st.name)
+        self.ws.remove_run(run_id)
+
+    def close_all(self):
+        for rid in list(self.ws.order):
+            self.ws.remove_run(rid)
+
+    # -- integration -------------------------------------------------------------
+
+    def integrate(self, all_runs=False):
+        ids = list(self.ws.order) if all_runs else ([self.ws.active_id] if self.ws.active_id else [])
+        for rid in ids:
+            self.ws.integrate(rid)
+        self.statusBar().showMessage(f"Integrated {len(ids)} chromatogram(s)", 3000)
+
+    def _manual_event(self, event):
+        st = self.ws.active
+        if st is None:
+            return
+        reason = ""
+        if QSettings().value("prefs/require_reason", False, type=bool):
+            reason, ok = QInputDialog.getText(self, "Reason", f"Reason for: {event.describe()}")
+            if not ok:
+                return
+        st.undo.push(add_event(self.ws, st.id, self.ws.signal_key, event, reason))
+        if self.tools.tool not in ("select", "pan") and not QSettings().value("prefs/sticky_tools", True, type=bool):
+            self.tools.set_tool("select")
+
+    # -- roles and blanks ------------------------------------------------------------
+
+    def set_role(self, run_id, role):
+        st = self.ws.runs.get(run_id)
+        if st is None or st.role == role:
+            return
+
+        def setter(v, rid=run_id):
+            s = self.ws.runs.get(rid)
+            if s is not None:
+                s.run.role = v
+                self.ws._suggest_blanks()
+                self.ws.runChanged.emit(rid)
+                self.ws.quantChanged.emit()
+
+        st.undo.push(ValueCommand(f"role of {st.name} = {ROLE_LABELS.get(role, role)}",
+                                  lambda: self.ws.runs[run_id].role, setter, role,
+                                  lambda t, o, n: self.ws.log(t, st.name, "", str(o), str(n))))
+
+    def assign_blanks(self, run_id):
+        from gcws.ui.dialogs.identify import BlanksDialog
+        if not run_id or run_id not in self.ws.runs:
+            return
+        dlg = BlanksDialog(self.ws, run_id, self)
+        if dlg.exec() != BlanksDialog.Accepted:
+            return
+        new = dlg.values()
+        st = self.ws.runs[run_id]
+
+        def getter(rid=run_id):
+            s = self.ws.runs[rid]
+            return (list(s.blanks), list(s.blanks_istd))
+
+        def setter(v, rid=run_id):
+            s = self.ws.runs.get(rid)
+            if s is not None:
+                s.blanks, s.blanks_istd = list(v[0]), list(v[1])
+                self.ws.runChanged.emit(rid)
+                self.ws.quantChanged.emit()
+
+        names = lambda ids: ", ".join(self.ws.runs[i].name for i in ids if i in self.ws.runs)
+        st.undo.push(ValueCommand(f"blanks of {st.name}", getter, setter, new,
+                                  lambda t, o, n: self.ws.log(t, st.name, "", f"{names(o[0])} | {names(o[1])}",
+                                                              f"{names(n[0])} | {names(n[1])}")))
+
+    # -- identification --------------------------------------------------------------
+
+    def library_search(self):
+        from gcws.identify.service import LibrarySearchWorker, build_items
+        from gcws.ui.dialogs.identify import SearchStartDialog
+        if not self.ws.states():
+            return
+        dlg = SearchStartDialog(self.ws, self)
+        if dlg.exec() != SearchStartDialog.Accepted:
+            return
+        v = dlg.values()
+        ids = list(self.ws.order) if v["all"] else [self.ws.active_id]
+        items, protected = build_items(self.ws, ids, self.ws.signal_key, v["mode"], v["rescan"], v["skip"])
+        if not items:
+            QMessageBox.information(self, "Library search", "No peaks with MS data to search.")
+            return
+        self._search = LibrarySearchWorker(items, v["method"], self)
+        self.progress.setRange(0, len(items))
+        self.progress.setValue(0)
+        self.progress.setFormat("%v / %m peaks")
+        self.progress.show()
+        self.cancel_btn.show()
+        self.cancel_btn.clicked.connect(self._search.cancel)
+        self._search.progress.connect(lambda t: self.statusBar().showMessage(t))
+        self._search.hit.connect(lambda i: self.progress.setValue(self._search.done))
+        self._search.failed.connect(lambda e: QMessageBox.warning(self, "EI Atlas", e))
+        self._search.finished.connect(lambda cancelled: self._search_done(items, v, protected, cancelled))
+        self._search.start()
+
+    def _search_done(self, items, v, protected, cancelled):
+        from gcws.identify.service import identification_from_hits
+        from gcws.ui.dialogs.identify import CompoundReview
+        self.progress.hide()
+        self.cancel_btn.hide()
+        try:
+            self.cancel_btn.clicked.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        done = [it for it in items if it.job.done and not it.job.error]
+        if not done:
+            self.statusBar().showMessage("Library search: nothing found" + (" (cancelled)" if cancelled else ""))
+            return
+        method = v["method"]
+        if v["review"]:
+            dlg = CompoundReview(done, method.min_score, self)
+            if dlg.exec() != CompoundReview.Accepted:
+                return
+        by_run: dict = {}
+        for it in done:
+            if not it.job.apply:
+                continue
+            st = self.ws.runs.get(it.run_id)
+            if st is None:
+                continue
+            prev = st.ident_set(it.key).for_peak(type("P", (), {"apex_rt": it.apex_rt, "width50": 0})())
+            ident = identification_from_hits(it, it.job.hits, it.job.chosen, method, prev)
+            by_run.setdefault((it.run_id, it.key), []).append((it.apex_rt, ident))
+        for (rid, key), changes in by_run.items():
+            st = self.ws.runs[rid]
+            st.undo.push(IdentCommand(self.ws, rid, key, changes,
+                                      f"library search ({method.name}): {len(changes)} peaks"))
+        n = sum(len(c) for c in by_run.values())
+        self.statusBar().showMessage(f"Library search: {n} peaks identified"
+                                     + (f", {protected} protected" if protected else "")
+                                     + (" (cancelled)" if cancelled else ""), 10000)
+
+    def edit_search_methods(self):
+        from gcws.ui.dialogs.search_method import SearchMethodDialog
+        SearchMethodDialog(self).exec()
+
+    def atlas_selected(self):
+        self.spectrum._emit(self.spectrum.atlasRequested)
+
+    def nist_selected(self):
+        self.spectrum._emit(self.spectrum.nistRequested)
+
+    def atlas_hits(self, points, name):
+        from gcws.identify.service import search_methods
+        from gcws.ui.dialogs.identify import AtlasHitsDialog
+        st, peak = self.ws.active, self.ws.selected_peak()
+        store = search_methods()
+        method = store.for_gc_method(st.run.meta.method if st and st.run.meta else "")
+
+        def assign(hits, index, st=st, peak=peak):
+            from gcws.identify.service import SearchItem, identification_from_hits
+            import gc_identify as GI
+            if st is None or peak is None:
+                return
+            job = GI.PeakJob(label=st.name, row_id=0, peak_no=peak.number, rt=peak.apex_rt,
+                             before=("", "", None), spectrum=points)
+            job.hits = hits
+            item = SearchItem(st.id, self.ws.signal_key, 0, peak.apex_rt, job, self.spectrum.current_mode(), [])
+            prev = st.ident_set(self.ws.signal_key).for_peak(peak)
+            ident = identification_from_hits(item, hits, index, method, prev)
+            ident.manual = True
+            st.undo.push(IdentCommand(self.ws, st.id, self.ws.signal_key, [(peak.apex_rt, ident)],
+                                      f"peak {peak.apex_rt:.3f}: EI Atlas hit {ident.name}"))
+
+        dlg = AtlasHitsDialog(points, name, method, self, on_assign=assign if peak is not None else None)
+        dlg.show()
+
+    def nist_search(self, points, name):
+        import gc_nist
+        p = self.ws.selected_peak()
+        try:
+            msg = gc_nist.search_spectrum(points, name, p.apex_rt if p else None)
+            self.statusBar().showMessage("Spectrum sent to NIST MS Search", 6000)
+        except Exception as exc:  # noqa: BLE001 - shown to the analyst
+            QMessageBox.warning(self, "NIST MS Search", str(exc))
+
+    # -- projects ------------------------------------------------------------------------
+
+    def save_project(self, ask=False):
+        if not self.ws.states():
+            return
+        path = self.ws.project_path
+        if ask or path is None:
+            first = self.ws.states()[0].run.path.parent
+            default = str(first / (first.name + P.SUFFIX))
+            fn, _ = QFileDialog.getSaveFileName(self, "Save project", default, "GC Workspace project (*.gcws)")
+            if not fn:
+                return
+            path = Path(fn)
+        try:
+            path = P.save(self.ws, path)
+        except OSError as exc:
+            QMessageBox.warning(self, "Save project", str(exc))
+            return
+        self.ws.project_path = path
+        self.ws.dirty = False
+        self._add_recent(path)
+        self.setWindowTitle(f"GC Workspace - {path.name}")
+        self.statusBar().showMessage(f"Saved {path}", 5000)
+
+    def open_project(self, path=None):
+        if path is None:
+            fn, _ = QFileDialog.getOpenFileName(self, "Open project", self.tree.root,
+                                                "GC Workspace project (*.gcws)")
+            if not fn:
+                return
+            path = fn
+        path = Path(path)
+        try:
+            data = P.read(path)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Open project", str(exc))
+            return
+        if self.ws.states() and QMessageBox.question(
+                self, "Open project", "Close the loaded chromatograms?") != QMessageBox.Yes:
+            return
+        self.close_all()
+        self.ws.audit.load(data.get("audit"))
+        self.audit.reload()
+        self.ws.replicate_groups = data.get("replicate_groups", [])
+        self.ws.quant = data.get("quant", {})
+        self.ws.signal_key = data.get("signal_key", FID)
+        self._pending_project = (path, data)
+        entries = {}
+        missing = []
+        for entry in data.get("runs", []):
+            rp = P.resolve_run_path(entry, path)
+            if rp is None:
+                missing.append(entry.get("name", "?"))
+                continue
+            entries[str(rp)] = entry
+
+        def after(run, entries=entries):
+            entry = entries.get(str(run.path.resolve()))
+            if entry is not None:
+                run.id = entry["id"]
+            return entry
+
+        if missing:
+            QMessageBox.warning(self, "Open project", "Raw data not found for:\n" + "\n".join(missing))
+        if not entries:
+            self._pending_project = None
+            return
+        self.ws.project_path = path
+        self.load_runs(list(entries), "", after=after)
+
+    def _finish_project_load(self):
+        path, data = self._pending_project
+        self._pending_project = None
+        order = [e["id"] for e in data.get("runs", []) if e["id"] in self.ws.runs]
+        self.ws.reorder(order + [i for i in self.ws.order if i not in order])
+        changed = []
+        for st in self.ws.states():
+            for key, dig in st.saved_digests.items():
+                res = self.ws.result(st.id, key)
+                if res is not None and res.digest != dig:
+                    changed.append(f"{st.name} ({key})")
+        if data.get("active") in self.ws.runs:
+            self.ws.set_active(data["active"])
+        self.ws.signalKeyChanged.emit(self.ws.signal_key)
+        self.ws.quantChanged.emit()
+        self.ws.replicatesChanged.emit()
+        self.ws.dirty = False
+        self._add_recent(path)
+        self.setWindowTitle(f"GC Workspace - {path.name}")
+        if changed:
+            QMessageBox.information(self, "Open project",
+                                    "The integration now differs from the saved state for:\n" + "\n".join(changed)
+                                    + "\n\n(raw data or integrator version changed)")
+
+    def _add_recent(self, path):
+        s = QSettings()
+        rec = [p for p in (s.value("recent", []) or []) if p != str(path)]
+        s.setValue("recent", [str(path)] + rec[:9])
+
+    def _fill_recent(self):
+        self.recent_menu.clear()
+        for p in QSettings().value("recent", []) or []:
+            self.recent_menu.addAction(p, lambda p=p: self.open_project(p))
+
+    # -- layouts -----------------------------------------------------------------------------
+
+    def save_layout(self):
+        name, ok = QInputDialog.getText(self, "Save layout", "Name:")
+        if ok and name.strip():
+            presets.save_layout(self, name.strip())
+            self.statusBar().showMessage(f"Layout '{name.strip()}' saved", 4000)
+
+    def _fill_layouts(self):
+        self.saved_layouts_menu.clear()
+        for n in presets.saved_layouts():
+            self.saved_layouts_menu.addAction(n, lambda n=n: presets.restore_layout(self, n))
+
+    def _fill_delete_layouts(self):
+        self.delete_layouts_menu.clear()
+        for n in presets.saved_layouts():
+            self.delete_layouts_menu.addAction(n, lambda n=n: presets.delete_layout(n))
+
+    def _lock(self, locked):
+        for d in self.docks.values():
+            f = QDockWidget.DockWidgetClosable
+            if not locked:
+                f |= QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable
+            d.setFeatures(f)
+
+    def _restore_session_state(self):
+        s = QSettings()
+        geo, state = s.value("window/geometry"), s.value("window/state")
+        if geo is not None:
+            self.restoreGeometry(geo)
+        if state is not None:
+            return bool(self.restoreState(state, presets.LAYOUT_VERSION))
+        return False
+
+    def closeEvent(self, ev):
+        if self.ws.dirty and self.ws.states():
+            r = QMessageBox.question(self, "GC Workspace", "Save the project before closing?",
+                                     QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+            if r == QMessageBox.Cancel:
+                ev.ignore()
+                return
+            if r == QMessageBox.Yes:
+                self.save_project()
+        s = QSettings()
+        s.setValue("window/geometry", self.saveGeometry())
+        s.setValue("window/state", self.saveState(presets.LAYOUT_VERSION))
+        self.table.save_columns()
+        super().closeEvent(ev)
+
+    # -- misc ------------------------------------------------------------------------------
+
+    def preferences(self):
+        from gcws.ui.dialogs.preferences import PreferencesDialog
+        PreferencesDialog(self).exec()
+
+    def show_shortcuts(self):
+        lines = [f"{key:>6}   {label}" for name, label, key, tip in TOOLS]
+        lines += ["", "    F5   Integrate active", "Shift+F5   Integrate all", "Ctrl+F   Library search",
+                  "Ctrl+E   EI Atlas hit list", "Ctrl+N   NIST search", "Ctrl+I   Extracted ion chromatogram",
+                  "Ctrl+Z / Ctrl+Y   Undo / Redo", "", "Mouse: wheel zooms, right-drag scales, double-click "
+                  "resets the view; Shift disables snapping."]
+        QMessageBox.information(self, "Keyboard shortcuts", "\n".join(lines))
+
+    def about(self):
+        QMessageBox.about(self, "GC Workspace",
+                          f"<b>GC Workspace {gcws.__version__}</b><br>Integrator version {gcws.INTEGRATOR_VERSION}"
+                          "<br><br>Standalone GC-FID / GC-MS integration, EI Atlas / NIST identification and NIAS "
+                          "reporting. Reads Agilent data.ms, *.ch and MassHunter AcqData directly.")
+
+
+def QTabWidgetNorth():
+    from PySide6.QtWidgets import QTabWidget
+    return QTabWidget.North
