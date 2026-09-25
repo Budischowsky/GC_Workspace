@@ -536,6 +536,13 @@ def _result_headers(base: tuple[str, ...], report_ri: bool,
     return base[:1] + (RI_HEADER,) + base[1:]
 
 
+def _sources(item: dict[str, Any]) -> list:
+    """GCWS-PATCH: every determination's source dict (N-fold replicates)."""
+    if item.get("sources") is not None:
+        return list(item["sources"])
+    return [item.get("source1"), item.get("source2")]
+
+
 def _merged_ri(item: dict[str, Any]) -> Optional[int]:
     """The retention index of a merged row, as an integer (SS VII.9).
 
@@ -544,8 +551,7 @@ def _merged_ri(item: dict[str, Any]) -> Optional[int]:
     decimals, so the mean is rounded here rather than formatted away in Excel --
     a cell that *looks* like an integer but sorts as 1043.5 is a trap.
     """
-    values = [_num((item.get(key) or {}).get("ri"))
-              for key in ("source1", "source2")]
+    values = [_num((src or {}).get("ri")) for src in _sources(item)]  # GCWS-PATCH: N-fold
     present = [v for v in values if v is not None]
     if not present:
         return None
@@ -554,8 +560,7 @@ def _merged_ri(item: dict[str, Any]) -> Optional[int]:
 
 def _merged_number(item: dict[str, Any], key: str) -> Optional[float]:
     """Mean of ``source1[key]`` and ``source2[key]``, or the side that has one."""
-    values = [_num((item.get(side) or {}).get(key))
-              for side in ("source1", "source2")]
+    values = [_num((src or {}).get(key)) for src in _sources(item)]  # GCWS-PATCH: N-fold
     present = [v for v in values if v is not None]
     if not present:
         return None
@@ -683,7 +688,8 @@ def run_nias_duplicate(session: M.Session, output_path: Path, settings, *,
                        blank_path: Optional[Path] = None,
                        blank_istd_path: Optional[Path] = None,
                        seen_counts: Optional[dict] = None,
-                       ri_options: Optional[dict] = None) -> Path:
+                       ri_options: Optional[dict] = None,
+                       combined: Optional[list] = None) -> Path:
     """Write the NIAS workbook from the edited session.
 
     One determination is a complete analysis (spec v2.1 SS V.6). The layout does
@@ -711,14 +717,18 @@ def run_nias_duplicate(session: M.Session, output_path: Path, settings, *,
     labels = session.labels
     if not labels:
         raise ValueError("Es ist keine Bestimmung geladen.")
-    samples = [session.samples[label] for label in labels[:2]]
+    # GCWS-PATCH: every determination (N-fold replicates) and precomputed
+    # combined rows; two determinations without ``combined`` behave as before.
+    samples = [session.samples[label] for label in (labels if combined is not None else labels[:2])]
     single = len(samples) == 1
-    combined = (_single_determination_rows(samples[0]) if single
-                else gc_fid.combine(samples[0], samples[1]))
+    if combined is None:
+        combined = (_single_determination_rows(samples[0]) if single
+                    else gc_fid.combine(samples[0], samples[1]))
 
     wb = Workbook()
     wb.properties.title = ("NIAS Einzelbestimmung" if single
-                           else "NIAS Doppelbestimmung")
+                           else "NIAS Doppelbestimmung" if len(samples) == 2
+                           else f"NIAS {len(samples)}-fach-Bestimmung")
     # The sheets are created in their final order first and filled afterwards:
     # every formula on "Doppelbestimmung" and "Manuell_pruefen" addresses a row
     # of a detail sheet, so those have to be written before the two result
@@ -740,7 +750,8 @@ def run_nias_duplicate(session: M.Session, output_path: Path, settings, *,
     seen = _seen_lookup(seen_counts)
     _write_duplicate_sheet(ws, combined, detail_rows, single=single, limit=limit,
                            report_ri=report_ri, replace_rt=replace_rt,
-                           seen=seen, reldiff_limit=duplicate_limit(settings))
+                           seen=seen, reldiff_limit=duplicate_limit(settings),
+                           n_determinations=len(samples))
     _write_manual_sheet(wsr, combined, detail_rows,
                         report_ri=report_ri, replace_rt=replace_rt, seen=seen)
     _write_blank_sheet(wb.create_sheet("Blankkorrektur"), samples)
@@ -1194,8 +1205,16 @@ def _write_duplicate_sheet(ws, combined: list[dict[str, Any]],
                            report_ri: bool = False,
                            replace_rt: bool = False,
                            seen=None,
-                           reldiff_limit: Optional[float] = None) -> None:
+                           reldiff_limit: Optional[float] = None,
+                           n_determinations: int = 2) -> None:
     """The result sheet, linked rather than snapshotted (SS VI.22).
+
+    GCWS-PATCH: with three or more determinations the extra ``Area k`` /
+    ``Concentration k`` pairs and ``SD`` are appended after the last column (no
+    existing letter moves), and ``mg/kg (mean)`` / ``Relative difference`` are
+    written as values -- the mean of all determinations and the RSD --
+    because the report reads column D and an AVERAGE over two columns would be
+    wrong. The per-determination concentrations stay linked formulas.
 
     Every number here is a formula over ``Bestimmung_n`` and ``Parameter``:
 
@@ -1218,6 +1237,10 @@ def _write_duplicate_sheet(ws, combined: list[dict[str, Any]],
     the one v3.0 wrote.
     """
     headers = _result_headers(NIAS_DUPLICATE_HEADERS, report_ri, replace_rt)
+    extra = list(range(3, n_determinations + 1)) if n_determinations > 2 else []
+    if extra:
+        headers = tuple(headers) + tuple(h for k in extra for h in (f"Area {k}", f"Concentration {k} [mg/kg]")) \
+            + ("SD [mg/kg]",)
     area_letter = _letter(NIAS_DETAIL_HEADERS, "Blank-corrected FID area")
     factor_letter = _letter(NIAS_DETAIL_HEADERS, "Quantification factor")
     ov_ref = _parameter_ref("ov_ratio")
@@ -1227,11 +1250,14 @@ def _write_duplicate_sheet(ws, combined: list[dict[str, Any]],
     a2, c2 = col["Area 2"], col["Concentration 2 [mg/kg]"]
 
     ws.append(list(headers))
+    pairs = [(1, a1, c1), (2, a2, c2)] + [(k, col[f"Area {k}"], col[f"Concentration {k} [mg/kg]"])
+                                          for k in extra]
     for item in combined:
         r = ws.max_row + 1
         cells: dict[str, Any] = {}
-        for n, column, conc_column in ((1, a1, c1), (2, a2, c2)):
-            source = item.get(f"source{n}") or {}
+        sources = _sources(item)
+        for n, column, conc_column in pairs:
+            source = (sources[n - 1] if n - 1 < len(sources) else None) or {}
             detail = detail_rows.get(n, {}).get(source.get("row_id"))
             if not source or detail is None:
                 continue
@@ -1251,6 +1277,10 @@ def _write_duplicate_sheet(ws, combined: list[dict[str, Any]],
             mean = f'=IF(COUNT({c1}{r},{c2}{r})=0,"",AVERAGE({c1}{r},{c2}{r}))'
         reldiff = (f'=IFERROR(ABS({c1}{r}-{c2}{r})/AVERAGE({c1}{r},{c2}{r}),"")'
                    if c1 in cells and c2 in cells else None)
+        if extra:
+            mean = _num(item.get("mean"))
+            rsd = _num(item.get("rsd"))
+            reldiff = rsd / 100.0 if rsd is not None else None
         ri = _merged_ri(item)
         values = {
             "RT (mean)": item.get("rt"), "Name": item.get("name", ""),
@@ -1267,7 +1297,11 @@ def _write_duplicate_sheet(ws, combined: list[dict[str, Any]],
             # the retention time used to be. The measured RT is not lost -- it
             # stays in the detail sheets, the raw-data documentation.
             RI_HEADER: ri,
+            "SD [mg/kg]": _num(item.get("sd")),
         }
+        for k in extra:
+            values[f"Area {k}"] = cells.get(col[f"Area {k}"])
+            values[f"Concentration {k} [mg/kg]"] = cells.get(col[f"Concentration {k} [mg/kg]"])
         ws.append([values.get(header) for header in headers])
     _style_header(ws, _widths(headers))
     if single:
@@ -1283,7 +1317,9 @@ def _write_duplicate_sheet(ws, combined: list[dict[str, Any]],
         "mg/kg (mean)": "0.000000",
         "Concentration 1 [mg/kg]": "0.000000",
         "Concentration 2 [mg/kg]": "0.000000",
-        "Area 1": "#,##0", "Area 2": "#,##0",
+        "Area 1": "#,##0", "Area 2": "#,##0", "SD [mg/kg]": "0.000000",
+        **{f"Area {k}": "#,##0" for k in extra},
+        **{f"Concentration {k} [mg/kg]": "0.000000" for k in extra},
         # A fraction, formatted as a percentage -- the reference workbook's own
         # convention for this column, and the reason it carries no "*100".
         "Relative difference [%]": "0.0%",
@@ -2147,8 +2183,8 @@ def _merged_pbm_area(item: dict[str, Any], readers: dict[int, Any]
                      ) -> Optional[float]:
     """``PBM Area %`` of a merged row, meaned over the determinations present."""
     values: list[float] = []
-    for n in (1, 2):
-        source = item.get(f"source{n}") or {}
+    for n, source in enumerate(_sources(item), 1):  # GCWS-PATCH: N-fold
+        source = source or {}
         if not source:
             continue
         reader = readers.get(n)
@@ -2171,8 +2207,8 @@ def _extract_concentration(item: dict[str, Any],
     Doppelbestimmung sheet links to, so the two reports quantify off one number.
     """
     values: list[float] = []
-    for n in (1, 2):
-        source = item.get(f"source{n}") or {}
+    for n, source in enumerate(_sources(item), 1):  # GCWS-PATCH: N-fold
+        source = source or {}
         area = _num(source.get("area"))
         reference = istd_area.get(n)
         if area is None or not reference:
@@ -2185,7 +2221,8 @@ def _extract_concentration(item: dict[str, Any],
 
 def write_fingerprint_workbook(session: M.Session, path: Path, kind: str,
                                settings, *,
-                               ri_options: Optional[dict] = None
+                               ri_options: Optional[dict] = None,
+                               combined: Optional[list] = None
                                ) -> dict[str, Any]:
     """The intermediate workbook of the fingerprint and total-extraction reports.
 
@@ -2227,10 +2264,12 @@ def write_fingerprint_workbook(session: M.Session, path: Path, kind: str,
 
     import gc_fid
 
-    samples = [session.samples[label] for label in labels[:2]]
+    # GCWS-PATCH: N-fold replicates with precomputed combined rows
+    samples = [session.samples[label] for label in (labels if combined is not None else labels[:2])]
     single = len(samples) == 1
-    combined = (_single_determination_rows(samples[0]) if single
-                else gc_fid.combine(samples[0], samples[1]))
+    if combined is None:
+        combined = (_single_determination_rows(samples[0]) if single
+                    else gc_fid.combine(samples[0], samples[1]))
 
     reporting_limit = float(getattr(settings, "reporting_limit", 0.01) or 0.01)
     conc_ugl = istd_concentration_ugl(session, settings)

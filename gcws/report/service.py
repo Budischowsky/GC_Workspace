@@ -1,0 +1,208 @@
+"""NIAS, Fingerprint and Total extraction reports from the workspace.
+
+The chain is the NIAS one, unchanged in its later steps:
+  1. the determinations of a replicate group as ``gc_model.Session``
+  2. the combined rows (single, duplicate or N-fold)
+  3. the intermediate workbook (``gc_export``)
+  4. ``process_workbook`` of the NIAS main script -> report .xlsx
+  5. ``create_combined_word`` -> report .docx
+  6. the reported substances into the unknown register ("already reported")
+"""
+from __future__ import annotations
+
+import re
+import shutil
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Callable, Optional
+
+KINDS = {"nias": "NIAS Report", "fingerprint": "Fingerprint Report",
+         "total_extraction": "Total Extraction Report"}
+SUFFIXES = {"nias": "_NIAS_Report", "fingerprint": "_Fingerprint_Report",
+            "total_extraction": "_Total_Extraction_Report"}
+SEEN_TYPES = {"nias": "NIAS", "fingerprint": "Fingerprint", "total_extraction": "Total extraction"}
+
+
+@dataclass
+class ReportJob:
+    kind: str
+    samples: list                  # NiasSample, in determination order
+    names: list[str]
+    settings: object
+    target: Path                   # report .xlsx
+    word: Path
+    cas_path: Optional[Path]
+    migration: dict = field(default_factory=dict)
+    blank_names: tuple = ("", "")
+    audit: list = field(default_factory=list)       # AuditRecord
+    policy: str = "all"
+    batch_target: Optional[Path] = None
+    keep_middle: Optional[Path] = None
+    sample_key: str = ""
+    record_seen: bool = True
+    ri_options: Optional[dict] = None
+
+
+@dataclass
+class ReportResult:
+    target: Path
+    word: Optional[Path]
+    rows: int
+    batch: Optional[Path] = None
+    middle: Optional[Path] = None
+    warnings: list = field(default_factory=list)
+    reported: list = field(default_factory=list)
+
+
+def report_stem(names: list[str]) -> str:
+    for n in names:
+        m = re.search(r"(?<!\d)(\d{8})(?!\d)", n)
+        if m:
+            return m.group(1)
+    return re.sub(r'[<>:"/\\|?*]+', "_", names[0]) if names else "Report"
+
+
+def build_session(job: ReportJob):
+    import gc_model as M
+    session = M.Session()
+    for i, sample in enumerate(job.samples, 1):
+        sample.label = f"{i:02d}" if len(job.samples) > 9 else str(i)
+        session.add_sample(sample)
+    for rec in job.audit:
+        session.audit.append(M.EditRecord(rec.timestamp, rec.run, 0, 0, rec.action,
+                                          rec.before, (rec.after + ("  " + rec.detail if rec.detail else "")).strip()))
+    return session
+
+
+def combined_rows(job: ReportJob):
+    import gc_fid
+    from gcws.quant.replicates import combine, engine_peaks
+    tol = float(getattr(job.settings, "rt_tolerance", 0.035) or 0.035)
+    lists = [engine_peaks(s) for s in job.samples]
+    return combine(lists, tol, job.policy)
+
+
+def generate(job: ReportJob, progress: Callable[[str], None] = lambda s: None) -> ReportResult:
+    import gc_export
+    from gcws.report.legacy_api import main_script
+    warnings = []
+    session = build_session(job)
+    combined = combined_rows(job)
+    tmp = Path(tempfile.mkdtemp(prefix="gcws_report_"))
+    middle = tmp / f"{job.target.stem}_intermediate.xlsx"
+    progress("1/4 intermediate workbook")
+    audit = None
+    if job.kind == "nias":
+        gc_export.run_nias_duplicate(session, middle, job.settings,
+                                     blank_path=Path(job.blank_names[0]) if job.blank_names[0] else None,
+                                     blank_istd_path=Path(job.blank_names[1]) if job.blank_names[1] else None,
+                                     combined=combined, ri_options=job.ri_options)
+    else:
+        audit = gc_export.write_fingerprint_workbook(session, middle, job.kind, job.settings, combined=combined,
+                                                     ri_options=job.ri_options)
+    progress("2/4 report (NIAS main script)")
+    main = main_script()
+    if job.migration and job.kind == "nias":
+        main.write_migration_metadata_to_workbook(middle, job.migration)
+    job.target.parent.mkdir(parents=True, exist_ok=True)
+    main.process_workbook(middle, job.cas_path if job.kind == "nias" else None, job.target)
+    progress("3/4 Word document")
+    word = None
+    try:
+        word = Path(main.create_combined_word([job.target], job.word))
+    except Exception as exc:  # noqa: BLE001 - the .xlsx is the report
+        warnings.append(f"Word document not created: {exc}")
+    batch = None
+    if job.kind == "nias" and job.batch_target is not None:
+        try:
+            gc_export.write_batch_workbook(session, job.batch_target, job.settings,
+                                           sample_name=job.target.stem.replace(SUFFIXES["nias"], ""))
+            if job.migration:
+                main.write_migration_metadata_to_workbook(job.batch_target, job.migration)
+            batch = job.batch_target
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"Batch workbook not written: {exc}")
+    progress("4/4 register")
+    rows = reported_rows(job, combined, audit)
+    if job.record_seen:
+        err = record_seen(job.kind, rows, job.target, job.sample_key)
+        if err:
+            warnings.append(err)
+    kept = None
+    if job.keep_middle is not None:
+        kept = job.keep_middle
+        shutil.copy2(middle, kept)
+    shutil.rmtree(tmp, ignore_errors=True)
+    return ReportResult(job.target, word, len(rows), batch, kept, warnings, rows)
+
+
+def record_seen(kind: str, rows: list, target: Path, sample_key: str = "") -> str:
+    """Count the reported substances in the register ('already reported')."""
+    try:
+        import gc_seen
+        con = gc_seen.open_db()
+        try:
+            gc_seen.record(con, rows, report_id=str(Path(target).resolve()).casefold(),
+                           report_type=SEEN_TYPES[kind], sample_key=sample_key)
+        finally:
+            con.close()
+    except Exception as exc:  # noqa: BLE001 - the report is already on disk
+        return f"Register not updated: {exc}"
+    return ""
+
+
+def reported_rows(job: ReportJob, combined, audit) -> list:
+    if audit is not None and isinstance(audit.get("rows"), list):
+        return list(audit["rows"])
+    limit = float(getattr(job.settings, "reporting_limit", 0.01) or 0.01)
+    out = []
+    for r in combined:
+        mean = r.get("mean")
+        if mean is None or mean < limit:
+            continue
+        out.append({"name": r.get("name", ""), "cas": r.get("cas", ""), "mean_mgkg": mean,
+                    "rt": r.get("rt"), "status": r.get("status", "")})
+    return out
+
+
+# -- preview -------------------------------------------------------------------
+
+WD_FORMAT_PDF = 17
+
+
+def docx_to_pdf(docx: Path, pdf: Path) -> Path:
+    """Microsoft Word over COM (the layout engine that will open the file)."""
+    import pythoncom
+    import win32com.client
+    pythoncom.CoInitialize()
+    word = None
+    try:
+        word = win32com.client.DispatchEx("Word.Application")
+        word.Visible = False
+        word.DisplayAlerts = 0
+        doc = word.Documents.Open(str(Path(docx).resolve()), ReadOnly=True, AddToRecentFiles=False, Visible=False)
+        try:
+            doc.SaveAs2(str(Path(pdf).resolve()), FileFormat=WD_FORMAT_PDF)
+        finally:
+            doc.Close(False)
+    finally:
+        if word is not None:
+            try:
+                word.Quit(False)
+            except Exception:  # noqa: BLE001
+                pass
+        pythoncom.CoUninitialize()
+    if not Path(pdf).is_file():
+        raise RuntimeError("Word did not write a PDF")
+    return Path(pdf)
+
+
+def render_pages(pdf: Path, scale: float = 1.5) -> list:
+    """PIL images of every page (pypdfium2)."""
+    import pypdfium2
+    doc = pypdfium2.PdfDocument(str(pdf))
+    try:
+        return [doc[i].render(scale=scale).to_pil() for i in range(len(doc))]
+    finally:
+        doc.close()

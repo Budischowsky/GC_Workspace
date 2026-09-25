@@ -4835,7 +4835,10 @@ def duplicate_quality_lookup(workbook) -> dict[int, Optional[float]]:
     parameters = duplicate_parameter_lookup(workbook)
     tolerance = numeric_value(parameters.get("duplicaterttolerance")) or 0.035
     detail_records = []
-    for sheet_name in ("Bestimmung_1", "Bestimmung_2"):
+    # GCWS-PATCH: every Bestimmung_n (N-fold replicates), not only 1 and 2
+    detail_sheets = sorted((n for n in workbook.sheetnames if re.fullmatch(r"Bestimmung_\d+", n)),
+                           key=lambda n: int(n.split("_")[1]))
+    for sheet_name in detail_sheets:
         if sheet_name not in workbook.sheetnames:
             continue
         ws = workbook[sheet_name]

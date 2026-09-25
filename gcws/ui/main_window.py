@@ -18,6 +18,8 @@ from gcws.ui.docks.events import EventsDock
 from gcws.ui.docks.folder_tree import FolderTree
 from gcws.ui.docks.peak_table import PeakTable
 from gcws.ui.docks.properties import PropertiesDock
+from gcws.ui.docks.quant import QuantDock
+from gcws.ui.docks.replicates import ReplicatesDock
 from gcws.ui.docks.spectrum import SpectrumDock
 from gcws.ui.icons import icon
 from gcws.ui.layout import presets
@@ -31,7 +33,8 @@ from gcws.ui.workspace import Workspace
 DOCKS = [  # key, title
     ("tree", "Folders"), ("chrom", "Chromatogram"), ("zoom", "Peak zoom / integration"),
     ("table", "Peaks / substances"), ("spectrum", "Mass spectrum"), ("events", "Integration method"),
-    ("props", "Properties"), ("audit", "Audit trail"),
+    ("props", "Properties"), ("audit", "Audit trail"), ("quant", "Quantification"),
+    ("replicates", "Replicates / results"),
 ]
 
 
@@ -63,8 +66,11 @@ class MainWindow(QMainWindow):
         self.events = EventsDock(self.ws)
         self.props = PropertiesDock(self.ws)
         self.audit = AuditDock(self.ws)
+        self.quant = QuantDock(self.ws)
+        self.replicates = ReplicatesDock(self.ws)
         widgets = {"tree": self.tree, "chrom": self.chrom, "zoom": self.zoom, "table": self.table,
-                   "spectrum": self.spectrum, "events": self.events, "props": self.props, "audit": self.audit}
+                   "spectrum": self.spectrum, "events": self.events, "props": self.props, "audit": self.audit,
+                   "quant": self.quant, "replicates": self.replicates}
         self.overlay = DropOverlay(self)
         for key, title in DOCKS:
             self._add_dock(key, title, widgets[key])
@@ -129,6 +135,8 @@ class MainWindow(QMainWindow):
         self.spectrumSearchAtlasAction = A("EI Atlas hit list (selected peak)", self.atlas_selected, "Ctrl+E")
         self.spectrumSearchNistAction = A("Search selected peak in NIST", self.nist_selected, "Ctrl+N")
         self.a_eic = A("Extracted ion chromatogram...", self.ask_eic, "Ctrl+I")
+        self.setIstdAction = A("Set selected peak as ISTD...", self.set_istd_selected)
+        self.registerUnknownAction = A("Register selected peak as unknown...", self.register_unknown)
         self.tool_actions = {}
         group = QActionGroup(self)
         group.setExclusive(True)
@@ -217,6 +225,12 @@ class MainWindow(QMainWindow):
         m.addSeparator()
         m.addAction(self.spectrumSearchAtlasAction)
         m.addAction(self.spectrumSearchNistAction)
+        m.addSeparator()
+        m.addAction(self.registerUnknownAction)
+        m.addAction("Unknown register...", self.open_register)
+        m.addSeparator()
+        m.addAction("Retention index (alkane ladder)...", self.retention_index)
+        m.addAction("Deconvolution of selected peak...", self.deconvolution)
         self.identify_menu = m
 
         self.quant_menu = mb.addMenu("&Quantify")
@@ -224,8 +238,22 @@ class MainWindow(QMainWindow):
         for role, label in ROLE_LABELS.items():
             roles.addAction(label, lambda r=role: self.ws.active_id and self.set_role(self.ws.active_id, r))
         self.quant_menu.addAction("Assign blanks...", lambda: self.ws.active_id and self.assign_blanks(self.ws.active_id))
+        self.quant_menu.addAction(self.setIstdAction)
+        self.quant_menu.addSeparator()
+        self.quant_menu.addAction("Quantification panel", lambda: self._show_dock("quant"))
+        self.quant_menu.addAction("Migration conditions...", self.quant.edit_migration)
+        self.quant_menu.addAction("Replicate groups", lambda: self._show_dock("replicates"))
 
         self.report_menu = mb.addMenu("&Report")
+        from gcws.report.service import KINDS
+        for kind, label in KINDS.items():
+            self.report_menu.addAction(label + "...", lambda k=kind: self.report(k))
+            self.report_menu.addAction(label + " - preview", lambda k=kind: self.report(k, preview=True))
+            self.report_menu.addSeparator()
+        a = self.report_menu.addAction("Keep intermediate workbook")
+        a.setCheckable(True)
+        a.setChecked(QSettings().value("report/keep_middle", False, type=bool))
+        a.toggled.connect(lambda on: QSettings().setValue("report/keep_middle", on))
 
         m = mb.addMenu("&Layout")
         for name, tip in presets.PRESETS.items():
@@ -283,6 +311,8 @@ class MainWindow(QMainWindow):
         self.spectrum.regionsChanged.connect(self.zoom.set_ms_regions)
         self.spectrum.nistRequested.connect(self.nist_search)
         self.spectrum.atlasRequested.connect(self.atlas_hits)
+        self.spectrum.registerRequested.connect(self.register_unknown)
+        self.replicates.reportRequested.connect(lambda kind, gid: self.report(kind, gid))
         self._tool_changed("select")
 
     # -- helpers -------------------------------------------------------------
@@ -590,6 +620,164 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Spectrum sent to NIST MS Search", 6000)
         except Exception as exc:  # noqa: BLE001 - shown to the analyst
             QMessageBox.warning(self, "NIST MS Search", str(exc))
+
+    # -- quantification helpers --------------------------------------------------------
+
+    def set_istd_selected(self):
+        p = self.ws.selected_peak()
+        if p is None or self.ws.active is None:
+            QMessageBox.information(self, "ISTD", "Select a peak first.")
+            return
+        self._show_dock("quant")
+        self.quant._bind_selected()
+
+    def open_register(self):
+        from gcws.ui.dialogs.register import RegisterWindow
+        try:
+            RegisterWindow(self).show()
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Unknown register", str(exc))
+
+    def retention_index(self):
+        from gcws.ui.dialogs.ri import RetentionIndexDialog
+        RetentionIndexDialog(self).exec()
+
+    def deconvolution(self):
+        from gcws.ui.dialogs.deconv import DeconvolutionDialog
+        if self.ws.selected_peak() is None or self.ws.active is None or self.ws.active.run.ms is None:
+            QMessageBox.information(self, "Deconvolution", "Select a peak of a chromatogram with MS data.")
+            return
+        DeconvolutionDialog(self).exec()
+
+    def register_unknown(self):
+        from gcws.ui.dialogs.register import save_unknown
+        save_unknown(self)
+
+    # -- reports ---------------------------------------------------------------------------
+
+    def _group_for_report(self, group_id=None):
+        groups = self.ws.replicate_groups
+        if group_id:
+            return next((g for g in groups if g["id"] == group_id), None)
+        g = self.replicates.current_group()
+        if g is not None:
+            return g
+        rid = self.ws.active_id
+        g = next((g for g in groups if rid in g["members"]), None)
+        if g is not None:
+            return g
+        if rid and self.ws.runs[rid].role == "sample":
+            return {"id": "", "name": self.ws.runs[rid].name, "members": [rid], "policy": "all"}
+        return None
+
+    def report(self, kind, group_id=None, preview=False):
+        from gcws.quant.nias_bridge import make_settings
+        from gcws.quant.service import cas_lookup
+        from gcws.report import service as RS
+        from gcws import paths
+        g = self._group_for_report(group_id)
+        if g is None or not g["members"]:
+            QMessageBox.information(self, "Report", "Choose a replicate group (Replicates panel) or activate a "
+                                    "sample chromatogram.")
+            self._show_dock("replicates")
+            return
+        self.ws.recompute_quant()
+        members = [m for m in g["members"] if m in self.ws.runs]
+        samples = [self.ws.nias_sample(m) for m in members]
+        if not samples or any(s is None for s in samples):
+            errs = [self.ws.quant_result.errors.get(m, "") for m in members]
+            QMessageBox.warning(self, "Report", "Every determination needs role Sample and an FID integration.\n"
+                                + "\n".join(e for e in errs if e))
+            return
+        if kind == "nias" and not any(s.mean_factor for s in samples):
+            QMessageBox.warning(self, "Report", "No ISTD factor: identify or bind the internal standards first.")
+            return
+        cas = None
+        if kind == "nias":
+            from gcws.ui.dialogs.preferences import load_settings
+            raw = Path(load_settings().get("standard_cas_path", "CASINFO.xlsx"))
+            cas = raw if raw.is_absolute() else next((b / raw for b in (paths.RESOURCES, paths.ROOT, paths.DATA)
+                                                      if (b / raw).exists()), None)
+            if cas is None or not cas.exists():
+                QMessageBox.warning(self, "Report", "The NIAS report needs the CAS reference CASINFO.xlsx "
+                                    "(Edit > Preferences).")
+                return
+            if not self.ws.quant.get("migration"):
+                self.quant.edit_migration()
+                if not self.ws.quant.get("migration"):
+                    return
+        names = [self.ws.runs[m].name for m in members]
+        stem = RS.report_stem(names)
+        folder = self.ws.runs[members[0]].run.path.parent
+        if preview:
+            import tempfile
+            tmp = Path(tempfile.mkdtemp(prefix="gcws_preview_"))
+            target = tmp / f"{stem}{RS.SUFFIXES[kind]}.xlsx"
+        else:
+            fn, _ = QFileDialog.getSaveFileName(self, f"Save {RS.KINDS[kind]}",
+                                                str(folder / f"{stem}{RS.SUFFIXES[kind]}.xlsx"), "Excel (*.xlsx)")
+            if not fn:
+                return
+            target = Path(fn)
+        blank_ids = [b for m in members for b in self.ws.runs[m].blanks]
+        blank_istd_ids = [b for m in members for b in self.ws.runs[m].blanks_istd]
+        bname = lambda ids: str(self.ws.runs[ids[0]].run.path) if ids and ids[0] in self.ws.runs else ""
+        job = RS.ReportJob(
+            kind=kind, samples=samples, names=names, settings=make_settings(self.ws.quant.get("settings")),
+            target=target, word=target.with_suffix(".docx"), cas_path=cas,
+            migration=self.ws.quant.get("migration") or {}, blank_names=(bname(blank_ids), bname(blank_istd_ids)),
+            audit=[r for r in self.ws.audit.records if r.run in names or not r.run],
+            policy=g.get("policy", "all"),
+            batch_target=(target.parent / f"{stem}_Doppelbestimmung.xlsx") if kind == "nias" else None,
+            keep_middle=(target.with_name(target.stem + "_intermediate.xlsx")
+                         if QSettings().value("report/keep_middle", False, type=bool) and not preview else None),
+            sample_key=stem, record_seen=not preview,
+            ri_options={k: bool((self.ws.quant.get("ri") or {}).get(k)) for k in ("report_ri", "replace_rt")})
+        self.progress.setRange(0, 0)
+        self.progress.setFormat(RS.KINDS[kind])
+        self.progress.show()
+        self.statusBar().showMessage(f"{RS.KINDS[kind]}: generating ...")
+
+        def work():
+            res = RS.generate(job)
+            pages = []
+            if preview and res.word is not None:
+                try:
+                    pdf = RS.docx_to_pdf(res.word, res.word.with_suffix(".pdf"))
+                    pages = RS.render_pages(pdf)
+                except Exception as exc:  # noqa: BLE001 - preview without pages
+                    res.warnings.append(f"Preview pages not rendered: {exc}")
+            return res, pages
+
+        workers.submit(work, on_done=lambda r: self._report_done(kind, job, r[0], r[1], preview),
+                       on_error=lambda e: self._report_failed(e))
+
+    def _report_failed(self, err):
+        self.progress.hide()
+        QMessageBox.warning(self, "Report", err.splitlines()[0] + "\n\n" + "\n".join(err.splitlines()[1:6]))
+
+    def _report_done(self, kind, job, res, pages, preview):
+        from gcws.report import service as RS
+        self.progress.hide()
+        self.ws.log(f"{RS.KINDS[kind]}{' preview' if preview else ''}", ", ".join(job.names), str(res.target))
+        if preview:
+            from gcws.ui.dialogs.report_preview import ReportPreview
+            dlg = ReportPreview(f"{RS.KINDS[kind]} - preview", {"xlsx": res.target, "docx": res.word,
+                                                               "batch": res.batch, "default": res.target.name},
+                                pages, self)
+            if dlg.exec() and dlg.saved_to is not None:
+                err = RS.record_seen(kind, res.reported, dlg.saved_to, job.sample_key)
+                self.statusBar().showMessage(f"Saved {dlg.saved_to}" + (f" ({err})" if err else ""), 8000)
+            return
+        lines = [f"{RS.KINDS[kind]} written:", "", str(res.target)]
+        if res.word:
+            lines.append(str(res.word))
+        if res.batch:
+            lines.append(str(res.batch))
+        lines += ["", f"{res.rows} substance(s) reported."] + res.warnings + ["", "Open the folder?"]
+        if QMessageBox.question(self, "Report", "\n".join(lines)) == QMessageBox.Yes:
+            import os
+            os.startfile(str(res.target.parent))
 
     # -- projects ------------------------------------------------------------------------
 

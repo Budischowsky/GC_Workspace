@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QObject, Signal as QtSignal
+from PySide6.QtCore import QObject, QTimer, Signal as QtSignal
 from PySide6.QtGui import QUndoGroup, QUndoStack
 
 from gcws.core.audit import AuditLog, AuditRecord
@@ -97,8 +97,15 @@ class Workspace(QObject):
         self.undo_group.addStack(self.project_undo)
         self.project_path: Optional[Path] = None
         self.replicate_groups: list[dict] = []
-        self.quant: dict = {}
+        self.quant: dict = {"mode": "nias_mgkg", "unit": "µg/L", "settings": {}}
+        self.quant_result = None
         self.dirty = False
+        self._quant_timer = QTimer(self)
+        self._quant_timer.setSingleShot(True)
+        self._quant_timer.setInterval(150)
+        self._quant_timer.timeout.connect(self.recompute_quant)
+        for sig in (self.resultChanged, self.identsChanged, self.runChanged, self.runAdded, self.runRemoved):
+            sig.connect(lambda *_: self.schedule_quant())
 
     # -- runs --------------------------------------------------------------
 
@@ -249,6 +256,30 @@ class Workspace(QObject):
         if res is None or not (0 <= self.selected < len(res.peaks)):
             return None
         return res.peaks[self.selected]
+
+    # -- quantification --------------------------------------------------------
+
+    def schedule_quant(self) -> None:
+        self._quant_timer.start()
+
+    def recompute_quant(self) -> None:
+        from gcws.quant.service import compute
+        self.quant_result = compute(self)
+        self.quantChanged.emit()
+
+    def quant_rows(self, run_id: str) -> dict:
+        if self.signal_key != FID or self.quant_result is None:
+            return {}
+        return self.quant_result.rows.get(run_id, {})
+
+    def quant_unit(self) -> str:
+        from gcws.quant.service import mode_unit
+        return mode_unit(self.quant)
+
+    def nias_sample(self, run_id: str):
+        if self.quant_result is None:
+            self.recompute_quant()
+        return self.quant_result.samples.get(run_id)
 
     # -- audit ---------------------------------------------------------------
 
