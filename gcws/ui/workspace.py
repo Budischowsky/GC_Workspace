@@ -164,6 +164,12 @@ class Workspace(QObject):
         if self.active_id == run_id:
             self.set_active(self.order[0] if self.order else None)
 
+    def signals_for(self, st: RunState) -> list[str]:
+        """Keys offered for a run: its raw traces and the EICs computed so far."""
+        keys = list(st.run.available_signals())
+        keys += [k for k in st.run._signals if k.startswith("EIC") and k not in keys]
+        return keys
+
     def runs_with(self, key: str) -> list[RunState]:
         return [s for s in self.states() if s.run.signal(key) is not None]
 

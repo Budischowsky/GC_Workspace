@@ -30,18 +30,24 @@ class PeaksItem(pg.GraphicsObject):
         self.fill = QPainterPath()
         self.fill_sel = QPainterPath()
         self.fill_manual = QPainterPath()
+        self.fill_muted = QPainterPath()
         self.base = QPainterPath()
         self.drops = QPainterPath()
         self.color = QColor("#1f77b4")
         self._rect = QRectF()
         self.setZValue(5)
 
-    def set_data(self, rt, y, peaks, color: str, selected: int = -1, transform=None):
+    def set_data(self, rt, y, peaks, color: str, selected: int = -1, transform=None, dx: float = 0.0,
+                 muted: set | None = None):
+        """Draw ``peaks`` of the trace (rt, y). ``dx`` shifts the drawing in time (a companion
+        trace aligned to another detector); ``muted`` peak indices are drawn grey (blank peaks)."""
         self.prepareGeometryChange()
+        muted = muted or set()
         self.color = QColor(color)
         self.fill = QPainterPath()
         self.fill_sel = QPainterPath()
         self.fill_manual = QPainterPath()
+        self.fill_muted = QPainterPath()
         self.base = QPainterPath()
         self.drops = QPainterPath()
         sc, off = transform if transform else (1.0, 0.0)
@@ -55,7 +61,9 @@ class PeaksItem(pg.GraphicsObject):
             bl = p.baseline.eval(ts)
             ys = ys * sc + off
             bl = bl * sc + off
-            target = self.fill_sel if i == selected else (self.fill_manual if "M" in p.flags else self.fill)
+            ts = ts + dx
+            target = self.fill_sel if i == selected else (
+                self.fill_muted if i in muted else (self.fill_manual if "M" in p.flags else self.fill))
             _poly(target, ts, ys, (ts, bl))
             self.base.moveTo(float(ts[0]), float(bl[0]))
             self.base.lineTo(float(ts[-1]), float(bl[-1]))
@@ -77,6 +85,8 @@ class PeaksItem(pg.GraphicsObject):
         p.drawPath(self.fill)
         p.setBrush(QBrush(theme.qcolor(theme.PLOT["manual_fill"])))
         p.drawPath(self.fill_manual)
+        p.setBrush(QBrush(theme.qcolor(theme.PLOT["blank_fill"]), Qt.BDiagPattern))
+        p.drawPath(self.fill_muted)
         p.setBrush(QBrush(QColor(c.red(), c.green(), c.blue(), 130)))
         p.drawPath(self.fill_sel)
         pen = QPen(QColor(theme.PLOT["baseline"]))

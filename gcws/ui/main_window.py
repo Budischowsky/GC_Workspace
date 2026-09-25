@@ -351,13 +351,14 @@ class MainWindow(QMainWindow):
         import pyqtgraph as pg
         for plot in (self.chrom, self.zoom):
             plot.vb.setMouseMode(getattr(pg.ViewBox, mode))
+            plot.companion.vb.setMouseMode(getattr(pg.ViewBox, mode))
 
     def _refresh_signals(self):
         self.signal_box.blockSignals(True)
         self.signal_box.clear()
         keys = []
         for st in self.ws.states():
-            for k in st.run.available_signals() + [k for k in st.run._signals if k.startswith("EIC")]:
+            for k in self.ws.signals_for(st):
                 if k not in keys:
                     keys.append(k)
         if self.ws.signal_key not in keys and keys:

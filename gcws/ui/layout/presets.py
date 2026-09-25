@@ -112,7 +112,7 @@ def apply_preset(win, name: str) -> None:
         _show(tree, chrom, table, zoom, spec, events, props, audit, *extra)
         tree.raise_()
         win.resizeDocks([tree, chrom], [int(w * 0.15), int(w * 0.85)], H)
-        win.resizeDocks([chrom, table], [int(h * 0.42), int(h * 0.58)], V)
+        win.resizeDocks([chrom, table], [int(h * 0.5), int(h * 0.5)], V)       # room for FID + MS
         win.resizeDocks([table, zoom, spec], [int(w * 0.36), int(w * 0.22), int(w * 0.27)], H)
 
 

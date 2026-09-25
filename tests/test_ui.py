@@ -157,3 +157,31 @@ def test_right_drag_does_not_scale(qtbot, win, samples):
     after = win.chrom.vb.viewRange()
     assert after == before
     assert win.spectrum.source == "scan" and len(win.spectrum.spec.apex_scans) > 1
+
+
+def test_dual_fid_ms_view(qtbot, win, samples):
+    _load(qtbot, win, samples, ["07_", "08_"])
+    chrom = win.chrom
+    chrom.dual.setChecked(True)
+    assert chrom.dual_on() and chrom.companion.isVisible()
+    comp = chrom.companion
+    assert comp.key == "TIC" and len(comp.curves) == 2 and len(chrom.curves) == 2
+    st = win.ws.active
+    xs = comp.curves[st.id].xData
+    tic = st.run.signal("TIC")
+    assert abs(xs[0] - (tic.rt[0] + st.delay_value)) < 1e-9       # MS shifted onto the FID axis
+    assert chrom.split.indexOf(chrom.plot) == 0                   # FID on top
+    chrom.vb.setXRange(13.2, 14.2, padding=0)
+    assert comp.vb.viewRange()[0] == pytest.approx(chrom.vb.viewRange()[0])
+    # a click in the companion selects the FID peak at that time
+    res = win.ws.active_result()
+    p = max(res.peaks, key=lambda q: q.area if 13.2 < q.apex_rt < 14.2 else 0)
+    comp._clicked(p.apex_rt, 0.0)
+    assert win.ws.selected_peak() is p
+    # MS working signal: the FID moves to the top pane, shifted back
+    win.ws.set_signal_key("TIC")
+    assert comp.key == "FID" and chrom.split.indexOf(comp) == 0
+    xs = comp.curves[st.id].xData
+    assert abs(xs[0] - (st.run.fid.rt[0] - st.delay_value)) < 1e-9
+    chrom.dual.setChecked(False)
+    assert not comp.isVisible()

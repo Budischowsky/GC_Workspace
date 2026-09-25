@@ -1,12 +1,18 @@
-"""Chromatogram overlay and peak-zoom plots."""
+"""Chromatogram overlay and peak-zoom plots.
+
+Each plot shows the working signal (``ws.signal_key``) of the loaded runs and,
+with "FID + MS" switched on, a companion pane with the other detector aligned
+in time (FID always on top, MS below; the x axes are linked).
+"""
 from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, Signal as QtSignal
+from PySide6.QtCore import QSettings, Qt, Signal as QtSignal
 from PySide6.QtGui import QColor, QPen
-from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QSplitter, QVBoxLayout, QWidget
 
+from gcws.core.keys import is_fid
 from gcws.integration.method import EventKind
 from gcws.ms.spectra import ScanRequest, from_ms, to_ms
 from gcws.ui import theme
@@ -14,6 +20,9 @@ from gcws.ui.plot.items import LabelsItem, PeaksItem
 from gcws.ui.plot.tools import ToolViewBox
 
 theme.configure_plots()
+
+#: fixed width of the y axes so stacked panes share the same x pixels
+AXIS_WIDTH = 62
 
 
 def _pen(color, width=1.0, alpha=255, style=Qt.SolidLine):
@@ -26,6 +35,22 @@ def _pen(color, width=1.0, alpha=255, style=Qt.SolidLine):
     return pen
 
 
+def nearest_curve(vb, curves: dict, x: float, y: float, default):
+    """Id of the curve passing nearest to (x, y) within 12 px, else ``default``."""
+    px = abs(vb.viewPixelSize()[1]) or 1e-12
+    best = None
+    for rid, curve in curves.items():
+        xs, ys = curve.getData()
+        if xs is None or len(xs) < 2 or not (xs[0] <= x <= xs[-1]):
+            continue
+        d = abs(float(np.interp(x, xs, ys)) - y) / px
+        if best is None or d < best[0]:
+            best = (d, rid)
+    if best is not None and best[0] <= 12:
+        return best[1]
+    return default
+
+
 class ChromPlot(QWidget):
     """Overlay of all visible runs; the active run is drawn bold with its peaks."""
     spectrumRequested = QtSignal(object)        # ScanRequest (MS time axis)
@@ -34,12 +59,14 @@ class ChromPlot(QWidget):
         super().__init__(parent)
         self.ws = ws
         self.detail = detail
+        self._prefix = "zoom" if detail else "chrom"
         self.vb = ToolViewBox(tools)
         self.vb.spectrumRequested.connect(self._spectrum_request)
         self._ms_regions_ms: list = []
         self.plot = pg.PlotWidget(viewBox=self.vb)
         self.plot.setLabel("bottom", "RT", units="min")
         self.plot.getAxis("left").enableAutoSIPrefix(True)
+        self.plot.getAxis("left").setWidth(AXIS_WIDTH)
         self.plot.showGrid(x=True, y=True, alpha=theme.PLOT["grid_alpha"])
         self.plot.setMenuEnabled(False)
         self.curves: dict[str, pg.PlotDataItem] = {}
@@ -57,6 +84,22 @@ class ChromPlot(QWidget):
         self.plot.scene().sigMouseMoved.connect(self._mouse_moved)
         self.vb.on_reset = self.default_view
 
+        from gcws.ui.plot.companion import CompanionPane
+        self.companion = CompanionPane(ws, tools, self)
+        self.companion.plot.getAxis("left").setWidth(AXIS_WIDTH)
+        self.companion.spectrumRequested.connect(self.spectrumRequested.emit)
+        s = QSettings()
+        self.companion.key = s.value(f"{self._prefix}/companion_key", "TIC") or "TIC"
+        self.companion.keyChanged.connect(lambda k: QSettings().setValue(f"{self._prefix}/companion_key", k))
+        self.split = QSplitter(Qt.Vertical)
+        self.split.setChildrenCollapsible(False)
+        self.split.addWidget(self.plot)
+        self.split.addWidget(self.companion)
+        self.split.setStretchFactor(0, 3)
+        self.split.setStretchFactor(1, 2)
+        self.split.splitterMoved.connect(
+            lambda *_: QSettings().setValue(f"{self._prefix}/split", self.split.sizes()))
+
         lay = QVBoxLayout(self)
         lay.setContentsMargins(2, 2, 2, 2)
         lay.setSpacing(2)
@@ -65,6 +108,11 @@ class ChromPlot(QWidget):
         self.title = QLabel()
         self.title.setObjectName("hint")
         bar.addWidget(self.title, 1)
+        self.dual = QCheckBox("FID + MS")
+        self.dual.setToolTip("Show the other detector below / above, aligned by the FID-MS delay")
+        self.dual.setChecked(s.value(f"{self._prefix}/dual", True, type=bool))
+        self.dual.toggled.connect(self._dual_toggled)
+        bar.addWidget(self.dual)
         if not detail:
             self.norm = QCheckBox("Normalize")
             self.norm.setToolTip("Scale every trace to its own maximum (after the integration start)")
@@ -81,7 +129,13 @@ class ChromPlot(QWidget):
         self.label_mode.currentIndexChanged.connect(self.refresh_labels)
         bar.addWidget(self.label_mode)
         lay.addLayout(bar)
-        lay.addWidget(self.plot, 1)
+        lay.addWidget(self.split, 1)
+        sizes = s.value(f"{self._prefix}/split")
+        if sizes:
+            try:
+                self.split.setSizes([int(v) for v in sizes])
+            except (TypeError, ValueError):
+                pass
 
         ws.runAdded.connect(lambda *_: self.refresh(autorange=True))
         ws.runRemoved.connect(lambda *_: self.refresh())
@@ -92,15 +146,46 @@ class ChromPlot(QWidget):
         ws.identsChanged.connect(lambda *_: self.refresh_labels())
         ws.selectionChanged.connect(self._on_selection)
         ws.methodChanged.connect(lambda *_: self.refresh_events())
+        self._update_dual()
+
+    # -- dual view ---------------------------------------------------------------
+
+    def dual_on(self) -> bool:
+        return self.dual.isChecked() and self.companion.available()
+
+    def _dual_toggled(self, on):
+        QSettings().setValue(f"{self._prefix}/dual", on)
+        self._update_dual()
+        if on:
+            self.companion.refresh()
+
+    def _update_dual(self):
+        avail = self.companion.available()
+        self.dual.setVisible(avail)
+        on = avail and self.dual.isChecked()
+        self.companion.setVisible(on)
+        fid_primary = is_fid(self.ws.signal_key)
+        top, bottom = (self.plot, self.companion) if fid_primary else (self.companion, self.plot)
+        if self.split.indexOf(top) != 0:
+            self.split.insertWidget(0, top)
+        # only the lower pane carries the time axis
+        pi_top = top.getPlotItem() if top is self.plot else top.plot.getPlotItem()
+        pi_bottom = bottom.getPlotItem() if bottom is self.plot else bottom.plot.getPlotItem()
+        pi_bottom.showAxis("bottom")
+        if on:
+            pi_top.hideAxis("bottom")
+        else:
+            self.plot.getPlotItem().showAxis("bottom")
 
     # -- transforms ---------------------------------------------------------
 
-    def _transform(self, st, sig, rank: int, n: int) -> tuple[float, float]:
+    def _transform(self, st, sig, rank: int, n: int, key: str | None = None) -> tuple[float, float]:
         if self.detail:
             return (1.0, 0.0)
+        key = key or self.ws.signal_key
         sc, off = 1.0, 0.0
         if self.norm.isChecked():
-            m = self.ws.method_for(st, self.ws.signal_key)
+            m = self.ws.method_for(st, key)
             from gcws.integration.autoparams import _integration_start
             t0 = _integration_start(sig.rt, m) or float(sig.rt[0])
             sel = sig.y[sig.rt >= t0]
@@ -109,14 +194,15 @@ class ChromPlot(QWidget):
             sc = 100.0 / max(top - base, 1e-12)
             off = -base * sc
         if self.stack.isChecked() and n > 1:
-            span = 100.0 if self.norm.isChecked() else self._span()
+            span = 100.0 if self.norm.isChecked() else self._span(key)
             off += rank * 0.12 * span
         return (sc, off)
 
-    def _span(self) -> float:
+    def _span(self, key: str | None = None) -> float:
+        key = key or self.ws.signal_key
         spans = []
         for st in self.ws.states():
-            s = st.run.signal(self.ws.signal_key)
+            s = st.run.signal(key)
             if s is not None and s.n:
                 spans.append(float(np.percentile(s.y, 99.5) - np.percentile(s.y, 1)))
         return max(spans) if spans else 1.0
@@ -156,18 +242,27 @@ class ChromPlot(QWidget):
                 self.vb.removeItem(self.curves.pop(rid))
         self.refresh_active()
         self.refresh_events()
+        self._update_dual()
+        if self.dual_on():
+            self.companion.refresh()
         if autorange:
             self.default_view()
         name = active.name if active else "no chromatogram loaded"
         self.title.setText(f"{key}  -  {name}" if active else name)
 
     def _on_result(self, run_id: str, key: str):
-        if key == self.ws.signal_key and self.ws.active_id == run_id:
+        if self.ws.active_id != run_id:
+            return
+        if key == self.ws.signal_key:
             self.refresh_active()
             self.refresh_events()
+        if self.dual_on() and key == self.companion.key:
+            self.companion.refresh_peaks()
 
     def _on_selection(self, run_id: str, index: int):
         self.refresh_active()
+        if self.dual_on():
+            self.companion.refresh_peaks()
         if self.detail:
             self.zoom_to_selected()
 
@@ -179,7 +274,8 @@ class ChromPlot(QWidget):
             self.peaks.set_data(np.zeros(0), np.zeros(0), [], "#000")
             self.labels.set_labels([])
             return
-        self.peaks.set_data(sig.rt, sig.y, res.peaks, st.color, self.ws.selected, self.vb.transform)
+        muted = self.ws.blank_level_peaks(st.id) if hasattr(self.ws, "blank_level_peaks") else set()
+        self.peaks.set_data(sig.rt, sig.y, res.peaks, st.color, self.ws.selected, self.vb.transform, muted=muted)
         self.refresh_labels()
 
     def refresh_labels(self, *_):
@@ -241,9 +337,11 @@ class ChromPlot(QWidget):
             self.vb.addItem(reg, ignoreBounds=True)
             self.regions.append(reg)
 
+    # -- spectra --------------------------------------------------------------
+
     def _spectrum_request(self, t0, t1, bg, xy):
         """Right-click / right-drag in this plot -> spectrum request in MS time."""
-        rid = self._run_at(*xy) if xy is not None else self.ws.active_id
+        rid = nearest_curve(self.vb, self.curves, *xy, self.ws.active_id) if xy is not None else self.ws.active_id
         st = self.ws.runs.get(rid) if rid else None
         if st is None or st.run.ms is None:
             self.ws.message.emit("No MS data for a spectrum here")
@@ -254,19 +352,7 @@ class ChromPlot(QWidget):
         self.spectrumRequested.emit(ScanRequest(st.id, conv(t0), conv(t1), bg_ms))
 
     def _run_at(self, x: float, y: float):
-        """Run whose curve passes nearest to (x, y) within 12 px, else the active run."""
-        px = abs(self.vb.viewPixelSize()[1]) or 1e-12
-        best = None
-        for rid, curve in self.curves.items():
-            xs, ys = curve.getData()
-            if xs is None or len(xs) < 2 or not (xs[0] <= x <= xs[-1]):
-                continue
-            d = abs(float(np.interp(x, xs, ys)) - y) / px
-            if best is None or d < best[0]:
-                best = (d, rid)
-        if best is not None and best[0] <= 12:
-            return best[1]
-        return self.ws.active_id
+        return nearest_curve(self.vb, self.curves, x, y, self.ws.active_id)
 
     def set_ms_regions(self, regions):
         """Shaded apex/background scan ranges: [(t0, t1, colour)] on the MS time axis."""
@@ -277,14 +363,19 @@ class ChromPlot(QWidget):
         st = self.ws.active
         d = st.delay_value if st is not None else 0.0
         key = self.ws.signal_key
+        mapped = []
         for t0, t1, color in regions:
             t0, t1 = from_ms(t0, key, d), from_ms(t1, key, d)
+            mapped.append((t0, t1, color))
             c = QColor(color)
             reg = pg.LinearRegionItem((t0, t1), movable=False, brush=pg.mkBrush(c.red(), c.green(), c.blue(), 45),
                                       pen=pg.mkPen(None))
             reg.setZValue(-5)
             self.vb.addItem(reg, ignoreBounds=True)
             self.ms_regions.append(reg)
+        self.companion.set_regions(mapped)
+
+    # -- view --------------------------------------------------------------------
 
     def default_view(self):
         """Whole run on x; y scaled to the integrated part (the solvent front is
@@ -316,6 +407,8 @@ class ChromPlot(QWidget):
         pad = 0.05 * (hi_y - lo_y or 1.0)
         self.vb.setRange(xRange=(float(sig.rt[0]), float(sig.rt[-1])), yRange=(lo_y - pad, hi_y + pad),
                          padding=0)
+        if self.dual_on():
+            self.companion.fit_y()
 
     def zoom_to_selected(self):
         p = self.ws.selected_peak()
@@ -336,17 +429,27 @@ class ChromPlot(QWidget):
     def zoom_to(self, t0, t1):
         self.vb.setXRange(t0, t1, padding=0.02)
 
+    # -- cursor -------------------------------------------------------------------
+
     def _mouse_moved(self, pos):
         if not self.plot.sceneBoundingRect().contains(pos):
             return
-        p = self.vb.mapSceneToView(pos)
-        self.cursor.setPos(p.x())
+        self.set_cursor(self.vb.mapSceneToView(pos).x())
+
+    def set_cursor(self, x: float):
+        """Cursor line at time ``x`` (primary axis) in both panes, with a readout."""
+        self.cursor.setPos(x)
+        self.companion.set_cursor(x)
         st = self.ws.active
-        txt = f"{p.x():.3f} min"
+        key = self.ws.signal_key
+        txt = f"{x:.3f} min"
         if st is not None:
-            sig = st.run.signal(self.ws.signal_key)
-            if sig is not None and sig.rt[0] <= p.x() <= sig.rt[-1]:
-                txt += f"   {np.interp(p.x(), sig.rt, sig.y):.4g}"
+            if self.dual_on():
+                other = "MS" if is_fid(key) else "FID"
+                txt += f"  ({other} {x - self.companion.shift(st):.3f})"
+            sig = st.run.signal(key)
+            if sig is not None and sig.rt[0] <= x <= sig.rt[-1]:
+                txt += f"   {np.interp(x, sig.rt, sig.y):.4g}"
         self.cursor_label.setText(txt)
         vr = self.vb.viewRange()
-        self.cursor_label.setPos(p.x(), vr[1][1])
+        self.cursor_label.setPos(x, vr[1][1])
