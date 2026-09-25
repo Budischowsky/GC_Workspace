@@ -1,0 +1,12 @@
+[project]
+name = "gc-workspace"
+version = "0.1.0"
+description = "Standalone GC/GC-MS integration, identification and NIAS reporting"
+requires-python = ">=3.12"
+
+[project.scripts]
+gcws = "gcws.app:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:cacheprovider"

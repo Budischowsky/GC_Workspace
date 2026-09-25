@@ -1,0 +1,7 @@
+{
+  "_hinweis": "Alle Eintraege sind optional. Leer lassen = automatisch suchen. Relative Pfade gelten ab diesem Ordner. Auf einem neuen PC muss hier normalerweise nichts geaendert werden.",
+  "_atlas_root": "Ordner des Projekts UnknownEvaluation (EI Atlas). Leer = neben oder in diesem Ordner suchen, danach %USERPROFILE%\\Desktop\\KI Projects.",
+  "atlas_root": "",
+  "_nias_pythonw": "pythonw.exe einer Python-Umgebung mit den NIAS-Paketen. Leer = .venv bzw. .nias-venv in diesem Ordner verwenden (siehe Setup NIAS.cmd).",
+  "nias_pythonw": ""
+}
