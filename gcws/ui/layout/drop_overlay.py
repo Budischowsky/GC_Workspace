@@ -28,10 +28,10 @@ class Band(QWidget):
     def paintEvent(self, ev):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        p.setBrush(QColor(41, 128, 185, 70))
-        p.setPen(QPen(QColor(41, 128, 185, 220), 2))
+        p.setBrush(QColor(31, 111, 139, 70))           # theme.ACCENT
+        p.setPen(QPen(QColor(31, 111, 139, 220), 2))
         p.drawRoundedRect(self.rect().adjusted(2, 2, -2, -2), 6, 6)
-        p.setPen(QColor(20, 60, 100))
+        p.setPen(QColor(18, 70, 88))
         f = p.font()
         f.setBold(True)
         f.setPointSize(10)

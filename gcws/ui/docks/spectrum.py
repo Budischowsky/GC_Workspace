@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QHBoxL
                                QVBoxLayout, QWidget)
 
 from gcws.core.keys import is_fid
+from gcws.ui import theme
 from gcws.ms.spectra import MODES, extract, ms_times
 
 
@@ -19,7 +20,7 @@ class StickPlot(pg.PlotWidget):
         self.setMenuEnabled(False)
         self.setLabel("bottom", "m/z")
         self.setLabel("left", "rel. abundance")
-        self.showGrid(y=True, alpha=0.15)
+        self.showGrid(y=True, alpha=theme.PLOT["grid_alpha"])
         self.getPlotItem().getViewBox().setMouseMode(pg.ViewBox.RectMode)
         self.texts = []
 
@@ -33,10 +34,10 @@ class StickPlot(pg.PlotWidget):
             return
         ab = np.asarray(ab, float)
         rel = ab / ab.max() * 100.0
-        self.addItem(pg.BarGraphItem(x=mz, height=rel, width=0.6, brush="#1f5f99", pen=None))
+        self.addItem(pg.BarGraphItem(x=mz, height=rel, width=0.6, brush=theme.PLOT["spectrum"], pen=None))
         order = np.argsort(rel)[::-1][:8]
         for i in order:
-            t = pg.TextItem(str(int(mz[i])), color="#1f5f99", anchor=(0.5, 1))
+            t = pg.TextItem(str(int(mz[i])), color=theme.PLOT["spectrum"], anchor=(0.5, 1))
             t.setPos(float(mz[i]), float(rel[i]))
             self.addItem(t)
             self.texts.append(t)
@@ -45,9 +46,10 @@ class StickPlot(pg.PlotWidget):
             rab = np.array([p[1] for p in ref], float)
             if rab.size and rab.max() > 0:
                 rrel = rab / rab.max() * 100.0
-                self.addItem(pg.BarGraphItem(x=rmz, y0=0, height=-rrel, width=0.6, brush="#b03a2e", pen=None))
+                self.addItem(pg.BarGraphItem(x=rmz, y0=0, height=-rrel, width=0.6, brush=theme.PLOT["reference"],
+                                             pen=None))
                 for i in np.argsort(rrel)[::-1][:6]:
-                    t = pg.TextItem(str(int(rmz[i])), color="#b03a2e", anchor=(0.5, 0))
+                    t = pg.TextItem(str(int(rmz[i])), color=theme.PLOT["reference"], anchor=(0.5, 0))
                     t.setPos(float(rmz[i]), float(-rrel[i]))
                     self.addItem(t)
                     self.texts.append(t)
@@ -101,16 +103,16 @@ class SpectrumDock(QWidget):
 
         self.plot = StickPlot()
         self.info = QLabel()
-        self.info.setStyleSheet("color:#666;")
+        self.info.setObjectName("hint")
 
         # scan selection
         self.scan_plot = pg.PlotWidget()
         self.scan_plot.setMenuEnabled(False)
         self.scan_plot.setMaximumHeight(140)
         self.scan_plot.setLabel("bottom", "MS RT", units="min")
-        self.apex_reg = pg.LinearRegionItem(brush=pg.mkBrush(31, 95, 153, 50))
-        self.bg_reg = pg.LinearRegionItem(brush=pg.mkBrush(176, 58, 46, 40))
-        self.scan_curve = pg.PlotDataItem(pen=pg.mkPen("#555555"))
+        self.apex_reg = pg.LinearRegionItem(brush=pg.mkBrush(theme.qcolor(theme.PLOT["apex_region"], 50)))
+        self.bg_reg = pg.LinearRegionItem(brush=pg.mkBrush(theme.qcolor(theme.PLOT["bg_region"], 40)))
+        self.scan_curve = pg.PlotDataItem(pen=pg.mkPen(theme.PLOT["secondary"]))
         for it in (self.scan_curve, self.apex_reg, self.bg_reg):
             self.scan_plot.addItem(it)
         use = QPushButton("Use these scans")
@@ -198,7 +200,7 @@ class SpectrumDock(QWidget):
                 for c, v in enumerate(vals):
                     item = QTableWidgetItem("" if v is None else (f"{v:.1f}" if isinstance(v, float) else str(v)))
                     if c == 0 and ident.name and h.get("name") == ident.name:
-                        item.setForeground(QColor("#1e8449"))
+                        item.setForeground(QColor(theme.OK))
                     self.hits.setItem(r, c, item)
         self._update_regions(st, peak, key)
 
@@ -242,7 +244,7 @@ class SpectrumDock(QWidget):
         if spec and spec.apex_scans:
             a0, a1 = float(ms.rt[min(spec.apex_scans)]), float(ms.rt[max(spec.apex_scans)])
             self.apex_reg.setRegion((a0 - 0.001, a1 + 0.001))
-            regions.append((a0 + shift - 0.001, a1 + shift + 0.001, "#1f5f99"))
+            regions.append((a0 + shift - 0.001, a1 + shift + 0.001, theme.PLOT["apex_region"]))
         if spec and spec.bg_scans:
             b0, b1 = float(ms.rt[min(spec.bg_scans)]), float(ms.rt[max(spec.bg_scans)])
             self.bg_reg.setRegion((b0 - 0.001, b1 + 0.001))
@@ -251,7 +253,7 @@ class SpectrumDock(QWidget):
             for grp in (pre, post):
                 if grp:
                     regions.append((float(ms.rt[min(grp)]) + shift - 0.001,
-                                    float(ms.rt[max(grp)]) + shift + 0.001, "#b03a2e"))
+                                    float(ms.rt[max(grp)]) + shift + 0.001, theme.PLOT["bg_region"]))
         self.scan_plot.getPlotItem().getViewBox().autoRange()
         self.regionsChanged.emit(regions)
 

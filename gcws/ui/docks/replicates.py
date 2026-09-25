@@ -59,7 +59,7 @@ class ReplicatesDock(QWidget):
         self.sheet.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.sheet.setSortingEnabled(True)
         self.info = QLabel()
-        self.info.setStyleSheet("color:#666;")
+        self.info.setObjectName("hint")
         buttons = QHBoxLayout()
         for kind, label in (("nias", "NIAS report..."), ("fingerprint", "Fingerprint report..."),
                             ("total_extraction", "Total extraction report...")):

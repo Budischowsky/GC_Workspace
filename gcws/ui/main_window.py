@@ -40,6 +40,8 @@ DOCKS = [  # key, title
 
 class MainWindow(QMainWindow):
     def __init__(self):
+        from gcws.ui import theme
+        theme.ensure_applied()
         super().__init__()
         self.setWindowTitle("GC Workspace")
         self.setWindowIcon(icon("integrate"))
@@ -170,6 +172,9 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
         tb.addAction(self.a_integrate)
         tb.addAction(self.a_search)
+        from gcws.ui import theme
+        for a in (self.a_integrate, self.a_search):
+            theme.set_primary(tb.widgetForAction(a))
         self.addToolBar(Qt.TopToolBarArea, tb)
 
         tools = QToolBar("Integration tools")

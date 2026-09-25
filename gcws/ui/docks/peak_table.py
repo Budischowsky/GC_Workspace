@@ -81,7 +81,7 @@ class PeakTable(QWidget):
         self.filter.setClearButtonEnabled(True)
         self.filter.textChanged.connect(self.proxy.setFilterFixedString)
         self.info = QLabel()
-        self.info.setStyleSheet("color:#666;")
+        self.info.setObjectName("hint")
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
         top.addWidget(tb)

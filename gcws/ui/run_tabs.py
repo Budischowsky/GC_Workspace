@@ -6,6 +6,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QColorDialog, QInputDialog, QMenu, QTabBar
 
 from gcws.io.sequence import ROLE_LABELS
+from gcws.ui import theme
 from gcws.ui.icons import color_chip
 
 
@@ -36,8 +37,7 @@ class RunTabBar(QTabBar):
         ws.runRemoved.connect(self._removed)
         ws.runChanged.connect(self._changed)
         ws.activeRunChanged.connect(self._active)
-        self.setStyleSheet("QTabBar::tab { padding: 4px 10px; min-width: 60px; }"
-                           "QTabBar::tab:selected { font-weight: bold; }")
+        self.setObjectName("runTabs")
 
     def _index(self, run_id):
         for i in range(self.count()):
@@ -56,7 +56,7 @@ class RunTabBar(QTabBar):
         i = self.insertTab(pos if 0 <= pos <= self.count() else self.count(), color_chip(st.color), self._label(st))
         self.setTabData(i, run_id)
         self.setTabToolTip(i, f"{st.name}\n{st.run.path}")
-        self.setTabTextColor(i, QColor("#222222"))
+        self.setTabTextColor(i, QColor(theme.TEXT))
         self._updating = False
 
     def _removed(self, run_id):
@@ -72,7 +72,7 @@ class RunTabBar(QTabBar):
         if i >= 0 and st is not None:
             self.setTabIcon(i, color_chip(st.color))
             self.setTabText(i, self._label(st))
-            self.setTabTextColor(i, QColor("#222222") if st.visible else QColor("#999999"))
+            self.setTabTextColor(i, QColor(theme.TEXT) if st.visible else QColor(theme.FAINT))
 
     def _active(self, run_id):
         i = self._index(run_id)

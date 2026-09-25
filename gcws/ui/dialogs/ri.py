@@ -43,7 +43,7 @@ class RetentionIndexDialog(QDialog):
         self.replace_rt.setChecked(bool(ri.get("replace_rt")))
         self.problems = QLabel()
         self.problems.setWordWrap(True)
-        self.problems.setStyleSheet("color:#b03a2e;")
+        self.problems.setObjectName("warning")
         f = QFormLayout()
         h = QHBoxLayout()
         h.addWidget(self.run, 1)

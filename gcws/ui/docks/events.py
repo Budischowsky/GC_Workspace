@@ -25,7 +25,7 @@ class AutoSpin(QWidget):
             self.spin.setSingleStep(step)
         self.auto = QCheckBox("Auto")
         self.hint = QLabel()
-        self.hint.setStyleSheet("color:#777;")
+        self.hint.setObjectName("hint")
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self.auto)

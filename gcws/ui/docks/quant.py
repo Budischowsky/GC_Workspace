@@ -45,7 +45,7 @@ class QuantDock(QScrollArea):
         self.istd_conc.editingFinished.connect(self._mode_changed)
         self.mode_note = QLabel()
         self.mode_note.setWordWrap(True)
-        self.mode_note.setStyleSheet("color:#666;")
+        self.mode_note.setObjectName("hint")
         f.addRow("Mode", self.mode)
         f.addRow("Unit", self.unit)
         f.addRow("ISTD concentration", self.istd_conc)
@@ -337,7 +337,7 @@ class MigrationDialog(QDialog):
         note = QLabel("These values are calculation inputs (cell area, coverage, O/V) and appear in the report "
                       "next to 'Migrate'. Texts are reported as entered.")
         note.setWordWrap(True)
-        note.setStyleSheet("color:#666;")
+        note.setObjectName("hint")
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.accepted.connect(self._ok)
         bb.rejected.connect(self.reject)

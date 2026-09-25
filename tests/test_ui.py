@@ -93,3 +93,12 @@ def test_project_roundtrip(qtbot, win, samples, tmp_path):
     assert win.ws.result(st.id, "FID").digest == digest
     assert any(i.name == "Test compound" for i in st2.ident_set("FID").items)
     assert win.ws.replicate_groups[0]["members"] == [st.id]
+
+
+def test_theme_applied(qtbot, win):
+    from PySide6.QtWidgets import QApplication
+    from gcws.ui import theme
+    app = QApplication.instance()
+    assert app.property("gcws_theme")
+    assert theme.ACCENT.lower() in app.styleSheet().lower()
+    assert win.ws.next_color() in theme.RUN_COLORS

@@ -8,6 +8,7 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QBrush, QColor, QFont
 
 from gcws.core.keys import is_fid
+from gcws.ui import theme
 
 
 @dataclass
@@ -138,21 +139,21 @@ class PeakTableModel(QAbstractTableModel):
             return int(Qt.AlignRight | Qt.AlignVCenter) if col.numeric else int(Qt.AlignLeft | Qt.AlignVCenter)
         if role == Qt.BackgroundRole:
             if row.ident is not None and row.ident.istd:
-                return QBrush(QColor("#e3f2e1"))
+                return theme.status_brush("ok")
             if col.key in ("name", "cas", "status") and row.ident is not None:
                 if row.ident.manual:
-                    return QBrush(QColor("#fff3cd"))
+                    return theme.status_brush("warn")
                 st = (row.ident.status or "").lower()
                 if st.startswith("uncertain"):
-                    return QBrush(QColor("#fde2d0"))
+                    return theme.status_brush("bad")
                 if st.startswith("unknown"):
-                    return QBrush(QColor("#ececec"))
+                    return theme.status_brush("neutral")
             if "M" in row.peak.flags and col.key in ("num", "type", "area"):
-                return QBrush(QColor("#fdebd0"))
+                return QBrush(QColor(theme.ORANGE_SOFT))
             if "S" in row.peak.flags:
-                return QBrush(QColor("#f4f6f7"))
+                return QBrush(QColor(theme.SURFACE_ALT))
         if role == Qt.ForegroundRole and row.peak.negative:
-            return QBrush(QColor("#1a5276"))
+            return QBrush(QColor(theme.INFO))
         if role == Qt.FontRole and index.row() == self.ws.selected:
             f = QFont()
             f.setBold(True)

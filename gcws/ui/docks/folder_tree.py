@@ -15,8 +15,8 @@ from gcws.io.metadata import read_metadata
 from gcws.io.sequence import ROLE_LABELS, classify_role
 from gcws.ui.icons import icon
 
-ROLE_COLORS = {"sample": "#2b5b84", "blank": "#7f8c8d", "blank_istd": "#16a085",
-               "standard": "#8e44ad", "ladder": "#d35400"}
+ROLE_COLORS = {"sample": "#1F6F8B", "blank": "#6B7780", "blank_istd": "#11A579",
+               "standard": "#7F3C8D", "ladder": "#D55E00"}
 
 
 @lru_cache(maxsize=4096)
@@ -40,7 +40,7 @@ class GCFileModel(QFileSystemModel):
             if path.lower().endswith(".d") and self.isDir(index):
                 if role == Qt.DecorationRole:
                     r = classify_role(Path(path).name)
-                    return icon("run", ROLE_COLORS.get(r, "#2b5b84"))
+                    return icon("run", ROLE_COLORS.get(r, "#1F6F8B"))
                 try:
                     mtime = os.path.getmtime(path)
                 except OSError:

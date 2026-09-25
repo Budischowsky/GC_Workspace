@@ -32,10 +32,13 @@ def _pen(color="#303030", w=2.0, style=Qt.SolidLine):
     return pen
 
 
+ACCENT = "#1F6F8B"          # = theme.ACCENT (kept literal: icons must not import widgets)
+
+
 @lru_cache(maxsize=None)
-def icon(name: str, color: str = "#2b5b84") -> QIcon:
+def icon(name: str, color: str = ACCENT) -> QIcon:
     pm, qp = _canvas()
-    dark = "#303030"
+    dark = "#33424D"
     accent = QColor(color)
     if name == "select":
         poly = QPolygonF([QPointF(9, 5), QPointF(9, 25), QPointF(14, 20), QPointF(18, 28),

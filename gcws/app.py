@@ -24,7 +24,8 @@ def main(argv=None):
     QSettings.setDefaultFormat(QSettings.IniFormat)
     QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(paths.DATA))
     app = QApplication.instance() or QApplication(argv)
-    app.setStyle("Fusion")
+    from gcws.ui import theme
+    theme.apply(app)                  # before any icon or plot is created
     from gcws.ui.main_window import MainWindow
 
     def excepthook(etype, value, tb):

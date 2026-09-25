@@ -15,6 +15,7 @@ from PySide6.QtCore import QObject, Qt, Signal as QtSignal
 from PySide6.QtGui import QColor, QPen
 
 from gcws.core.events import ManualEvent, ManualKind as K
+from gcws.ui import theme
 
 TOOLS = [
     # name, label, shortcut, tooltip
@@ -188,14 +189,14 @@ class ToolViewBox(pg.ViewBox):
         self.on_reset = None             # double-click: plot's default view
         self._grab = None
         self._drag_origin = None
-        pen = QPen(QColor("#c0392b"))
+        pen = QPen(QColor(theme.PLOT["baseline"]))
         pen.setCosmetic(True)
         pen.setWidthF(1.5)
         pen.setStyle(Qt.DashLine)
         self.preview = pg.PlotCurveItem(pen=pen)
         self.preview.setZValue(50)
         self.addItem(self.preview, ignoreBounds=True)
-        self.band = pg.LinearRegionItem(movable=False, brush=pg.mkBrush(192, 57, 43, 40))
+        self.band = pg.LinearRegionItem(movable=False, brush=pg.mkBrush(*theme.PLOT["band_bg"]))
         self.band.setZValue(40)
         self.band.hide()
         self.addItem(self.band, ignoreBounds=True)

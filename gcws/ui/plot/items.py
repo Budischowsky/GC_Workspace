@@ -6,6 +6,8 @@ import pyqtgraph as pg
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainterPath, QPen, QBrush
 
+from gcws.ui import theme
+
 
 def _poly(path: QPainterPath, xs, ys, close_to=None):
     if len(xs) == 0:
@@ -73,17 +75,17 @@ class PeaksItem(pg.GraphicsObject):
         p.setPen(Qt.NoPen)
         p.setBrush(QBrush(QColor(c.red(), c.green(), c.blue(), 55)))
         p.drawPath(self.fill)
-        p.setBrush(QBrush(QColor(230, 126, 34, 70)))
+        p.setBrush(QBrush(theme.qcolor(theme.PLOT["manual_fill"])))
         p.drawPath(self.fill_manual)
         p.setBrush(QBrush(QColor(c.red(), c.green(), c.blue(), 130)))
         p.drawPath(self.fill_sel)
-        pen = QPen(QColor("#c0392b"))
+        pen = QPen(QColor(theme.PLOT["baseline"]))
         pen.setCosmetic(True)
         pen.setWidthF(1.3)
         p.setBrush(Qt.NoBrush)
         p.setPen(pen)
         p.drawPath(self.base)
-        pen2 = QPen(QColor(80, 80, 80, 170))
+        pen2 = QPen(theme.qcolor(theme.PLOT["drop"]))
         pen2.setCosmetic(True)
         pen2.setWidthF(1.0)
         p.setPen(pen2)
@@ -136,7 +138,10 @@ class LabelsItem(pg.GraphicsObject):
             p.save()
             p.translate(pt.x(), pt.y() - 3)
             p.rotate(-90)
-            p.setPen(QColor("#b03a2e") if bold else QColor("#333333"))
+            p.setPen(QColor(theme.PLOT["label_selected"] if bold else theme.PLOT["label"]))
+            f = p.font()
+            f.setBold(bold)
+            p.setFont(f)
             p.drawText(QPointF(0, 4), text)
             p.restore()
         p.restore()

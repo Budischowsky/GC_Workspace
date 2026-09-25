@@ -51,7 +51,7 @@ class SearchStartDialog(QDialog):
         note = QLabel("ISTD peaks and names entered by hand are never overwritten. The search runs "
                       "locally in EI Atlas (started without a window if necessary).")
         note.setWordWrap(True)
-        note.setStyleSheet("color:#666;")
+        note.setObjectName("hint")
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.button(QDialogButtonBox.Ok).setText("Search")
         bb.accepted.connect(self.accept)
@@ -129,7 +129,7 @@ class CompoundReview(QDialog):
         bb.rejected.connect(self.reject)
         info = QLabel(f"Hits below the quality limit ({min_score}) become 'possible derivative of ...' or "
                       f"'unknown' unless you pick a hit explicitly.")
-        info.setStyleSheet("color:#666;")
+        info.setObjectName("hint")
         lay = QVBoxLayout(self)
         lay.addWidget(split, 1)
         lay.addWidget(info)
@@ -209,7 +209,7 @@ class BlanksDialog(QDialog):
                       "Blank+ISTD injected before it. With several blanks of one kind the larger matched area is "
                       "subtracted.")
         note.setWordWrap(True)
-        note.setStyleSheet("color:#666;")
+        note.setObjectName("hint")
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)

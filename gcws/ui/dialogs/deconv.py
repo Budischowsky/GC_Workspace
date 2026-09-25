@@ -82,7 +82,7 @@ class DeconvolutionDialog(QDialog):
         split.addWidget(right)
         split.setSizes([520, 630])
         self.note = QLabel()
-        self.note.setStyleSheet("color:#666;")
+        self.note.setObjectName("hint")
         lay = QVBoxLayout(self)
         lay.addWidget(split, 1)
         lay.addWidget(self.note)

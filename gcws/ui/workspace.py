@@ -23,9 +23,7 @@ from gcws.integration.store import MethodStore
 from gcws.io import sequence
 from gcws.signal.delay import DelayEstimate, estimate_delay, refine_with_peaks
 
-PALETTE = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd", "#ff7f0e", "#17becf",
-           "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#393b79", "#637939",
-           "#8c6d31", "#843c39", "#7b4173", "#3182bd"]
+from gcws.ui.theme import RUN_COLORS as PALETTE
 
 
 @dataclass

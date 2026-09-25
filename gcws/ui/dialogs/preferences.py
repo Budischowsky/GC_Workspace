@@ -94,7 +94,7 @@ class PreferencesDialog(QDialog):
         f.addRow("", self.reason)
         f.addRow("", self.sticky)
         note = QLabel(f"Data folder: {paths.DATA}")
-        note.setStyleSheet("color:#666;")
+        note.setObjectName("hint")
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.accepted.connect(self._ok)
         bb.rejected.connect(self.reject)

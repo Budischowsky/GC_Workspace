@@ -8,10 +8,11 @@ from PySide6.QtGui import QColor, QPen
 from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from gcws.integration.method import EventKind
+from gcws.ui import theme
 from gcws.ui.plot.items import LabelsItem, PeaksItem
 from gcws.ui.plot.tools import ToolViewBox
 
-pg.setConfigOptions(antialias=True, background="w", foreground="#333333")
+theme.configure_plots()
 
 
 def _pen(color, width=1.0, alpha=255, style=Qt.SolidLine):
@@ -35,7 +36,7 @@ class ChromPlot(QWidget):
         self.plot = pg.PlotWidget(viewBox=self.vb)
         self.plot.setLabel("bottom", "RT", units="min")
         self.plot.getAxis("left").enableAutoSIPrefix(True)
-        self.plot.showGrid(x=True, y=True, alpha=0.15)
+        self.plot.showGrid(x=True, y=True, alpha=theme.PLOT["grid_alpha"])
         self.plot.setMenuEnabled(False)
         self.curves: dict[str, pg.PlotDataItem] = {}
         self.peaks = PeaksItem()
@@ -45,9 +46,9 @@ class ChromPlot(QWidget):
         self.event_lines: list = []
         self.regions: list = []
         self.ms_regions: list = []
-        self.cursor = pg.InfiniteLine(angle=90, movable=False, pen=_pen("#999999", 1, 120, Qt.DotLine))
+        self.cursor = pg.InfiniteLine(angle=90, movable=False, pen=_pen(theme.PLOT["cursor"], 1, 140, Qt.DotLine))
         self.vb.addItem(self.cursor, ignoreBounds=True)
-        self.cursor_label = pg.TextItem("", color="#555555", anchor=(0, 1))
+        self.cursor_label = pg.TextItem("", color=theme.PLOT["cursor_text"], anchor=(0, 1))
         self.vb.addItem(self.cursor_label, ignoreBounds=True)
         self.plot.scene().sigMouseMoved.connect(self._mouse_moved)
         self.vb.on_reset = self.default_view
@@ -58,7 +59,7 @@ class ChromPlot(QWidget):
         bar = QHBoxLayout()
         bar.setSpacing(8)
         self.title = QLabel()
-        self.title.setStyleSheet("color:#555;")
+        self.title.setObjectName("hint")
         bar.addWidget(self.title, 1)
         if not detail:
             self.norm = QCheckBox("Normalize")
@@ -218,21 +219,21 @@ class ChromPlot(QWidget):
                 continue
             if e.kind == EventKind.INTEGRATOR_ON and off_start is not None:
                 reg = pg.LinearRegionItem((off_start, e.time), movable=False,
-                                          brush=pg.mkBrush(120, 120, 120, 28), pen=pg.mkPen(None))
+                                          brush=pg.mkBrush(*theme.PLOT["off_region"]), pen=pg.mkPen(None))
                 reg.setZValue(-10)
                 self.vb.addItem(reg, ignoreBounds=True)
                 self.regions.append(reg)
                 off_start = None
                 continue
             line = pg.InfiniteLine(e.time, angle=90, movable=False,
-                                   pen=_pen("#8e44ad", 1, 140, Qt.DashLine),
-                                   label=e.kind.value, labelOpts={"position": 0.95, "color": "#8e44ad",
+                                   pen=_pen(theme.PLOT["event"], 1, 140, Qt.DashLine),
+                                   label=e.kind.value, labelOpts={"position": 0.95, "color": theme.PLOT["event"],
                                                                   "rotateAxis": (1, 0), "anchors": [(0, 0), (0, 0)]})
             self.vb.addItem(line, ignoreBounds=True)
             self.event_lines.append(line)
         if off_start is not None:
             reg = pg.LinearRegionItem((off_start, float(sig.rt[-1])), movable=False,
-                                      brush=pg.mkBrush(120, 120, 120, 28), pen=pg.mkPen(None))
+                                      brush=pg.mkBrush(*theme.PLOT["off_region"]), pen=pg.mkPen(None))
             self.vb.addItem(reg, ignoreBounds=True)
             self.regions.append(reg)
 
