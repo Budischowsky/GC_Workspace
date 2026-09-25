@@ -84,13 +84,17 @@ class SpectrumDock(QWidget):
         b_save = QToolButton()
         b_save.setText("Save MSP...")
         b_save.clicked.connect(self.save_msp)
+        b_res = QToolButton()
+        b_res.setText("Investigate")
+        b_res.setToolTip("Full EI Atlas investigation (native window)")
+        b_res.clicked.connect(lambda: self.window().atlas_research())
         b_reg = QToolButton()
         b_reg.setText("Register unknown")
         b_reg.clicked.connect(self.registerRequested.emit)
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
         top.addWidget(self.mode, 1)
-        for b in (b_atlas, b_nist, b_copy, b_save, b_reg):
+        for b in (b_atlas, b_res, b_nist, b_copy, b_save, b_reg):
             top.addWidget(b)
 
         self.plot = StickPlot()

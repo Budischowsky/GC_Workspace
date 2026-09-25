@@ -95,6 +95,20 @@ def identification_from_hits(item: SearchItem, hits: list[dict], chosen: Optiona
         istd=prev.istd if prev else "")
 
 
+def prepare_server(method) -> str:
+    """Start/find EI Atlas and align the method with its libraries (worker thread)."""
+    import gc_atlas
+    import gc_search_method as SM
+    base = gc_atlas.ensure_server()
+    gc_atlas.wait_ready(base)
+    status = gc_atlas.request(base, "/api/status")
+    SM.reconcile(method, status)
+    if not method.enabled_libraries():
+        for e in method.libraries:
+            e.enabled = True
+    return base
+
+
 class LibrarySearchWorker(QObject):
     """Runs ``gc_identify.BatchSearch`` and reports progress on the GUI thread."""
     progress = QtSignal(str)
@@ -108,7 +122,8 @@ class LibrarySearchWorker(QObject):
         self.items = items
         self.method = method
         self.settings = GI.IdentifySettings(method=method)
-        self.batch = GI.BatchSearch([it.job for it in items], self.settings)
+        self.batch = GI.BatchSearch([it.job for it in items], self.settings,
+                                    server=lambda: prepare_server(self.method))
         self.timer = QTimer(self)
         self.timer.setInterval(60)
         self.timer.timeout.connect(self._drain)

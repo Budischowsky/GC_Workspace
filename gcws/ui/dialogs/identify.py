@@ -266,8 +266,8 @@ class AtlasHitsDialog(QDialog):
     def _search(self):
         import gc_atlas
         import gc_search_method as SM
-        base = gc_atlas.ensure_server()
-        gc_atlas.wait_ready(base)
+        from gcws.identify.service import prepare_server
+        base = prepare_server(self.method)
         masses = [m for m, _ in self.points]
         rng = SM.mz_range(self.method, (int(min(masses)), int(max(masses)) + 1))
         result = gc_atlas.request(base, "/api/analyze", {

@@ -48,8 +48,13 @@ def cas_lookup() -> dict:
         return {}
     if _CAS["path"] != str(p):
         try:
+            import warnings
             from gcws.report.legacy_api import main_script
-            _CAS["lookup"] = main_script().load_cas_lookup(p)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                _CAS["lookup"] = main_script().load_cas_lookup(p)
+            for w in caught:
+                log.info("CASINFO: %s", w.message)
             _CAS["path"] = str(p)
         except Exception as exc:  # noqa: BLE001
             log.warning("CASINFO not readable: %s", exc)

@@ -80,6 +80,10 @@ class MainWindow(QMainWindow):
         self._build_menus()
         self._build_status()
         self._connect()
+        self._autosave = QTimer(self)
+        self._autosave.setInterval(120_000)
+        self._autosave.timeout.connect(self.autosave)
+        self._autosave.start()
         presets.apply_preset(self, "Chromatogram top")
         if not self._restore_session_state():
             # dock sizes only take effect once the window has its real size
@@ -134,6 +138,7 @@ class MainWindow(QMainWindow):
         self.a_search_method = A("Search methods...", self.edit_search_methods)
         self.spectrumSearchAtlasAction = A("EI Atlas hit list (selected peak)", self.atlas_selected, "Ctrl+E")
         self.spectrumSearchNistAction = A("Search selected peak in NIST", self.nist_selected, "Ctrl+N")
+        self.atlasResearchAction = A("Investigate selected peak in EI Atlas...", self.atlas_research, "Ctrl+Shift+E")
         self.a_eic = A("Extracted ion chromatogram...", self.ask_eic, "Ctrl+I")
         self.setIstdAction = A("Set selected peak as ISTD...", self.set_istd_selected)
         self.registerUnknownAction = A("Register selected peak as unknown...", self.register_unknown)
@@ -192,6 +197,7 @@ class MainWindow(QMainWindow):
             m.addAction(a)
         self.recent_menu = m.addMenu("Recent projects")
         self.recent_menu.aboutToShow.connect(self._fill_recent)
+        m.addAction("Recover autosave...", self.recover_autosave)
         m.addSeparator()
         m.addAction("Export peak table...", self.table.export)
         m.addSeparator()
@@ -225,6 +231,7 @@ class MainWindow(QMainWindow):
         m.addSeparator()
         m.addAction(self.spectrumSearchAtlasAction)
         m.addAction(self.spectrumSearchNistAction)
+        m.addAction(self.atlasResearchAction)
         m.addSeparator()
         m.addAction(self.registerUnknownAction)
         m.addAction("Unknown register...", self.open_register)
@@ -612,6 +619,40 @@ class MainWindow(QMainWindow):
         dlg = AtlasHitsDialog(points, name, method, self, on_assign=assign if peak is not None else None)
         dlg.show()
 
+    def atlas_research(self):
+        """The full EI Atlas investigation (native window, research tab)."""
+        from gcws.identify.atlas_bridge import AtlasBridge
+        from gcws.ui.dialogs.register import db_path
+        st, peak = self.ws.active, self.ws.selected_peak()
+        points = self.spectrum.points()
+        if st is None or peak is None or not points:
+            QMessageBox.information(self, "EI Atlas", "Select a peak with a mass spectrum first.")
+            return
+        spec = self.spectrum.spec
+        mig = self.ws.quant.get("migration") or {}
+        snapshot = {"spectrum": points, "rt": spec.rt, "name": self.spectrum.spectrum_name(),
+                    "apex_scan": spec.apex_scans[len(spec.apex_scans) // 2] if spec.apex_scans else None,
+                    "bg_scan": spec.bg_scans[0] if spec.bg_scans else None}
+        ms = st.run.ms
+        sl = ms.scans_between(spec.rt - 0.6, spec.rt + 0.6)
+        context = {"sample": st.run.path.name, "sample_name": st.name, "report_type": "GC Workspace",
+                   "date": (st.run.meta.acquired or "")[:10], "analyst": mig.get("analyst", ""),
+                   "simulant": mig.get("simulant", ""), "source_file": str(st.run.path), "label": st.name,
+                   "peak_no": peak.number, "peak_rt": peak.apex_rt, "area_pct": peak.area_pct,
+                   "method": "GC Workspace", "tic": ([float(x) for x in ms.rt[sl]], [int(v) for v in ms.stored_tic[sl]])}
+        bridge = AtlasBridge.instance()
+        if not getattr(self, "_atlas_connected", False):
+            bridge.error.connect(lambda e: QMessageBox.warning(self, "EI Atlas", e))
+            bridge.saved.connect(lambda rec: self.statusBar().showMessage(
+                f"EI Atlas investigation saved as {rec.get('unknown_id', '')}", 8000))
+            bridge.registerRequested.connect(lambda *_: self.open_register())
+            self._atlas_connected = True
+        try:
+            bridge.open_research(snapshot, context, db_path(), int(self.winId()))
+            self.statusBar().showMessage("Opening EI Atlas ...", 5000)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "EI Atlas", str(exc))
+
     def nist_search(self, points, name):
         import gc_nist
         p = self.ws.selected_peak()
@@ -873,6 +914,32 @@ class MainWindow(QMainWindow):
                                     "The integration now differs from the saved state for:\n" + "\n".join(changed)
                                     + "\n\n(raw data or integrator version changed)")
 
+    def autosave_path(self) -> Path:
+        from gcws import paths
+        return paths.DATA / "projects" / "autosave.gcws"
+
+    def autosave(self):
+        """Every two minutes while something changed: a copy of the project for recovery."""
+        if not self.ws.dirty or not self.ws.states() or self.loading:
+            return
+        import json
+        target = self.autosave_path()
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            data = P.to_dict(self.ws, self.ws.project_path or target)
+            tmp = target.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(target)
+        except (OSError, ValueError):
+            pass
+
+    def recover_autosave(self):
+        target = self.autosave_path()
+        if not target.exists():
+            QMessageBox.information(self, "Recover", "There is no autosaved session.")
+            return
+        self.open_project(target)
+
     def _add_recent(self, path):
         s = QSettings()
         rec = [p for p in (s.value("recent", []) or []) if p != str(path)]
@@ -926,6 +993,10 @@ class MainWindow(QMainWindow):
                 return
             if r == QMessageBox.Yes:
                 self.save_project()
+        try:
+            self.autosave_path().unlink(missing_ok=True)       # a clean exit needs no recovery
+        except OSError:
+            pass
         s = QSettings()
         s.setValue("window/geometry", self.saveGeometry())
         s.setValue("window/state", self.saveState(presets.LAYOUT_VERSION))
