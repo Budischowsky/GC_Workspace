@@ -143,12 +143,22 @@ def _sub(a: dict, b: dict, f: float = 1.0) -> dict:
 
 
 def extract(run, peak, key: str, delay: float, mode: str = "average_bg",
-            top_fraction: float = 0.5, n_bg: int = 3, override: dict | None = None) -> Spectrum | None:
+            top_fraction: float = 0.5, n_bg: int = 3, override: dict | None = None,
+            component=None) -> Spectrum | None:
+    """Spectrum of an integrated peak. ``component``: callable returning the deconvoluted
+    component of the peak (mode "deconvoluted"); a pinned component in ``override`` wins."""
     ms = run.ms
     if ms is None or peak is None:
         return None
     t0, t1, ta = ms_times(peak, key, delay)
     scans = ms.scans_between(t0, t1)
+    if override and override.get("component"):
+        pc = override["component"]
+        mz = np.array([int(m) for m, _ in pc["spectrum"]], dtype=int)
+        ab = np.array([float(v) for _, v in pc["spectrum"]], dtype=float)
+        scan = ms.scan_at_rt(float(pc["rt"]))
+        return Spectrum(mz, ab, float(pc["rt"]), "deconvoluted", [scan], [],
+                        f"pinned deconvoluted component {pc['rt']:.3f} min (model m/z {pc.get('model_mz', '?')})")
     if override and override.get("apex_scans"):
         apex_scans = [s for s in override["apex_scans"] if 0 <= s < ms.n_scans]
         bg_scans = [s for s in override.get("bg_scans", []) if 0 <= s < ms.n_scans]
@@ -180,13 +190,16 @@ def extract(run, peak, key: str, delay: float, mode: str = "average_bg",
         return Spectrum(mz, ab, float(ms.rt[apex]), mode, [apex], [start])
 
     if mode == "deconvoluted":
-        comp = deconvoluted_component(run, ta)
+        comp = component() if component is not None else deconvoluted_component(run, peak, key, delay)
         if comp is not None:
             mz = np.array([int(m) for m, _ in comp.spectrum], dtype=int)
             ab = np.array([float(v) for _, v in comp.spectrum], dtype=float)
+            quality = f", quality {comp.quality:.0f}" if hasattr(comp, "quality") else ""
             return Spectrum(mz, ab, float(comp.rt), mode, [int(comp.apex_scan)], [],
-                            f"component purity {comp.purity:.2f}, {comp.n_ions} model ions")
+                            f"deconvoluted component {comp.rt:.3f} min: model m/z {comp.model_mz}, "
+                            f"purity {comp.purity:.2f}{quality}")
         mode = "average_bg"
+        fallback_note = "no deconvoluted component found: average spectrum shown"
 
     # average_bg
     top = height[k]
@@ -212,20 +225,22 @@ def extract(run, peak, key: str, delay: float, mode: str = "average_bg",
         bg = {}
     spec = _sub(mean, bg)
     mz, ab = _from_dict(spec)
-    return Spectrum(mz, ab, float(np.mean(ms.rt[apex_scans])), "average_bg", apex_scans, pre + post,
-                    f"{len(apex_scans)} scans averaged, {len(pre) + len(post)} background scans")
+    note = f"{len(apex_scans)} scans averaged, {len(pre) + len(post)} background scans"
+    if "fallback_note" in locals():
+        note = fallback_note + "; " + note
+    return Spectrum(mz, ab, float(np.mean(ms.rt[apex_scans])), "average_bg", apex_scans, pre + post, note)
 
 
-def deconvoluted_component(run, rt_ms: float, params=None):
-    """Component of the vendored deconvolution nearest to ``rt_ms``."""
-    import gc_deconv
-    src = run.ms_source
-    if src is None:
+def deconvoluted_component(run, peak, key: str, delay: float, settings=None):
+    """The deconvoluted component that represents ``peak`` (GC Workspace engine, one window)."""
+    import logging
+    from gcws.ms import deconv as D
+    if run.ms is None or peak is None:
         return None
+    t0, t1, ta = ms_times(peak, key, delay)
     try:
-        comps = gc_deconv.deconvolute(src, rt_ms, params or gc_deconv.DeconvParams())
-    except Exception:  # noqa: BLE001
+        res = D.deconvolute_window(run.ms, ta, settings or D.DeconvSettings())
+    except Exception:  # noqa: BLE001 - logged; the caller falls back to the average spectrum
+        logging.getLogger(__name__).exception("deconvolution at %.3f min failed", ta)
         return None
-    if not comps:
-        return None
-    return min(comps, key=lambda c: (abs(c.rt - rt_ms), -c.area))
+    return D.component_for_peak(res.components, t0, t1, ta)

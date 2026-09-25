@@ -1,0 +1,66 @@
+"""Deconvolution results cached per run and settings.
+
+A window around one peak takes well under 0.1 s, a whole run ~10 s (worker).
+Both are cached on ``RunState.deconv`` under the settings they were made
+with; the cache is dropped when the deconvolution settings change.
+"""
+from __future__ import annotations
+
+import json
+
+from gcws.ms import deconv as D
+from gcws.ms.spectra import ms_times
+
+
+def settings_of(ws) -> D.DeconvSettings:
+    return D.DeconvSettings.from_dict((ws.quant or {}).get("deconv"))
+
+
+def _skey(settings: D.DeconvSettings) -> str:
+    return json.dumps(settings.to_dict(), sort_keys=True)
+
+
+def whole_run(st, settings: D.DeconvSettings):
+    """Cached whole-run components or None."""
+    return (getattr(st, "deconv", None) or {}).get(("run", _skey(settings)))
+
+
+def compute_whole_run(st, settings: D.DeconvSettings, progress=None, cancel=None) -> list:
+    ms = st.run.ms
+    comps = D.deconvolute_range(ms, float(ms.rt[0]), float(ms.rt[-1]), settings, progress=progress, cancel=cancel)
+    return comps
+
+
+def store_whole_run(st, settings: D.DeconvSettings, comps: list) -> None:
+    st.deconv[("run", _skey(settings))] = comps
+
+
+def window(st, rt_ms: float, settings: D.DeconvSettings) -> D.DeconvResult:
+    key = ("win", round(rt_ms, 3), _skey(settings))
+    res = st.deconv.get(key)
+    if res is None:
+        res = D.deconvolute_window(st.run.ms, rt_ms, settings)
+        if len(st.deconv) > 400:
+            st.deconv = {k: v for k, v in st.deconv.items() if k[0] == "run"}
+        st.deconv[key] = res
+    return res
+
+
+def for_peak(st, peak, key: str, settings: D.DeconvSettings):
+    """The component representing ``peak`` (whole-run result if available, else its window)."""
+    t0, t1, ta = ms_times(peak, key, st.delay_value)
+    comps = whole_run(st, settings)
+    if comps is None:
+        comps = window(st, ta, settings).components
+    return D.component_for_peak(comps, t0, t1, ta)
+
+
+def hidden_components(ws, st, key: str, settings: D.DeconvSettings) -> list:
+    """Whole-run components without an integrated peak of ``key`` at their time."""
+    comps = whole_run(st, settings)
+    res = ws.result(st.id, key)
+    if comps is None or res is None:
+        return []
+    from gcws.core.keys import is_fid
+    shift = st.delay_value if is_fid(key) else 0.0
+    return [c for c in comps if res.peak_at(c.rt + shift) is None and c.quality >= 40]

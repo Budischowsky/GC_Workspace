@@ -114,8 +114,9 @@ class SpectrumDock(QWidget):
         super().__init__(parent)
         self.ws = ws
         self.spec = None
-        self.source = "peak"                   # "peak" | "scan"
+        self.source = "peak"                   # "peak" | "scan" | "component"
         self.scan_req: ScanRequest | None = None
+        self.component = None                  # (run id, deconvoluted Component)
         self.bg_range: tuple[float, float] | None = None
         self.setFocusPolicy(Qt.StrongFocus)
         self.mode = QComboBox()
@@ -300,6 +301,12 @@ class SpectrumDock(QWidget):
         self.source = "scan"
         self.refresh()
 
+    def show_component(self, run_id: str, comp) -> None:
+        """A deconvoluted component (e.g. a hidden one from the whole-run deconvolution)."""
+        self.component = (run_id, comp)
+        self.source = "component"
+        self.refresh()
+
     def back_to_peak(self):
         self.source = "peak"
         self.refresh()
@@ -346,7 +353,10 @@ class SpectrumDock(QWidget):
             return st, self.ws.selected_peak()
         req = self.scan_req
         res = self.ws.active_result()
-        if req is None or req.run_id != st.id or res is None or self.spec is None:
+        if self.source == "component":
+            if self.component is None or self.component[0] != st.id or res is None or self.spec is None:
+                return st, None
+        elif req is None or req.run_id != st.id or res is None or self.spec is None:
             return st, None
         t = from_ms(self.spec.rt, self.ws.signal_key, st.delay_value)
         return st, res.peak_at(t)
@@ -361,6 +371,9 @@ class SpectrumDock(QWidget):
         self.hits.setRowCount(0)
         if self.source == "scan" and self.scan_req is not None:
             self._refresh_scan()
+            return
+        if self.source == "component" and self.component is not None:
+            self._refresh_component()
             return
         self.source = "peak"
         self._update_source_bar()
@@ -377,8 +390,11 @@ class SpectrumDock(QWidget):
             return
         key = self.ws.signal_key
         override = st.spectrum_overrides.get(round(peak.apex_rt, 4))
+        from gcws.ms import deconv_cache as DC
+        dsettings = DC.settings_of(self.ws)
         self.spec = self._minus_blank(st, extract(st.run, peak, key, st.delay_value, self.current_mode(),
-                                                  override=override))
+                                                  override=override,
+                                                  component=lambda: DC.for_peak(st, peak, key, dsettings)))
         ident = st.ident_set(key).for_peak(peak)
         title = f"RT {peak.apex_rt:.3f}" + (f"  (MS {self.spec.rt:.3f})" if is_fid(key) else "")
         if ident and ident.name:
@@ -430,12 +446,36 @@ class SpectrumDock(QWidget):
         self._show_scan_trace(st, spec)
         self._spectrum_changed()
 
+    def _refresh_component(self):
+        from gcws.ms.spectra import Spectrum
+        rid, comp = self.component
+        st = self.ws.runs.get(rid)
+        if st is None or st.run.ms is None:
+            self.component = None
+            self.source = "peak"
+            self.refresh()
+            return
+        mz = np.array([int(m) for m, _ in comp.spectrum], dtype=int)
+        ab = np.array([float(v) for _, v in comp.spectrum], dtype=float)
+        self.spec = Spectrum(mz, ab, float(comp.rt), "deconvoluted", [int(comp.apex_scan)], [],
+                             f"deconvoluted component: model m/z {comp.model_mz}, quality {comp.quality:.0f}, "
+                             f"purity {comp.purity:.2f}" + (", found under a larger peak" if comp.hidden else ""))
+        what = f"Component {comp.rt:.3f} min (MS)  ·  model m/z {comp.model_mz}  ·  quality {comp.quality:.0f}"
+        self.plot.show_spectrum(mz, ab, title=what, marks=self._marks())
+        self.info.setText(self.spec.note)
+        self._fill_table()
+        self._update_source_bar(what)
+        self.regionsChanged.emit([(float(comp.rt) - 0.004, float(comp.rt) + 0.004, theme.PLOT["apex_region"])])
+        self._spectrum_changed()
+
     def _update_source_bar(self, text: str = ""):
-        scan = self.source == "scan"
+        scan = self.source in ("scan", "component")
         self.source_bar.setVisible(scan or self.bg_range is not None)
-        theme.set_chip(self.source_chip, "Scan spectrum" if scan else "", "info")
-        for w in (self.b_prev, self.b_next, self.b_back):
-            w.setVisible(scan)
+        theme.set_chip(self.source_chip, {"scan": "Scan spectrum", "component": "Deconvoluted component"}
+                       .get(self.source, ""), "info")
+        for w in (self.b_prev, self.b_next):
+            w.setVisible(self.source == "scan")
+        self.b_back.setVisible(scan)
         self.source_text.setText(text if scan else "")
         bg = self.bg_range
         theme.set_chip(self.bg_chip, f"BG {bg[0]:.3f}-{bg[1]:.3f} min" if bg else "", "bad")
@@ -495,7 +535,8 @@ class SpectrumDock(QWidget):
         if spec is None or spec.ab.size == 0:
             return None
         from gcws.ms.interpret import Context, interpret
-        rid = self.scan_req.run_id if (self.source == "scan" and self.scan_req) else self.ws.active_id
+        rid = self.scan_req.run_id if (self.source == "scan" and self.scan_req) else (
+            self.component[0] if (self.source == "component" and self.component) else self.ws.active_id)
         st = self.ws.runs.get(rid) if rid else None
         if st is None or st.run.ms is None:
             return None
@@ -638,6 +679,9 @@ class SpectrumDock(QWidget):
             run = self.ws.runs.get(self.scan_req.run_id)
             name = run.name if run is not None else "GC"
             return f"{name} MS {self.spec.rt:.3f}"
+        if self.source == "component" and self.component is not None and self.spec is not None:
+            run = self.ws.runs.get(self.component[0])
+            return f"{run.name if run is not None else 'GC'} component {self.spec.rt:.3f}"
         p = self.ws.selected_peak()
         if st is None or p is None:
             return "GC unknown"

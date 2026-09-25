@@ -272,3 +272,37 @@ def test_blank_subtraction_toggle_and_project(qtbot, win, samples, tmp_path):
     assert ws.signal_key == "FID - Blank" and ws.quant["blank_sub"]["scale"] == 1.1
     st2 = ws.runs[st.id]
     assert ws.result(st2.id, "FID - Blank") is not None
+
+
+def test_deconvolution_dialog_whole_run_and_markers(qtbot, win, samples):
+    _load(qtbot, win, samples, ["07_"])
+    ws = win.ws
+    ws.set_signal_key("TIC")
+    res = ws.active_result()
+    idx = min(range(len(res.peaks)), key=lambda i: abs(res.peaks[i].apex_rt - 13.41))
+    ws.select_peak(idx)
+    from gcws.ui.dialogs.deconv import DeconvolutionDialog
+    dlg = DeconvolutionDialog(win, "peak")
+    qtbot.addWidget(dlg)
+    assert dlg.comps and dlg.table.rowCount() == len(dlg.comps)
+    assert any(abs(c.rt - 13.409) < 0.01 for c in dlg.comps)
+    # pin a component's spectrum to the peak
+    dlg.table.selectRow(0)
+    dlg.pin()
+    st = ws.active
+    assert "component" in st.spectrum_overrides[round(res.peaks[idx].apex_rt, 4)]
+    assert win.spectrum.spec.mode == "deconvoluted"
+    # whole run in the background -> cached, hidden components marked in the chromatogram
+    dlg.scope.button(2).setChecked(True)
+    dlg.run()
+    from gcws.ms import deconv_cache as DC
+    qtbot.waitUntil(lambda: DC.whole_run(st, dlg.settings()) is not None, timeout=60000)
+    assert len(DC.whole_run(st, dlg.settings())) > 50
+    dlg.save_default()
+    assert DC.whole_run(st, DC.settings_of(ws)) is not None or ws.quant.get("deconv")
+    # the "deconvoluted" spectrum mode uses the new engine
+    win.spectrum._clear_override()
+    i = win.spectrum.mode.findData("deconvoluted")
+    win.spectrum.mode.setCurrentIndex(i)
+    assert win.spectrum.spec.mode == "deconvoluted" and "quality" in win.spectrum.spec.note
+    win.spectrum.mode.setCurrentIndex(0)

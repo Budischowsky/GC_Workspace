@@ -43,6 +43,7 @@ class RunState:
     undo: Optional[QUndoStack] = None
     saved_digests: dict[str, str] = field(default_factory=dict)
     blanks_manual: bool = False                       # blanks set by the analyst: never re-suggested
+    deconv: dict = field(default_factory=dict)        # deconvolution results (see gcws.ms.deconv_cache)
     blank_alignment: dict = field(default_factory=dict)   # base key -> [Alignment] of the derived trace
 
     @property
@@ -83,6 +84,7 @@ class Workspace(QObject):
     methodChanged = QtSignal(str)              # run id
     replicatesChanged = QtSignal()
     quantChanged = QtSignal()
+    deconvChanged = QtSignal(str)              # run id: whole-run deconvolution available / dropped
     message = QtSignal(str)
 
     def __init__(self, parent=None):
@@ -338,8 +340,8 @@ class Workspace(QObject):
             self.invalidate_blank(None)
         if (old or {}).get("deconv") != (new or {}).get("deconv"):
             for st in self.states():
-                if hasattr(st, "deconv"):
-                    st.deconv = {}
+                st.deconv = {}
+                self.deconvChanged.emit(st.id)
 
     def quant_unit(self) -> str:
         from gcws.quant.service import mode_unit

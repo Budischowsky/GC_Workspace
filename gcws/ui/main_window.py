@@ -256,7 +256,8 @@ class MainWindow(QMainWindow):
         m.addAction("Unknown register...", self.open_register)
         m.addSeparator()
         m.addAction("Retention index (alkane ladder)...", self.retention_index)
-        m.addAction("Deconvolution of selected peak...", self.deconvolution)
+        m.addAction("Deconvolution of selected peak...", lambda: self.deconvolution("peak"))
+        m.addAction("Deconvolution of the whole run...", lambda: self.deconvolution("run"))
         self.identify_menu = m
 
         self.quant_menu = mb.addMenu("&Quantify")
@@ -347,6 +348,7 @@ class MainWindow(QMainWindow):
         for plot in (self.chrom, self.zoom):
             self.spectrum.regionsChanged.connect(plot.set_ms_regions)
             plot.spectrumRequested.connect(self._scan_spectrum)
+            plot.componentClicked.connect(self._show_component)
         self.spectrum.nistRequested.connect(self.nist_search)
         self.spectrum.atlasRequested.connect(self.atlas_hits)
         self.spectrum.registerRequested.connect(self.register_unknown)
@@ -677,6 +679,10 @@ class MainWindow(QMainWindow):
             self.ws.set_signal_key(key)
         self._refresh_signals()
 
+    def _show_component(self, run_id, comp):
+        self.spectrum.show_component(run_id, comp)
+        self._show_dock("spectrum")
+
     def _scan_spectrum(self, req):
         """Right-click / right-drag in a chromatogram: show that spectrum."""
         if self.ws.runs.get(req.run_id) is None:
@@ -778,12 +784,15 @@ class MainWindow(QMainWindow):
         from gcws.ui.dialogs.ri import RetentionIndexDialog
         RetentionIndexDialog(self).exec()
 
-    def deconvolution(self):
+    def deconvolution(self, scope: str = "peak"):
         from gcws.ui.dialogs.deconv import DeconvolutionDialog
-        if self.ws.selected_peak() is None or self.ws.active is None or self.ws.active.run.ms is None:
-            QMessageBox.information(self, "Deconvolution", "Select a peak of a chromatogram with MS data.")
+        if self.ws.active is None or self.ws.active.run.ms is None:
+            QMessageBox.information(self, "Deconvolution", "Activate a chromatogram with MS data.")
             return
-        DeconvolutionDialog(self).exec()
+        if scope == "peak" and self.ws.selected_peak() is None:
+            scope = "run"
+        dlg = DeconvolutionDialog(self, scope)
+        dlg.show()
 
     def register_unknown(self):
         from gcws.ui.dialogs.register import save_unknown

@@ -54,6 +54,7 @@ def nearest_curve(vb, curves: dict, x: float, y: float, default):
 class ChromPlot(QWidget):
     """Overlay of all visible runs; the active run is drawn bold with its peaks."""
     spectrumRequested = QtSignal(object)        # ScanRequest (MS time axis)
+    componentClicked = QtSignal(str, object)    # run id, deconvoluted Component
 
     def __init__(self, ws, tools, detail: bool = False, parent=None):
         super().__init__(parent)
@@ -146,6 +147,8 @@ class ChromPlot(QWidget):
         ws.identsChanged.connect(lambda *_: self.refresh_labels())
         ws.selectionChanged.connect(self._on_selection)
         ws.methodChanged.connect(lambda *_: self.refresh_events())
+        ws.deconvChanged.connect(lambda *_: self.refresh_markers())
+        self._markers = None
         self._update_dual()
 
     # -- dual view ---------------------------------------------------------------
@@ -247,6 +250,7 @@ class ChromPlot(QWidget):
             self.companion.refresh()
         if autorange:
             self.default_view()
+        self.refresh_markers()
         name = active.name if active else "no chromatogram loaded"
         self.title.setText(f"{key}  -  {name}" if active else name)
 
@@ -258,6 +262,43 @@ class ChromPlot(QWidget):
             self.refresh_events()
         if self.dual_on() and key == self.companion.key:
             self.companion.refresh_peaks()
+
+    def refresh_markers(self):
+        """Triangles at deconvoluted components that have no integrated peak (whole-run deconvolution)."""
+        for vb in (self.vb, self.companion.vb):
+            if self._markers is not None and self._markers.getViewBox() is vb:
+                vb.removeItem(self._markers)
+        self._markers = None
+        st = self.ws.active
+        if st is None or st.run.ms is None or self.detail:
+            return
+        from gcws.ms import deconv_cache as DC
+        comps = DC.hidden_components(self.ws, st, self.ws.signal_key, DC.settings_of(self.ws))
+        if not comps:
+            return
+        on_companion = self.dual_on() and is_fid(self.ws.signal_key)
+        vb = self.companion.vb if on_companion else self.vb
+        curves = self.companion.curves if on_companion else self.curves
+        curve = curves.get(st.id)
+        if curve is None:
+            return
+        xs, ys = curve.xData, curve.yData
+        if xs is None or len(xs) < 2:
+            return
+        shift = st.delay_value if is_fid(self.ws.signal_key) else 0.0
+        spots = []
+        for c in comps:
+            x = c.rt + shift
+            y = float(np.interp(x, xs, ys))
+            spots.append({"pos": (x, y), "data": c, "symbol": "t", "size": 11,
+                          "brush": pg.mkBrush(theme.qcolor(theme.WARN, 200)), "pen": pg.mkPen("w", width=0.8)})
+        tip = (lambda x, y, data: f"Deconvoluted component without a peak\n{data.rt:.3f} min (MS), model m/z "
+               f"{data.model_mz}, quality {data.quality:.0f}\nclick: its spectrum")
+        self._markers = pg.ScatterPlotItem(spots=spots, hoverable=True, tip=tip)
+        self._markers.setZValue(30)
+        self._markers.sigClicked.connect(lambda _item, pts, _ev: pts and self.componentClicked.emit(
+            st.id, pts[0].data()))
+        vb.addItem(self._markers, ignoreBounds=True)
 
     def _on_selection(self, run_id: str, index: int):
         self.refresh_active()

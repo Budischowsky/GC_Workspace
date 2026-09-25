@@ -49,8 +49,11 @@ def build_items(ws, run_ids: list[str], key: str, spectrum_mode: str,
             if rescan_below is not None and ident is not None and ident.score is not None \
                     and ident.score >= rescan_below:
                 continue
+            from gcws.ms import deconv_cache as DC
+            dsettings = DC.settings_of(ws)
             spec = extract(st.run, p, key, st.delay_value, spectrum_mode,
-                           override=st.spectrum_overrides.get(round(p.apex_rt, 4)))
+                           override=st.spectrum_overrides.get(round(p.apex_rt, 4)),
+                           component=lambda st=st, p=p: DC.for_peak(st, p, key, dsettings))
             points = spec.points(min_permille=1.0) if spec is not None else []
             if not points:
                 continue
