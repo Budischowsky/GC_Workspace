@@ -8,6 +8,7 @@ from PySide6.QtGui import QUndoCommand
 
 from gcws.core.events import ManualEvent
 from gcws.core.ident import Identification
+from gcws.core.keys import method_kind
 
 
 def _summary(res) -> str:
@@ -65,7 +66,7 @@ class SetMethodCommand(QUndoCommand):
             st.methods[self.kind] = m.copy() if m is not None else self.ws.methods.get(
                 self.ws.methods.default_name(self.kind))
             for key in list(st.results):
-                if (key == "FID") == (self.kind == "FID"):
+                if method_kind(key) == self.kind:
                     self.ws.integrate(rid, key)
             self.ws.methodChanged.emit(rid)
             self.ws.log(label, st.name, f"{self.kind}: {st.methods[self.kind].name}",

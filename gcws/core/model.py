@@ -5,9 +5,11 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import numpy as np
+
+from gcws.core.keys import is_derived, split_key
 
 FID = "FID"
 TIC = "TIC"
@@ -23,7 +25,8 @@ def eic_key(masses) -> str:
 
 
 def parse_key(key: str) -> tuple[str, tuple[int, ...]]:
-    key = key.strip()
+    """``(kind, masses)`` of a key; derived keys report their base kind."""
+    key = split_key(key)[0]
     if key.upper().startswith("EIC"):
         masses = tuple(int(v) for v in re.findall(r"\d+", key[3:]))
         return EIC, masses
@@ -161,6 +164,8 @@ class Run:
     role: str = "sample"
     load_notes: list[str] = field(default_factory=list)
     _signals: dict[str, Signal] = field(default_factory=dict, repr=False)
+    #: provider of derived traces (e.g. "FID - Blank"), installed by the workspace
+    derive: Optional[Callable[["Run", str], Optional[Signal]]] = field(default=None, repr=False)
 
     @property
     def name(self) -> str:
@@ -182,6 +187,11 @@ class Run:
         key = key.strip()
         if key in self._signals:
             return self._signals[key]
+        if is_derived(key):
+            sig = self.derive(self, key) if self.derive is not None else None
+            if sig is not None:
+                self._signals[key] = sig
+            return sig
         kind, masses = parse_key(key)
         sig = None
         if kind == FID and self.fid is not None:
@@ -198,3 +208,9 @@ class Run:
         if sig is not None:
             self._signals[key] = sig
         return sig
+
+    def drop_derived(self, key: Optional[str] = None) -> None:
+        """Forget cached derived traces (all, or one key) so they are rebuilt."""
+        for k in list(self._signals):
+            if is_derived(k) and (key is None or k == key):
+                del self._signals[k]

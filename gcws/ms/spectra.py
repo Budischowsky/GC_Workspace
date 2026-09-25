@@ -11,6 +11,9 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from gcws.core.keys import is_fid
+from gcws.core.model import parse_key
+
 MODES = {
     "average_bg": "Average of peak top minus background (start/end)",
     "apex": "Apex scan",
@@ -46,7 +49,7 @@ class Spectrum:
 
 def ms_times(peak, key: str, delay: float) -> tuple[float, float, float]:
     """Peak start/end/apex on the MS time axis (FID peaks are delay-shifted)."""
-    if key == "FID":
+    if is_fid(key):
         return peak.start - delay, peak.end - delay, peak.apex_rt - delay
     return peak.start, peak.end, peak.apex_rt
 
@@ -84,7 +87,7 @@ def extract(run, peak, key: str, delay: float, mode: str = "average_bg",
         if abs(ms.rt[i] - ta) > 0.05:
             return Spectrum(np.zeros(0, int), np.zeros(0), ta, mode, note="no MS data at this time")
         scans = np.array([i])
-    sig_key = key if key.upper().startswith("EIC") else "TIC"
+    sig_key = key if parse_key(key)[0] == "EIC" else "TIC"
     trace = run.signal(sig_key).y if run.signal(sig_key) is not None else ms.tic()
     seg = trace[scans]
     line = np.linspace(seg[0], seg[-1], seg.size) if seg.size > 1 else seg

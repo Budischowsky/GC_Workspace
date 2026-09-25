@@ -99,7 +99,8 @@ def save_unknown(win) -> None:
     confirmed = dlg.result_item()
     if dlg.with_tic.isChecked() and st.run.ms is not None:
         ms = st.run.ms
-        t = peak.apex_rt - (st.delay_value if ws.signal_key == "FID" else 0.0)
+        from gcws.core.keys import is_fid
+        t = peak.apex_rt - (st.delay_value if is_fid(ws.signal_key) else 0.0)
         sl = ms.scans_between(t - 0.6, t + 0.6)
         confirmed["tic"] = ([float(x) for x in ms.rt[sl]], [int(v) for v in ms.stored_tic[sl]])
     try:

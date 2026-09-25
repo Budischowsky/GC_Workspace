@@ -33,8 +33,15 @@ class Worker(QRunnable):
 _RUNNING: set = set()
 
 
-def submit(fn, *args, on_done=None, on_error=None, **kwargs) -> Worker:
+def submit(fn, *args, on_done=None, on_error=None, on_progress=None, with_progress=False, **kwargs) -> Worker:
+    """Run ``fn(*args, **kwargs)`` on the thread pool.
+
+    With ``with_progress`` the job gets a ``progress(text)`` keyword argument that
+    is delivered to ``on_progress`` on the GUI thread.
+    """
     w = Worker(fn, *args, **kwargs)
+    if with_progress:
+        w.kwargs["progress"] = w.signals.progress.emit
     w.setAutoDelete(False)
     _RUNNING.add(w)
     release = lambda *_: _RUNNING.discard(w)
@@ -42,6 +49,8 @@ def submit(fn, *args, on_done=None, on_error=None, **kwargs) -> Worker:
         w.signals.finished.connect(on_done)
     if on_error:
         w.signals.failed.connect(on_error)
+    if on_progress:
+        w.signals.progress.connect(on_progress)
     w.signals.finished.connect(release)
     w.signals.failed.connect(release)
     QThreadPool.globalInstance().start(w)

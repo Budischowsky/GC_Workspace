@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QHBoxL
                                QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QToolButton,
                                QVBoxLayout, QWidget)
 
+from gcws.core.keys import is_fid
 from gcws.ms.spectra import MODES, extract, ms_times
 
 
@@ -61,6 +62,7 @@ class SpectrumDock(QWidget):
     nistRequested = QtSignal(list, str)
     atlasRequested = QtSignal(list, str)
     registerRequested = QtSignal()
+    investigateRequested = QtSignal()
 
     def __init__(self, ws, parent=None):
         super().__init__(parent)
@@ -87,7 +89,7 @@ class SpectrumDock(QWidget):
         b_res = QToolButton()
         b_res.setText("Investigate")
         b_res.setToolTip("Full EI Atlas investigation (native window)")
-        b_res.clicked.connect(lambda: self.window().atlas_research())
+        b_res.clicked.connect(self.investigateRequested.emit)
         b_reg = QToolButton()
         b_reg.setText("Register unknown")
         b_reg.clicked.connect(self.registerRequested.emit)
@@ -181,7 +183,7 @@ class SpectrumDock(QWidget):
         override = st.spectrum_overrides.get(round(peak.apex_rt, 4))
         self.spec = extract(st.run, peak, key, st.delay_value, self.current_mode(), override=override)
         ident = st.ident_set(key).for_peak(peak)
-        title = f"RT {peak.apex_rt:.3f}" + (f"  (MS {self.spec.rt:.3f})" if key == "FID" else "")
+        title = f"RT {peak.apex_rt:.3f}" + (f"  (MS {self.spec.rt:.3f})" if is_fid(key) else "")
         if ident and ident.name:
             title += f"  -  {ident.name}"
         self.plot.show_spectrum(self.spec.mz, self.spec.ab, title=title)
@@ -236,7 +238,7 @@ class SpectrumDock(QWidget):
         self.scan_curve.setData(ms.rt[sl], sig.y[sl] if sig is not None else ms.tic()[sl])
         spec = self.spec
         regions = []
-        shift = st.delay_value if key == "FID" else 0.0
+        shift = st.delay_value if is_fid(key) else 0.0
         if spec and spec.apex_scans:
             a0, a1 = float(ms.rt[min(spec.apex_scans)]), float(ms.rt[max(spec.apex_scans)])
             self.apex_reg.setRegion((a0 - 0.001, a1 + 0.001))

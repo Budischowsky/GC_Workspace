@@ -15,7 +15,8 @@ from PySide6.QtGui import QUndoGroup, QUndoStack
 from gcws.core.audit import AuditLog, AuditRecord
 from gcws.core.events import ManualEvent
 from gcws.core.ident import IdentificationSet
-from gcws.core.model import FID, TIC, Run, parse_key
+from gcws.core.keys import base_key, is_derived, is_fid, method_kind
+from gcws.core.model import FID, TIC, Run
 from gcws.integration.engine import IntegrationResult, integrate
 from gcws.integration.method import IntegrationMethod
 from gcws.integration.store import MethodStore
@@ -66,7 +67,8 @@ class RunState:
         return self.manual.setdefault(key, [])
 
     def ident_set(self, key: str) -> IdentificationSet:
-        return self.idents.setdefault(key, IdentificationSet())
+        # a derived trace ("FID - Blank") shows the same substances as its base
+        return self.idents.setdefault(base_key(key), IdentificationSet())
 
 
 class Workspace(QObject):
@@ -136,7 +138,7 @@ class Workspace(QObject):
         self.runs[run.id] = st
         self.order.append(run.id)
         self._sort_order()
-        if self.signal_key not in run.available_signals() and not self.runs_with(self.signal_key):
+        if base_key(self.signal_key) not in run.available_signals() and not self.runs_with(self.signal_key):
             avail = run.available_signals()
             if avail:
                 self.signal_key = avail[0]
@@ -208,7 +210,7 @@ class Workspace(QObject):
     # -- integration -------------------------------------------------------
 
     def method_for(self, st: RunState, key: str) -> IntegrationMethod:
-        kind = FID if parse_key(key)[0] == FID else TIC
+        kind = method_kind(key)
         m = st.methods.get(kind)
         if m is None:
             m = self.methods.get(self.methods.default_name(kind))
@@ -268,9 +270,32 @@ class Workspace(QObject):
         self.quantChanged.emit()
 
     def quant_rows(self, run_id: str) -> dict:
+        # NIAS quantification is computed on the raw FID only (derived traces get none)
         if self.signal_key != FID or self.quant_result is None:
             return {}
         return self.quant_result.rows.get(run_id, {})
+
+    def push_quant(self, text: str, new_quant: dict, detail: str = "quantification") -> None:
+        """Replace ``self.quant`` as one undoable, audited step.
+
+        Sub-settings that feed derived data (blank subtraction, deconvolution)
+        are compared so only what changed is invalidated.
+        """
+        import copy
+        from gcws.ui.undo import ValueCommand
+
+        def setter(v):
+            old = self.quant
+            self.quant = copy.deepcopy(v)
+            self._quant_settings_changed(old, self.quant)
+            self.recompute_quant()
+
+        stack = self.undo_group.activeStack() or self.project_undo
+        stack.push(ValueCommand(text, lambda: self.quant, setter, new_quant,
+                                lambda t, o, n: self.log(t, "", detail)))
+
+    def _quant_settings_changed(self, old: dict, new: dict) -> None:
+        """Hook for sub-settings that invalidate derived data (see blank/deconv)."""
 
     def quant_unit(self) -> str:
         from gcws.quant.service import mode_unit

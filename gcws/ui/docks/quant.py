@@ -132,15 +132,7 @@ class QuantDock(QScrollArea):
             gc_fid.default_istd_defs(self._settings())
 
     def _push_quant(self, text, new_quant):
-        ws = self.ws
-
-        def setter(v):
-            ws.quant = copy.deepcopy(v)
-            ws.recompute_quant()
-
-        stack = ws.undo_group.activeStack() or ws.project_undo
-        stack.push(ValueCommand(text, lambda: ws.quant, setter, new_quant,
-                                lambda t, o, n: ws.log(t, "", "quantification")))
+        self.ws.push_quant(text, new_quant)
 
     # -- refresh -------------------------------------------------------------------
 

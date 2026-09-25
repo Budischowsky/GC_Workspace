@@ -39,6 +39,7 @@ class PeakTable(QWidget):
         self.ws = ws
         self.model = PeakTableModel(ws, self)
         self.model.on_edit = self._edit
+        self.context_actions: list = []       # main-window actions for the row menu
         self.proxy = SortProxy(self)
         self.proxy.setSourceModel(self.model)
         self.view = QTableView()
@@ -183,14 +184,14 @@ class PeakTable(QWidget):
                 for h in rows[0].ident.hits[:10]:
                     label = f"{h.get('name', '')}  ({h.get('cas', '') or '-'})  {h.get('score', '')}"
                     sub.addAction(label).triggered.connect(lambda _=False, hit=h, r=rows[0]: self._use_hit(r, hit))
-            parent = self.window()
-            for name in ("spectrumSearchNist", "spectrumSearchAtlas", "registerUnknown", "setIstd"):
-                act = getattr(parent, name + "Action", None)
-                if act is not None:
-                    m.addAction(act)
+            for act in self.context_actions:
+                m.addAction(act)
         m.addSeparator()
         m.addAction("Choose columns...").triggered.connect(lambda: self._header_menu(None))
         m.exec(self.view.viewport().mapToGlobal(pos))
+
+    def set_context_actions(self, actions) -> None:
+        self.context_actions = list(actions)
 
     def _clear(self, rows):
         st = self.ws.active

@@ -123,38 +123,72 @@ class MSMatrix:
         hi = int(np.searchsorted(self.rt, max(t0, t1), side="right"))
         return np.arange(lo, hi)
 
-    def nominal_spectrum(self, scans, weights=None) -> dict[int, float]:
-        """Mean nominal-mass spectrum over ``scans`` (optionally weighted)."""
+    def _points_of(self, scans: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """(point indices, row of each point) for a list of scans, vectorised."""
+        starts = self.ptr[scans]
+        counts = self.ptr[scans + 1] - starts
+        total = int(counts.sum())
+        if total == 0:
+            return np.zeros(0, np.int64), np.zeros(0, np.int64)
+        rows = np.repeat(np.arange(scans.size), counts)
+        offsets = np.arange(total) - np.repeat(np.cumsum(counts) - counts, counts)
+        return np.repeat(starts, counts) + offsets, rows
+
+    def nominal_spectrum_arrays(self, scans, weights=None) -> tuple[np.ndarray, np.ndarray]:
+        """Mean nominal-mass spectrum over ``scans`` as sorted ``(mz, abundance)`` arrays."""
         scans = np.atleast_1d(np.asarray(scans, dtype=np.int64))
         if scans.size == 0:
-            return {}
-        if weights is None:
-            weights = np.ones(scans.size)
-        weights = np.asarray(weights, dtype=float)
-        total: dict[int, float] = {}
-        for s, w in zip(scans, weights):
-            a, b = self.ptr[s], self.ptr[s + 1]
-            if a == b:
-                continue
-            nom = self.nom[a:b]
-            ab = self.ab[a:b] * w
-            uniq, inv = np.unique(nom, return_inverse=True)
-            sums = np.bincount(inv, weights=ab)
-            for m, v in zip(uniq.tolist(), sums.tolist()):
-                total[m] = total.get(m, 0.0) + v
-        norm = float(weights.sum()) or 1.0
-        return {m: v / norm for m, v in total.items()}
+            return np.zeros(0, np.int64), np.zeros(0)
+        w = np.ones(scans.size) if weights is None else np.asarray(weights, dtype=float)
+        idx, rows = self._points_of(scans)
+        if idx.size == 0:
+            return np.zeros(0, np.int64), np.zeros(0)
+        nom = self.nom[idx]
+        uniq, inv = np.unique(nom, return_inverse=True)
+        sums = np.bincount(inv, weights=self.ab[idx] * w[rows])
+        return uniq.astype(np.int64), sums / (float(w.sum()) or 1.0)
 
-    def nominal_block(self, scans, lo: int, hi: int) -> np.ndarray:
+    def nominal_spectrum(self, scans, weights=None) -> dict[int, float]:
+        """Mean nominal-mass spectrum over ``scans`` (optionally weighted)."""
+        mz, ab = self.nominal_spectrum_arrays(scans, weights)
+        return dict(zip(mz.tolist(), ab.tolist()))
+
+    def nominal_block(self, scans, lo: int, hi: int, dtype=float) -> np.ndarray:
         """Dense (len(scans), hi-lo+1) matrix of nominal-mass abundances."""
         scans = np.atleast_1d(np.asarray(scans, dtype=np.int64))
-        out = np.zeros((scans.size, hi - lo + 1))
-        for r, s in enumerate(scans):
-            a, b = self.ptr[s], self.ptr[s + 1]
-            nom = self.nom[a:b]
+        width = hi - lo + 1
+        out = np.zeros(scans.size * width, dtype=dtype)
+        idx, rows = self._points_of(scans)
+        if idx.size:
+            nom = self.nom[idx]
             keep = (nom >= lo) & (nom <= hi)
-            np.add.at(out[r], nom[keep] - lo, self.ab[a:b][keep])
-        return out
+            np.add.at(out, rows[keep] * width + (nom[keep] - lo), self.ab[idx][keep])
+        return out.reshape(scans.size, width)
+
+    def dense_block(self, s0: int, s1: int, lo: int, hi: int, dtype=float) -> np.ndarray:
+        """Dense matrix of the contiguous scans ``s0..s1`` (inclusive) and masses ``lo..hi``."""
+        return self.nominal_block(np.arange(max(0, s0), min(self.n_scans - 1, s1) + 1), lo, hi, dtype)
+
+    def dense(self) -> tuple[np.ndarray, int]:
+        """The whole run as a dense float32 (scans x masses) matrix and its lowest mass.
+
+        Built once and cached (a 4 000-scan run over m/z 35-700 is ~10 MB).
+        """
+        cached = getattr(self, "_dense", None)
+        if cached is None:
+            lo, hi = self.mass_range()
+            cached = (self.dense_block(0, self.n_scans - 1, lo, hi, np.float32), lo)
+            self._dense = cached
+        return cached
+
+    def min_abundance(self) -> float:
+        """Smallest recorded abundance: the acquisition threshold of centroided data."""
+        v = getattr(self, "_min_ab", None)
+        if v is None:
+            pos = self.ab[self.ab > 0]
+            v = float(np.percentile(pos, 0.5)) if pos.size else 0.0
+            self._min_ab = v
+        return v
 
     def mass_range(self) -> tuple[int, int]:
         if self.nom.size == 0:

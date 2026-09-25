@@ -1,6 +1,7 @@
 """Properties of the active chromatogram: metadata, role, blanks, FID-MS delay."""
 from __future__ import annotations
 
+from PySide6.QtCore import Signal as QtSignal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QLabel, QPushButton,
                                QScrollArea, QVBoxLayout, QWidget)
 
@@ -17,6 +18,10 @@ def _label(text=""):
 
 
 class PropertiesDock(QScrollArea):
+    # handled by the main window; a floating dock's window() is the dock itself
+    assignBlanksRequested = QtSignal(str)        # run id
+    roleRequested = QtSignal(str, str)           # run id, role
+
     def __init__(self, ws, parent=None):
         super().__init__(parent)
         self.ws = ws
@@ -46,7 +51,7 @@ class PropertiesDock(QScrollArea):
         self.role.activated.connect(self._set_role)
         self.blanks = _label()
         edit = QPushButton("Assign blanks...")
-        edit.clicked.connect(lambda: self.window().assign_blanks(self.ws.active_id))
+        edit.clicked.connect(lambda: self.ws.active_id and self.assignBlanksRequested.emit(self.ws.active_id))
         g.addRow("Role", self.role)
         g.addRow("Blanks", self.blanks)
         g.addRow("", edit)
@@ -123,7 +128,7 @@ class PropertiesDock(QScrollArea):
     def _set_role(self, *_):
         st = self.ws.active
         if st is not None:
-            self.window().set_role(st.id, self.role.currentData())
+            self.roleRequested.emit(st.id, self.role.currentData())
 
     def _set_delay(self):
         st = self.ws.active

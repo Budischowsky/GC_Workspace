@@ -313,12 +313,18 @@ class MainWindow(QMainWindow):
         self.run_tabs.revealRequested.connect(lambda rid: (self._show_dock("tree"),
                                                            self.tree.reveal(self.ws.runs[rid].run.path)))
         self.run_tabs.eicRequested.connect(self.ask_eic)
+        self.run_tabs.replicateRequested.connect(self.open_double_determination)
+        self.props.assignBlanksRequested.connect(self.assign_blanks)
+        self.props.roleRequested.connect(self.set_role)
+        self.table.set_context_actions([self.spectrumSearchNistAction, self.spectrumSearchAtlasAction,
+                                        self.registerUnknownAction, self.setIstdAction])
         self.table.searchRequested.connect(self.library_search)
         self.table.integrateRequested.connect(self.integrate)
         self.spectrum.regionsChanged.connect(self.zoom.set_ms_regions)
         self.spectrum.nistRequested.connect(self.nist_search)
         self.spectrum.atlasRequested.connect(self.atlas_hits)
         self.spectrum.registerRequested.connect(self.register_unknown)
+        self.spectrum.investigateRequested.connect(self.atlas_research)
         self.replicates.reportRequested.connect(lambda kind, gid: self.report(kind, gid))
         self._tool_changed("select")
 
@@ -695,6 +701,15 @@ class MainWindow(QMainWindow):
         save_unknown(self)
 
     # -- reports ---------------------------------------------------------------------------
+
+    def open_double_determination(self, run_id=None, partner=None):
+        """Show the replicate panel for ``run_id`` (the group it belongs to)."""
+        self._show_dock("replicates")
+        if run_id:
+            for i, g in enumerate(self.ws.replicate_groups):
+                if run_id in g["members"]:
+                    self.replicates.groups.setCurrentRow(i)
+                    break
 
     def _group_for_report(self, group_id=None):
         groups = self.ws.replicate_groups

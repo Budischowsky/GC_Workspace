@@ -7,6 +7,8 @@ from typing import Any, Callable, Optional
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QBrush, QColor, QFont
 
+from gcws.core.keys import is_fid
+
 
 @dataclass
 class Row:
@@ -43,7 +45,7 @@ class Column:
 
 def _ms_rt(r: Row, ws):
     st = ws.active
-    if st is None or ws.signal_key != "FID":
+    if st is None or not is_fid(ws.signal_key):
         return None
     return r.peak.apex_rt - st.delay_value
 

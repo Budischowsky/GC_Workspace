@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QDialog, QDoubleSpinBox, QForm
                                QVBoxLayout, QWidget)
 
 from gcws.core.events import ManualEvent, ManualKind as K
+from gcws.core.keys import is_fid
 from gcws.ms.spectra import ms_times
 from gcws.ui.docks.spectrum import StickPlot
 from gcws.ui.undo import ManualEventsCommand
@@ -28,9 +29,9 @@ class DeconvolutionDialog(QDialog):
         self.setWindowTitle(f"Deconvolution - {self.st.name}, RT {self.peak.apex_rt:.3f}")
         self.resize(1150, 720)
         p = gc_deconv.DeconvParams()
-        self.window = QDoubleSpinBox()
-        self.window.setDecimals(3)
-        self.window.setValue(p.window)
+        self.win_spin = QDoubleSpinBox()
+        self.win_spin.setDecimals(3)
+        self.win_spin.setValue(p.window)
         self.noise = QDoubleSpinBox()
         self.noise.setValue(p.noise_factor)
         self.shape = QDoubleSpinBox()
@@ -42,7 +43,7 @@ class DeconvolutionDialog(QDialog):
         run = QPushButton("Deconvolute")
         run.clicked.connect(self.run)
         f = QFormLayout()
-        f.addRow("Window (± min)", self.window)
+        f.addRow("Window (± min)", self.win_spin)
         f.addRow("Noise factor", self.noise)
         f.addRow("Min. profile correlation", self.shape)
         f.addRow("Min. ions", self.min_ions)
@@ -89,7 +90,7 @@ class DeconvolutionDialog(QDialog):
         self.run()
 
     def params(self):
-        return self.gd.DeconvParams(window=self.window.value(), noise_factor=self.noise.value(),
+        return self.gd.DeconvParams(window=self.win_spin.value(), noise_factor=self.noise.value(),
                                     shape_r=self.shape.value(), min_ions=self.min_ions.value())
 
     def run(self):
@@ -103,7 +104,7 @@ class DeconvolutionDialog(QDialog):
         self.table.setRowCount(0)
         self.profiles.clear()
         ms = self.st.run.ms
-        sl = ms.scans_between(ta - self.window.value(), ta + self.window.value())
+        sl = ms.scans_between(ta - self.win_spin.value(), ta + self.win_spin.value())
         self.profiles.plot(ms.rt[sl], ms.tic()[sl], pen=pg.mkPen("#999999"))
         reg = pg.LinearRegionItem((t0, t1), movable=False, brush=pg.mkBrush(0, 0, 0, 20))
         self.profiles.addItem(reg)
@@ -137,7 +138,7 @@ class DeconvolutionDialog(QDialog):
         if len(inside) < 2:
             self.note.setText("Fewer than two components inside the peak - nothing to split.")
             return
-        shift = self.st.delay_value if self.key == "FID" else 0.0
+        shift = self.st.delay_value if is_fid(self.key) else 0.0
         events = list(self.st.events(self.key))
         for a, b in zip(inside, inside[1:]):
             events.append(ManualEvent(K.SPLIT, (a.rt + b.rt) / 2 + shift, comment="deconvolution"))

@@ -42,8 +42,10 @@ def _ws_with(samples, prefixes, qapp):
 
 @pytest.fixture(scope="module")
 def qapp():
-    from PySide6.QtCore import QCoreApplication
-    return QCoreApplication.instance() or QCoreApplication([])
+    # a QApplication, not a QCoreApplication: the GUI tests run in the same
+    # process and cannot create widgets on a core application
+    from PySide6.QtWidgets import QApplication
+    return QApplication.instance() or QApplication([])
 
 
 @pytest.mark.parametrize("kind", ["nias", "fingerprint", "total_extraction"])
