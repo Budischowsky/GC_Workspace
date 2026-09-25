@@ -96,6 +96,14 @@ class MainWindow(QMainWindow):
     def _add_dock(self, key, title, widget):
         d = QDockWidget(title, self)
         d.setObjectName("dock." + key)
+        if key in ("tree", "events"):
+            # form-heavy panels scroll instead of forcing a wide minimum on the whole dock column
+            from PySide6.QtWidgets import QScrollArea
+            area = QScrollArea()
+            area.setWidgetResizable(True)
+            area.setFrameShape(QScrollArea.NoFrame)
+            area.setWidget(widget)
+            widget = area
         d.setWidget(widget)
         d.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable
                       | QDockWidget.DockWidgetFloatable)
@@ -254,7 +262,9 @@ class MainWindow(QMainWindow):
         self.quant_menu.addSeparator()
         self.quant_menu.addAction("Quantification panel", lambda: self._show_dock("quant"))
         self.quant_menu.addAction("Migration conditions...", self.quant.edit_migration)
-        self.quant_menu.addAction("Replicate groups", lambda: self._show_dock("replicates"))
+        self.quant_menu.addAction("Double determination...", lambda: self.open_double_determination())
+        self.quant_menu.addAction("Replicate groups (N-fold)", lambda: (self._show_dock("replicates"),
+                                                                        self.replicates.tabs.setCurrentIndex(1)))
 
         self.report_menu = mb.addMenu("&Report")
         from gcws.report.service import KINDS
@@ -319,6 +329,7 @@ class MainWindow(QMainWindow):
                                                            self.tree.reveal(self.ws.runs[rid].run.path)))
         self.run_tabs.eicRequested.connect(self.ask_eic)
         self.run_tabs.replicateRequested.connect(self.open_double_determination)
+        self.run_tabs.pairRequested.connect(self.open_double_determination)
         self.props.assignBlanksRequested.connect(self.assign_blanks)
         self.props.roleRequested.connect(self.set_role)
         self.table.set_context_actions([self.spectrumSearchNistAction, self.spectrumSearchAtlasAction,
@@ -739,13 +750,11 @@ class MainWindow(QMainWindow):
     # -- reports ---------------------------------------------------------------------------
 
     def open_double_determination(self, run_id=None, partner=None):
-        """Show the replicate panel for ``run_id`` (the group it belongs to)."""
+        """Double-determination page for ``run_id`` (with ``partner`` or the suggested one)."""
         self._show_dock("replicates")
+        run_id = run_id or self.ws.active_id
         if run_id:
-            for i, g in enumerate(self.ws.replicate_groups):
-                if run_id in g["members"]:
-                    self.replicates.groups.setCurrentRow(i)
-                    break
+            self.replicates.show_pair(run_id, partner)
 
     def _group_for_report(self, group_id=None):
         groups = self.ws.replicate_groups

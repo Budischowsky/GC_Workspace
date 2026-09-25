@@ -5,24 +5,36 @@ import copy
 import uuid
 
 from PySide6.QtCore import Qt, Signal as QtSignal
-from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QInputDialog,
-                               QLabel, QListWidget, QListWidgetItem, QMenu, QPushButton, QSplitter, QTableWidget,
-                               QTableWidgetItem, QVBoxLayout, QWidget)
+                               QLabel, QListWidget, QListWidgetItem, QMenu, QPushButton, QScrollArea, QSplitter,
+                               QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 
-from gcws.quant.replicates import POLICIES, combine, engine_peaks
+from gcws.quant import duplicate_view as DV
+from gcws.quant.replicates import POLICIES
+from gcws.ui import theme
 from gcws.ui.undo import ValueCommand
 
-STATUS_COLORS = {"Valid": "#e3f2e1", "Artefact": "#f4f6f7", "conflict": "#fde2d0", "Einzel": "#ffffff"}
+
+def _scrolled(widget: QWidget) -> QScrollArea:
+    """Wrap a page so the dock can be made narrow (the page scrolls instead)."""
+    area = QScrollArea()
+    area.setWidgetResizable(True)
+    area.setFrameShape(QScrollArea.NoFrame)
+    area.setWidget(widget)
+    return area
 
 
 class ReplicatesDock(QWidget):
+    """Double determination (A/B) page and the general N-fold replicate groups."""
     reportRequested = QtSignal(str, str)       # kind, group id
 
     def __init__(self, ws, parent=None):
         super().__init__(parent)
         self.ws = ws
         self.rows = []
+        from gcws.ui.docks.duplicate import DuplicatePage
+        self.duplicate = DuplicatePage(ws, self._set_groups)
+        self.duplicate.reportRequested.connect(self.reportRequested.emit)
         self.groups = QListWidget()
         self.groups.setToolTip("Replicate groups: the determinations of one sample")
         self.groups.currentRowChanged.connect(lambda *_: self.refresh_sheet())
@@ -58,8 +70,10 @@ class ReplicatesDock(QWidget):
         self.sheet.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.sheet.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.sheet.setSortingEnabled(True)
+        self.sheet.itemSelectionChanged.connect(self._sheet_row)
         self.info = QLabel()
         self.info.setObjectName("hint")
+        self.info.setWordWrap(True)
         buttons = QHBoxLayout()
         for kind, label in (("nias", "NIAS report..."), ("fingerprint", "Fingerprint report..."),
                             ("total_extraction", "Total extraction report...")):
@@ -80,9 +94,17 @@ class ReplicatesDock(QWidget):
         split.addWidget(left)
         split.addWidget(right)
         split.setSizes([260, 900])
+        groups_page = QWidget()
+        gl = QVBoxLayout(groups_page)
+        gl.setContentsMargins(2, 2, 2, 2)
+        gl.addWidget(split)
+        self.tabs = QTabWidget()
+        self.tabs.addTab(_scrolled(self.duplicate), "Double determination")
+        self.tabs.addTab(_scrolled(groups_page), "Groups (N-fold)")
+        self.tabs.currentChanged.connect(lambda i: self.duplicate.compare() if i == 0 else self.refresh_sheet())
         lay = QVBoxLayout(self)
         lay.setContentsMargins(2, 2, 2, 2)
-        lay.addWidget(split)
+        lay.addWidget(self.tabs)
 
         ws.replicatesChanged.connect(self.refresh)
         ws.quantChanged.connect(self.refresh_sheet)
@@ -128,6 +150,10 @@ class ReplicatesDock(QWidget):
         order = self.ws.ordered_ids_by_injection()
         added = 0
         for ids in self.ws.suggest_replicate_groups():
+            # a run waiting alone in a single-determination group joins its partner
+            if any(len(g["members"]) == 1 and g["members"][0] in ids for g in groups):
+                groups = [g for g in groups if not (len(g["members"]) == 1 and g["members"][0] in ids)]
+                taken = {m for g in groups for m in g["members"]}
             ids = [i for i in order if i in ids and i not in taken]
             if len(ids) < 2:
                 continue
@@ -149,12 +175,18 @@ class ReplicatesDock(QWidget):
         name, ok = QInputDialog.getText(self, "Replicate group", "Name:")
         if not ok or not name.strip():
             return
-        members = [s.id for s in self.ws.states() if s.role == "sample"][:0]
+        act = self.ws.active
+        members = [act.id] if act is not None and act.role in ("sample", "standard") else []
+        group = {"id": uuid.uuid4().hex[:8], "name": name.strip(), "members": members, "policy": "all"}
+        from gcws.ui.dialogs.replicates import MembersDialog
+        dlg = MembersDialog(self.ws, group, self)
+        if not dlg.exec() or not dlg.members():
+            return                               # cancelled: no empty group is left behind
+        group["members"] = dlg.members()
         groups = copy.deepcopy(self.ws.replicate_groups)
-        groups.append({"id": uuid.uuid4().hex[:8], "name": name.strip(), "members": members, "policy": "all"})
+        groups.append(group)
         self._set_groups(groups, f"new replicate group {name.strip()}")
         self.groups.setCurrentRow(len(groups) - 1)
-        self.edit_members()
 
     def edit_members(self):
         g = self.current_group()
@@ -209,22 +241,9 @@ class ReplicatesDock(QWidget):
     # -- worksheet -------------------------------------------------------------------
 
     def compute(self, g):
-        from gcws.quant.nias_bridge import make_settings
         members = [m for m in g["members"] if m in self.ws.runs]
-        samples = [self.ws.nias_sample(m) for m in members]
-        if not samples or any(s is None for s in samples):
-            return members, [], "Every member needs role Sample and an FID integration."
-        rows_by_run = {m: self.ws.quant_result.rows.get(m, {}) for m in members}
-        mode = self.ws.quant.get("mode", "nias_mgkg")
-        lists = []
-        for m, s in zip(members, samples):
-            if mode == "nias_mgkg":
-                lists.append(engine_peaks(s))
-            else:
-                qr = rows_by_run[m]
-                lists.append(engine_peaks(s, value=lambda row, qr=qr: qr.get(row.derived.get("gcws_index"), {}).get("conc")))
-        tol = float(getattr(make_settings(self.ws.quant.get("settings")), "rt_tolerance", 0.035) or 0.035)
-        return members, combine(lists, tol, g.get("policy", "all")), ""
+        rows, problems = DV.compute(self.ws, members, g.get("policy", "all"))
+        return members, rows, ("Cannot compute: " + "; ".join(problems)) if problems else ""
 
     def refresh_sheet(self):
         g = self.current_group()
@@ -241,20 +260,24 @@ class ReplicatesDock(QWidget):
         self.rows = rows
         n = len(members)
         unit = self.ws.quant_unit()
-        headers = ["RT", "Name", "CAS", f"Mean [{unit}]"] + [f"c{k + 1}" for k in range(n)] + \
+        from gcws.io.sequence import replicate_label
+        letters = []
+        for k, m in enumerate(members):
+            lab = replicate_label(self.ws.runs[m].run.path.name)
+            letters.append(lab if lab and lab not in letters else chr(65 + k))
+        headers = ["RT", "Name", "CAS", f"Mean [{unit}]"] + [f"{letters[k]} [{unit}]" for k in range(n)] + \
                   (["Rel. diff %"] if n == 2 else ["SD", "RSD %"]) + ["Status", "ID status", "Review"]
         self.sheet.setColumnCount(len(headers))
         self.sheet.setHorizontalHeaderLabels(headers)
         names = [self.ws.runs[m].name for m in members]
         self.info.setText(err or f"{g['name']}: {n} determination(s) - " + ", ".join(names))
-        limit = None
-        for r in rows:
+        for row_index, r in enumerate(rows):
             i = self.sheet.rowCount()
             self.sheet.insertRow(i)
             cs = r.get("cs") or []
             vals = [r["rt"], r["name"], r["cas"], r["mean"]] + [cs[k] if k < len(cs) else None for k in range(n)]
             vals += ([r.get("reldiff")] if n == 2 else [r.get("sd"), r.get("rsd")])
-            vals += [r["status"], r["id_status"], r["review"]]
+            vals += [DV.english(r["status"]), DV.english(r["id_status"]), DV.english(r["review"])]
             for c, v in enumerate(vals):
                 it = QTableWidgetItem()
                 if isinstance(v, float):
@@ -264,15 +287,33 @@ class ReplicatesDock(QWidget):
                 else:
                     it.setText(str(v))
                 status = r["status"]
-                color = ("#fde2d0" if "conflict" in status.lower() else "#f4f6f7" if status.startswith("Artefact")
-                         else "#e3f2e1" if status.startswith("Valid") else None)
-                if color:
-                    it.setBackground(QBrush(QColor(color)))
+                level = ("bad" if "conflict" in status.lower() else "neutral" if status.startswith("Artefact")
+                         else "ok" if status.startswith("Valid") else None)
+                if level:
+                    it.setBackground(theme.status_brush(level))
+                it.setData(Qt.UserRole, row_index)
                 self.sheet.setItem(i, c, it)
         self.sheet.resizeColumnsToContents()
         self.sheet.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
         self.sheet.setColumnWidth(1, 260)
         self.sheet.setSortingEnabled(True)
+
+    def _sheet_row(self):
+        items = self.sheet.selectedItems()
+        g = self.current_group()
+        if not items or g is None:
+            return
+        k = items[0].data(Qt.UserRole)
+        if k is None or not (0 <= k < len(self.rows)):
+            return
+        self.duplicate.members = [m for m in g["members"] if m in self.ws.runs]
+        self.duplicate._navigate(self.rows[k])
+
+    def show_pair(self, a, b=None):
+        """Open the double-determination tab for run ``a`` (and partner ``b``)."""
+        self.tabs.setCurrentIndex(0)
+        self.duplicate.refresh_choices()
+        self.duplicate.set_pair(a, b)
 
     def export(self):
         g = self.current_group()

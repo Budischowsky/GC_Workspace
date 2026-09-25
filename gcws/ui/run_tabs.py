@@ -14,6 +14,7 @@ class RunTabBar(QTabBar):
     roleRequested = QtSignal(str, str)          # run id, role
     blanksRequested = QtSignal(str)
     replicateRequested = QtSignal(str)
+    pairRequested = QtSignal(str, str)          # run id, partner id
     closeRequested = QtSignal(str)
     revealRequested = QtSignal(str)
     eicRequested = QtSignal()
@@ -100,7 +101,19 @@ class RunTabBar(QTabBar):
             a.setChecked(st.role == role)
             a.triggered.connect(lambda _=False, r=role: self.roleRequested.emit(rid, r))
         m.addAction("Assign blanks...").triggered.connect(lambda: self.blanksRequested.emit(rid))
-        m.addAction("Replicate group...").triggered.connect(lambda: self.replicateRequested.emit(rid))
+        if st.role in ("sample", "standard"):
+            from gcws.quant.duplicate_view import suggest_partner
+            dd = m.addMenu("Double determination with")
+            partner = suggest_partner(self.ws, rid)
+            others = [s for s in self.ws.states() if s.id != rid and s.role in ("sample", "standard")]
+            others.sort(key=lambda s: s.id != partner)
+            for o in others:
+                a = dd.addAction(color_chip(o.color), o.name + ("   (suggested)" if o.id == partner else ""))
+                a.triggered.connect(lambda _=False, p=o.id: self.pairRequested.emit(rid, p))
+            if not others:
+                dd.addAction("no other sample loaded").setEnabled(False)
+            m.addAction("Double determination / replicates...").triggered.connect(
+                lambda: self.replicateRequested.emit(rid))
         m.addSeparator()
         sig = m.addMenu("Signal")
         for key in st.run.available_signals():

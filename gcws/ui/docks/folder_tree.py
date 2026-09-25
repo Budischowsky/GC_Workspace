@@ -130,6 +130,8 @@ class FolderTree(QWidget):
         self.view.setUniformRowHeights(True)
 
         self.root_box = QComboBox()
+        self.root_box.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.root_box.setMinimumContentsLength(10)
         self.root_box.setEditable(True)
         self.root_box.setToolTip("Root folder of the tree")
         self.root_box.activated.connect(lambda *_: self.set_root(self.root_box.currentText()))

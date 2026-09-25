@@ -53,6 +53,8 @@ class EventsDock(QWidget):
         self._loading = False
 
         self.method_box = QComboBox()
+        self.method_box.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.method_box.setMinimumContentsLength(10)
         self.method_box.setToolTip("Stored integration methods")
         self.method_box.activated.connect(self._pick_method)
         save = QPushButton("Save as...")

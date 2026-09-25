@@ -17,8 +17,8 @@ import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal as QtSignal
 from PySide6.QtGui import QColor, QGuiApplication
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
-                               QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QToolButton,
-                               QVBoxLayout, QWidget)
+                               QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QToolBar,
+                               QToolButton, QVBoxLayout, QWidget)
 
 from gcws.core.keys import is_fid
 from gcws.ms.spectra import MODES, ScanRequest, extract, extract_range, from_ms, ms_times
@@ -144,11 +144,16 @@ class SpectrumDock(QWidget):
         b_reg = QToolButton()
         b_reg.setText("Register unknown")
         b_reg.clicked.connect(self.registerRequested.emit)
+        self.mode.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.mode.setMinimumContentsLength(12)
+        actions = QToolBar()                    # overflows into a » menu when the panel is narrow
+        actions.setIconSize(actions.iconSize() * 0.8)
+        for b in (b_atlas, b_res, b_nist, b_copy, b_save, b_reg):
+            actions.addWidget(b)
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
         top.addWidget(self.mode, 1)
-        for b in (b_atlas, b_res, b_nist, b_copy, b_save, b_reg):
-            top.addWidget(b)
+        top.addWidget(actions, 2)
 
         # scan-mode bar: where the spectrum comes from, stepping, background
         self.source_chip = theme.chip("", "info")
@@ -208,7 +213,7 @@ class SpectrumDock(QWidget):
         sl.setContentsMargins(0, 0, 0, 0)
         sl.addWidget(self.scan_plot)
         h = QHBoxLayout()
-        h.addWidget(theme.hint("Drag the regions to choose the averaged (blue) and background (red) scans", False))
+        h.addWidget(theme.hint("Drag the regions: blue averaged, red background scans"))
         h.addStretch(1)
         h.addWidget(auto)
         h.addWidget(use)

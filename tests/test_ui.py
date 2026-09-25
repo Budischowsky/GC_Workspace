@@ -210,3 +210,32 @@ def test_interpretation_tab_and_class_hints(qtbot, win, samples):
     win.chrom.dual.setChecked(True)
     win.show_ion_eic(441)
     assert win.chrom.companion.key == "EIC 441"
+
+
+def test_double_determination_from_tab_menu(qtbot, win, samples):
+    _load(qtbot, win, samples, ["07_", "08_", "11_"])
+    ws = win.ws
+    a = next(s.id for s in ws.states() if s.name.startswith("07_"))
+    b = next(s.id for s in ws.states() if s.name.startswith("11_"))
+    win.run_tabs.pairRequested.emit(a, b)
+    page = win.replicates.duplicate
+    assert win.replicates.tabs.currentIndex() == 0
+    assert page.a.currentData() == a and page.b.currentData() == b
+    assert page.rows and len(page.verdicts) == len(page.rows), page.banner.text()
+    g = page.group()
+    assert g is not None and g["members"] == [a, b]
+    win.a_undo.trigger()                                   # the group change is undoable
+    assert page.group() is None or ws.replicate_groups == []
+    win.a_redo.trigger()
+    # the difference limit is the report parameter
+    page.limit.setValue(12.5)
+    page._limit_changed()
+    from gcws.quant.duplicate_view import limits
+    assert limits(ws)[0] == pytest.approx(12.5)
+    # "needs attention" filter hides confirmed rows
+    page.only_problems.setChecked(True)
+    assert page.table.rowCount() <= len(page.rows)
+    # navigation from a row activates a determination and selects its peak
+    k = next(i for i, r in enumerate(page.rows) if r.get("source1"))
+    page._navigate(page.rows[k])
+    assert ws.active_id == a and ws.selected >= 0
