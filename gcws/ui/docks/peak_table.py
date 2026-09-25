@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QHBoxLayout, QHea
 
 from gcws.core.ident import Identification
 from gcws.ui.icons import icon
-from gcws.ui.models.peak_table import COLUMNS, PeakTableModel
+from gcws.ui.models.peak_table import COLUMN_KEYS, COLUMNS, PeakTableModel
 from gcws.ui.undo import IdentCommand
 
 
@@ -21,6 +21,12 @@ class SortProxy(QSortFilterProxyModel):
         self.setSortRole(Qt.UserRole)
         self.setFilterCaseSensitivity(Qt.CaseInsensitive)
         self.setFilterKeyColumn(-1)
+        self.hide_predicate = None            # callable(source_row) -> True hides the row
+
+    def filterAcceptsRow(self, row, parent):
+        if self.hide_predicate is not None and self.hide_predicate(row):
+            return False
+        return super().filterAcceptsRow(row, parent)
 
     def lessThan(self, a, b):
         va, vb = a.data(Qt.UserRole), b.data(Qt.UserRole)
@@ -76,6 +82,9 @@ class PeakTable(QWidget):
         tb.addSeparator()
         exp = tb.addAction("Export...")
         exp.triggered.connect(self.export)
+        cols = tb.addAction("Columns...")
+        cols.setToolTip("Choose and order the table columns")
+        cols.triggered.connect(self.choose_columns)
         self.filter = QLineEdit()
         self.filter.setPlaceholderText("Filter...")
         self.filter.setClearButtonEnabled(True)
@@ -138,6 +147,9 @@ class PeakTable(QWidget):
             return
         src = self.model.index(index, 0)
         prox = self.proxy.mapFromSource(src)
+        if not prox.isValid():                # row filtered out
+            self.view.viewport().update()
+            return
         if self.view.currentIndex().row() != prox.row():
             self._syncing = True
             self.view.setCurrentIndex(prox)
@@ -187,7 +199,7 @@ class PeakTable(QWidget):
             for act in self.context_actions:
                 m.addAction(act)
         m.addSeparator()
-        m.addAction("Choose columns...").triggered.connect(lambda: self._header_menu(None))
+        m.addAction("Choose columns...").triggered.connect(self.choose_columns)
         m.exec(self.view.viewport().mapToGlobal(pos))
 
     def set_context_actions(self, actions) -> None:
@@ -214,35 +226,105 @@ class PeakTable(QWidget):
 
     # -- columns -------------------------------------------------------------------
 
-    def _restore_columns(self):
-        s = QSettings()
-        hidden = s.value("table/hidden", None)
-        if hidden is None:
-            hidden = [c.key for c in COLUMNS if not c.default]
-        hidden = list(hidden) if isinstance(hidden, (list, tuple)) else [hidden]
+    # Column layout is stored by column *key* (order, hidden, widths), never by
+    # index, so adding a column in a later version cannot shift the others.
+
+    @staticmethod
+    def default_width(key: str) -> int:
+        return {"name": 220, "cas": 90, "status": 110, "qstatus": 110}.get(key, 72)
+
+    def shown_keys(self) -> list[str]:
+        hh = self.view.horizontalHeader()
+        return [COLUMNS[hh.logicalIndex(v)].key for v in range(hh.count())
+                if not self.view.isColumnHidden(hh.logicalIndex(v))]
+
+    def layout_state(self) -> dict:
+        hh = self.view.horizontalHeader()
+        order = [COLUMNS[hh.logicalIndex(v)].key for v in range(hh.count())]
+        widths = dict(self._widths)
         for i, c in enumerate(COLUMNS):
-            self.view.setColumnHidden(i, c.key in hidden)
-        state = s.value("table/header")
-        if state is not None:
-            self.view.horizontalHeader().restoreState(state)
-            for i, c in enumerate(COLUMNS):
-                self.view.setColumnHidden(i, c.key in hidden)
-        else:
-            for i, c in enumerate(COLUMNS):
-                self.view.setColumnWidth(i, 220 if c.key == "name" else (90 if c.key == "cas" else 70))
+            if not self.view.isColumnHidden(i) and hh.sectionSize(i) > 0:
+                widths[c.key] = hh.sectionSize(i)
+        return {"order": order, "shown": self.shown_keys(), "widths": widths}
+
+    def apply_layout(self, state: dict) -> None:
+        known = set(state.get("order") or [])
+        shown = [k for k in state.get("shown") or [] if k in COLUMN_KEYS]
+        # columns this layout has never seen (new in this version) follow their default
+        shown += [c.key for c in COLUMNS if c.key not in known and c.default and c.key not in shown]
+        self._widths = {k: int(v) for k, v in (state.get("widths") or {}).items()}
+        self.set_shown(shown)
+
+    def set_shown(self, keys: list[str]) -> None:
+        hh = self.view.horizontalHeader()
+        keys = [k for k in keys if k in COLUMN_KEYS]
+        for pos, key in enumerate(keys):
+            logical = COLUMN_KEYS.index(key)
+            hh.moveSection(hh.visualIndex(logical), pos)
+        for i, c in enumerate(COLUMNS):
+            hide = c.key not in keys
+            self.view.setColumnHidden(i, hide)
+            if not hide:
+                self.view.setColumnWidth(i, self._widths.get(c.key) or self.default_width(c.key))
+
+    def _restore_columns(self):
+        import json
+        s = QSettings()
+        self._widths: dict[str, int] = {}
+        raw = s.value("table/layout")
+        state = None
+        if raw:
+            try:
+                state = json.loads(raw)
+            except (TypeError, ValueError):
+                state = None
+        if state is None:                            # older settings: hidden keys only
+            hidden = s.value("table/hidden", None)
+            if hidden is None:
+                hidden = [c.key for c in COLUMNS if not c.default]
+            hidden = list(hidden) if isinstance(hidden, (list, tuple)) else [hidden]
+            state = {"order": COLUMN_KEYS, "shown": [k for k in COLUMN_KEYS if k not in hidden]}
+            s.remove("table/header")                 # index based; would misalign new columns
+        self.apply_layout(state)
 
     def save_columns(self):
+        import json
         s = QSettings()
-        s.setValue("table/hidden", [c.key for i, c in enumerate(COLUMNS) if self.view.isColumnHidden(i)])
-        s.setValue("table/header", self.view.horizontalHeader().saveState())
+        state = self.layout_state()
+        s.setValue("table/layout", json.dumps(state))
+        s.setValue("table/hidden", [k for k in COLUMN_KEYS if k not in state["shown"]])
+
+    def choose_columns(self):
+        from gcws.ui.dialogs.columns import ColumnChooserDialog
+        cols = [(c.key, self.model.headerData(i, Qt.Horizontal) or c.header, c.tip) for i, c in enumerate(COLUMNS)]
+        dlg = ColumnChooserDialog(cols, self.shown_keys(), [c.key for c in COLUMNS if c.default], self)
+        if dlg.exec() == ColumnChooserDialog.Accepted:
+            self._widths.update(self.layout_state()["widths"])
+            self.set_shown(dlg.shown_keys())
+            self.save_columns()
+
+    def _toggle_column(self, i: int, on: bool) -> None:
+        keys = self.shown_keys()
+        key = COLUMNS[i].key
+        if on and key not in keys:
+            keys.append(key)
+        elif not on:
+            if len(keys) <= 1:
+                return
+            keys = [k for k in keys if k != key]
+        self._widths.update(self.layout_state()["widths"])
+        self.set_shown(keys)
+        self.save_columns()
 
     def _header_menu(self, pos):
         m = QMenu(self)
+        m.addAction("Choose columns...", self.choose_columns)
+        m.addSeparator()
         for i, c in enumerate(COLUMNS):
             a = m.addAction(self.model.headerData(i, Qt.Horizontal))
             a.setCheckable(True)
             a.setChecked(not self.view.isColumnHidden(i))
-            a.toggled.connect(lambda on, i=i: (self.view.setColumnHidden(i, not on), self.save_columns()))
+            a.toggled.connect(lambda on, i=i: self._toggle_column(i, on))
         from PySide6.QtGui import QCursor
         m.exec(QCursor.pos())
 
