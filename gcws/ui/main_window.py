@@ -316,6 +316,10 @@ class MainWindow(QMainWindow):
         self.progress.hide()
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.hide()
+        from gcws.ui import theme
+        self.run_chips = [theme.chip("", "accent"), theme.chip("", "neutral"), theme.chip("", "neutral")]
+        for c in self.run_chips:
+            sb.addPermanentWidget(c)
         self.tool_label = QLabel()
         sb.addPermanentWidget(self.tool_label)
         sb.addPermanentWidget(self.progress)
@@ -331,6 +335,8 @@ class MainWindow(QMainWindow):
         self.ws.activeRunChanged.connect(lambda *_: self._refresh_signals())
         self.ws.signalKeyChanged.connect(lambda *_: self._refresh_signals())
         self.ws.runChanged.connect(lambda *_: self._refresh_signals())
+        for sig in (self.ws.activeRunChanged, self.ws.runChanged, self.ws.runRemoved):
+            sig.connect(lambda *_: self._refresh_run_chips())
         self.run_tabs.closeRequested.connect(self.close_run)
         self.run_tabs.roleRequested.connect(self.set_role)
         self.run_tabs.blanksRequested.connect(self.assign_blanks)
@@ -374,6 +380,28 @@ class MainWindow(QMainWindow):
         for plot in (self.chrom, self.zoom):
             plot.vb.setMouseMode(getattr(pg.ViewBox, mode))
             plot.companion.vb.setMouseMode(getattr(pg.ViewBox, mode))
+
+    def _refresh_run_chips(self):
+        """Status bar: role, blank(s) and FID-MS delay of the active chromatogram."""
+        from gcws.ui import theme
+        st = self.ws.active
+        role_chip, blank_chip, delay_chip = self.run_chips
+        if st is None:
+            for c in self.run_chips:
+                theme.set_chip(c, "", "neutral")
+            return
+        theme.set_chip(role_chip, ROLE_LABELS.get(st.role, st.role), "accent")
+        names = [self.ws.runs[b].name for b in st.blanks + st.blanks_istd if b in self.ws.runs]
+        if st.role in ("sample", "standard"):
+            theme.set_chip(blank_chip, "Blank: " + (", ".join(names) if names else "none"), "neutral" if names
+                           else "warn")
+        else:
+            theme.set_chip(blank_chip, "", "neutral")
+        if st.run.fid is not None and st.run.ms is not None:
+            reliable = st.delay_override is not None or (st.delay is not None and st.delay.reliable)
+            theme.set_chip(delay_chip, f"FID−MS {st.delay_value:+.4f} min", "neutral" if reliable else "warn")
+        else:
+            theme.set_chip(delay_chip, "", "neutral")
 
     def _refresh_signals(self):
         self.signal_box.blockSignals(True)
@@ -873,7 +901,8 @@ class MainWindow(QMainWindow):
             target = Path(fn)
         blank_ids = [b for m in members for b in self.ws.runs[m].blanks]
         blank_istd_ids = [b for m in members for b in self.ws.runs[m].blanks_istd]
-        bname = lambda ids: str(self.ws.runs[ids[0]].run.path) if ids and ids[0] in self.ws.runs else ""
+        # every blank used by any determination of the group (display only in the report)
+        bname = lambda ids: "; ".join(dict.fromkeys(str(self.ws.runs[i].run.path) for i in ids if i in self.ws.runs))
         job = RS.ReportJob(
             kind=kind, samples=samples, names=names, settings=make_settings(self.ws.quant.get("settings")),
             target=target, word=target.with_suffix(".docx"), cas_path=cas,
