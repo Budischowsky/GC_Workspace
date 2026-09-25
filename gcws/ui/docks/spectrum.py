@@ -16,7 +16,7 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal as QtSignal
 from PySide6.QtGui import QColor, QGuiApplication
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
                                QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QToolBar,
                                QToolButton, QVBoxLayout, QWidget)
 
@@ -150,9 +150,14 @@ class SpectrumDock(QWidget):
         actions.setIconSize(actions.iconSize() * 0.8)
         for b in (b_atlas, b_res, b_nist, b_copy, b_save, b_reg):
             actions.addWidget(b)
+        self.minus_blank = QCheckBox("− blank")
+        self.minus_blank.setToolTip("Subtract the assigned blank's spectrum at the same (aligned) time; "
+                                    "on automatically for blank-subtracted traces")
+        self.minus_blank.toggled.connect(lambda *_: self.refresh())
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
         top.addWidget(self.mode, 1)
+        top.addWidget(self.minus_blank)
         top.addWidget(actions, 2)
 
         # scan-mode bar: where the spectrum comes from, stepping, background
@@ -254,6 +259,7 @@ class SpectrumDock(QWidget):
 
         ws.selectionChanged.connect(self._on_selection)
         ws.activeRunChanged.connect(self._on_active)
+        self._last_key = ws.signal_key
         for sig in (ws.signalKeyChanged, ws.identsChanged):
             sig.connect(lambda *_: self.refresh())
         ws.resultChanged.connect(lambda rid, key: self.refresh() if rid == ws.active_id else None)
@@ -351,6 +357,7 @@ class SpectrumDock(QWidget):
         return self.mode.currentData()
 
     def refresh(self):
+        self._sync_blank_box()
         self.hits.setRowCount(0)
         if self.source == "scan" and self.scan_req is not None:
             self._refresh_scan()
@@ -370,7 +377,8 @@ class SpectrumDock(QWidget):
             return
         key = self.ws.signal_key
         override = st.spectrum_overrides.get(round(peak.apex_rt, 4))
-        self.spec = extract(st.run, peak, key, st.delay_value, self.current_mode(), override=override)
+        self.spec = self._minus_blank(st, extract(st.run, peak, key, st.delay_value, self.current_mode(),
+                                                  override=override))
         ident = st.ident_set(key).for_peak(peak)
         title = f"RT {peak.apex_rt:.3f}" + (f"  (MS {self.spec.rt:.3f})" if is_fid(key) else "")
         if ident and ident.name:
@@ -401,7 +409,7 @@ class SpectrumDock(QWidget):
             self.refresh()
             return
         ms = st.run.ms
-        self.spec = extract_range(st.run, req.t0, req.t1, self.bg_range)
+        self.spec = self._minus_blank(st, extract_range(st.run, req.t0, req.t1, self.bg_range))
         spec = self.spec
         n = len(spec.apex_scans)
         if n == 1:
@@ -451,6 +459,30 @@ class SpectrumDock(QWidget):
         self.bg_reg.setVisible(bool(spec.bg_scans))
         self.scan_plot.getPlotItem().getViewBox().autoRange()
         self.regionsChanged.emit(regions if st.id == self.ws.active_id else [])
+
+    def _sync_blank_box(self):
+        from gcws.core.keys import is_derived
+        st = self.ws.active
+        has = bool(st is not None and st.run.ms is not None and self.ws.blank_ids(st))
+        self.minus_blank.blockSignals(True)
+        self.minus_blank.setVisible(has)
+        if self.ws.signal_key != self._last_key:          # a blank trace brings blank spectra with it
+            self.minus_blank.setChecked(is_derived(self.ws.signal_key))
+            self._last_key = self.ws.signal_key
+        self.minus_blank.blockSignals(False)
+
+    def _minus_blank(self, st, spec):
+        """The spectrum minus the blank's spectrum at the same scans, when asked for."""
+        if spec is None or not spec.apex_scans or not self.minus_blank.isChecked() or not self.ws.blank_ids(st):
+            return spec
+        from gcws.ms.spectra import Spectrum, subtract
+        bmz, bab = self.ws.blank_spectrum(st, spec.apex_scans)
+        if bmz.size == 0:
+            return spec
+        mz, ab = subtract((spec.mz, spec.ab), (bmz, bab))
+        names = ", ".join(self.ws.runs[b].name for b in self.ws.blank_ids(st))
+        return Spectrum(mz, ab, spec.rt, spec.mode, spec.apex_scans, spec.bg_scans,
+                        (spec.note + "; " if spec.note else "") + f"blank spectrum subtracted ({names})")
 
     def _marks(self):
         """{m/z: (label, level)} annotations for the stick plot from the interpretation."""

@@ -51,6 +51,20 @@ def _ms_rt(r: Row, ws):
     return r.peak.apex_rt - st.delay_value
 
 
+def _bm(r: Row, ws):
+    f = getattr(ws, "blank_matches", None)
+    if f is None or ws.active is None:
+        return None
+    return f(ws.active_id).get(r.index)
+
+
+def _area_minus_blank(r: Row, ws):
+    m = _bm(r, ws)
+    if m is None:
+        return None
+    return max(0.0, r.peak.area - ws.blank_options().scale * m.blank_area)
+
+
 def _hint(r: Row, ws):
     cache = getattr(ws, "hints", None)
     if cache is None:
@@ -82,9 +96,17 @@ COLUMNS: list[Column] = [
     Column("library", "Library", lambda r, ws: r.ident.library if r.ident else "", numeric=False, default=False),
     Column("ri", "RI", lambda r, ws: r.quant.get("ri"), ".0f", default=False),
     Column("istd", "ISTD", lambda r, ws: r.quant.get("istd", ""), numeric=False),
-    Column("blank_area", "Blank area", lambda r, ws: r.quant.get("blank_area"), ",.0f", default=False),
+    Column("blank_area", "Blank area", lambda r, ws: r.quant.get("blank_area"), ",.0f", default=False,
+           tip="NIAS quantification: blank area subtracted in the mg/kg calculation"),
     Column("corr_area", "Corr. area", lambda r, ws: r.quant.get("corr_area"), ",.0f",
-           tip="Area after blank correction"),
+           tip="NIAS quantification: area after its blank correction"),
+    Column("in_blank", "In blank", lambda r, ws: _bm(r, ws).text if _bm(r, ws) else "", numeric=False,
+           tip="Peak also found in the assigned blank (aligned RT, and similar spectrum with MS data): "
+               "blank level = sample area below the ratio limit x blank area"),
+    Column("blank_ratio", "Blank ratio", lambda r, ws: _bm(r, ws).ratio if _bm(r, ws) else None, ".1f",
+           default=False, tip="Sample area / blank area of the matching blank peak"),
+    Column("area_minus_blank", "Area − blank", _area_minus_blank, ",.0f", default=False,
+           tip="Peak area minus the matching blank peak's area (peak-level blank check)"),
     Column("mg_dm2", "mg/dm²", lambda r, ws: r.quant.get("mg_dm2"), ".4f", default=False),
     Column("conc", "Conc.", lambda r, ws: r.quant.get("conc"), ".4f",
            tip="Concentration in the unit of the quantification mode"),
@@ -164,6 +186,10 @@ class PeakTableModel(QAbstractTableModel):
                     return theme.status_brush("bad")
                 if st.startswith("unknown"):
                     return theme.status_brush("neutral")
+            if col.key == "in_blank":
+                m = _bm(row, self.ws)
+                if m is not None:
+                    return theme.status_brush(m.level)
             if "M" in row.peak.flags and col.key in ("num", "type", "area"):
                 return QBrush(QColor(theme.ORANGE_SOFT))
             if "S" in row.peak.flags:

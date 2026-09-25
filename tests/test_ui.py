@@ -239,3 +239,36 @@ def test_double_determination_from_tab_menu(qtbot, win, samples):
     k = next(i for i, r in enumerate(page.rows) if r.get("source1"))
     page._navigate(page.rows[k])
     assert ws.active_id == a and ws.selected >= 0
+
+
+def test_blank_subtraction_toggle_and_project(qtbot, win, samples, tmp_path):
+    _load(qtbot, win, samples, ["07_", "08_"])
+    ws = win.ws
+    st = next(s for s in ws.states() if s.name.startswith("07_"))
+    ws.set_active(st.id)
+    win._refresh_signals()
+    assert win.a_blank.isEnabled()
+    win.a_blank.setChecked(True)
+    assert ws.signal_key == "FID - Blank"
+    assert win.table.model.rowCount() > 0
+    assert "FID - Blank" in [win.signal_box.itemText(i) for i in range(win.signal_box.count())]
+    # peak-level check: hiding blank peaks reduces the visible rows
+    ws.set_signal_key("FID")
+    n = win.table.proxy.rowCount()
+    win.table.hide_blank.setChecked(True)
+    assert win.table.proxy.rowCount() < n
+    win.table.hide_blank.setChecked(False)
+    # settings are saved with the project, the derived key too
+    import copy
+    q = copy.deepcopy(ws.quant)
+    q["blank_sub"] = {"mode_fid": "full", "scale": 1.1}
+    ws.push_quant("blank settings", q)
+    ws.set_signal_key("FID - Blank")
+    from gcws.core import project as P
+    target = P.save(ws, tmp_path / "blank.gcws")
+    win.close_all()
+    win.open_project(target)
+    qtbot.waitUntil(lambda: win.loading == 0 and len(ws.runs) == 2 and win._pending_project is None, timeout=60000)
+    assert ws.signal_key == "FID - Blank" and ws.quant["blank_sub"]["scale"] == 1.1
+    st2 = ws.runs[st.id]
+    assert ws.result(st2.id, "FID - Blank") is not None

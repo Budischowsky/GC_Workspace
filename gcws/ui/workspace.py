@@ -15,7 +15,7 @@ from PySide6.QtGui import QUndoGroup, QUndoStack
 from gcws.core.audit import AuditLog, AuditRecord
 from gcws.core.events import ManualEvent
 from gcws.core.ident import IdentificationSet
-from gcws.core.keys import base_key, is_derived, is_fid, method_kind
+from gcws.core.keys import BLANK_SUFFIX, base_key, derived_key, is_derived, is_fid, method_kind, split_key
 from gcws.core.model import FID, TIC, Run
 from gcws.integration.engine import IntegrationResult, integrate
 from gcws.integration.method import IntegrationMethod
@@ -42,6 +42,8 @@ class RunState:
     spectrum_overrides: dict = field(default_factory=dict)
     undo: Optional[QUndoStack] = None
     saved_digests: dict[str, str] = field(default_factory=dict)
+    blanks_manual: bool = False                       # blanks set by the analyst: never re-suggested
+    blank_alignment: dict = field(default_factory=dict)   # base key -> [Alignment] of the derived trace
 
     @property
     def id(self) -> str:
@@ -108,6 +110,8 @@ class Workspace(QObject):
             sig.connect(lambda *_: self.schedule_quant())
         from gcws.ui.hint_cache import HintCache
         self.hints = HintCache(self, self)
+        self._blank_matches: dict = {}
+        self.resultChanged.connect(self._drop_matches)
 
     # -- runs --------------------------------------------------------------
 
@@ -131,6 +135,7 @@ class Workspace(QObject):
         st.undo = QUndoStack(self)
         self.undo_group.addStack(st.undo)
         st.delay = delay
+        run.derive = self._derive
         for kind in (FID, TIC):
             st.methods[kind] = self.methods.get(self.methods.default_name(kind))
         if results:
@@ -147,6 +152,7 @@ class Workspace(QObject):
         if self.active_id is None:
             self.set_active(run.id)
         self._suggest_blanks()
+        self.invalidate_blank([run.id])
         return st
 
     def remove_run(self, run_id: str) -> None:
@@ -156,9 +162,12 @@ class Workspace(QObject):
         self.order.remove(run_id)
         if st.undo is not None:
             self.undo_group.removeStack(st.undo)
+        users = [o.id for o in self.runs.values() if run_id in o.blanks + o.blanks_istd]
         for other in self.runs.values():
             other.blanks = [b for b in other.blanks if b != run_id]
             other.blanks_istd = [b for b in other.blanks_istd if b != run_id]
+        if users:
+            self.invalidate_blank(users)
         for g in self.replicate_groups:
             g["members"] = [m for m in g["members"] if m != run_id]
         self.dirty = True
@@ -167,9 +176,12 @@ class Workspace(QObject):
             self.set_active(self.order[0] if self.order else None)
 
     def signals_for(self, st: RunState) -> list[str]:
-        """Keys offered for a run: its raw traces and the EICs computed so far."""
+        """Keys offered for a run: its raw traces, the EICs computed so far and, with a
+        blank assigned, the blank-subtracted variants."""
         keys = list(st.run.available_signals())
-        keys += [k for k in st.run._signals if k.startswith("EIC") and k not in keys]
+        keys += [k for k in st.run._signals if k.startswith("EIC") and not is_derived(k) and k not in keys]
+        if self.blank_ids(st):
+            keys += [derived_key(k) for k in list(keys) if k != "BPC"]
         return keys
 
     def runs_with(self, key: str) -> list[RunState]:
@@ -232,7 +244,8 @@ class Workspace(QObject):
         if sig is None:
             st.results.pop(key, None)
             return None
-        res = integrate(sig, self.method_for(st, key), st.events(key))
+        res = integrate(sig, self._derived_method(st, key, sig) if is_derived(key) else self.method_for(st, key),
+                        st.events(key))
         st.results[key] = res
         if key == FID and st.run.ms is not None and st.delay is not None and st.delay_override is None:
             tic = st.results.get(TIC)
@@ -242,6 +255,25 @@ class Workspace(QObject):
         if emit:
             self.resultChanged.emit(run_id, key)
         return res
+
+    def _derived_method(self, st: RunState, key: str, sig) -> IntegrationMethod:
+        """The method for a derived trace, with the automatic parameters that were determined on
+        the base trace (peak width, smoothing, threshold, absolute slope). Subtracting a blank adds
+        its noise; re-estimating the parameters would change the integration of peaks the blank
+        does not even touch."""
+        m = self.method_for(st, key).copy()
+        base = self.result(st.id, base_key(key))
+        if base is None:
+            return m
+        r = base.resolved
+        m.peak_width = m.peak_width or r.peak_width
+        m.smoothing_window = m.smoothing_window or r.window
+        m.threshold = m.threshold if m.threshold is not None else r.threshold
+        if not m.slope_sensitivity:
+            from gcws.integration.autoparams import resolve
+            own = resolve(sig.rt, sig.y, m)
+            m.slope_sensitivity = r.slope_abs() / (own.sigma_d1 or 1e-12)
+        return m
 
     def result(self, run_id: str, key: Optional[str] = None) -> Optional[IntegrationResult]:
         st = self.runs.get(run_id)
@@ -301,7 +333,13 @@ class Workspace(QObject):
                                 lambda t, o, n: self.log(t, "", detail)))
 
     def _quant_settings_changed(self, old: dict, new: dict) -> None:
-        """Hook for sub-settings that invalidate derived data (see blank/deconv)."""
+        """Sub-settings that feed derived data: only what changed is invalidated."""
+        if (old or {}).get("blank_sub") != (new or {}).get("blank_sub"):
+            self.invalidate_blank(None)
+        if (old or {}).get("deconv") != (new or {}).get("deconv"):
+            for st in self.states():
+                if hasattr(st, "deconv"):
+                    st.deconv = {}
 
     def quant_unit(self) -> str:
         from gcws.quant.service import mode_unit
@@ -330,18 +368,195 @@ class Workspace(QObject):
         return [s.id for s in sorted(states, key=lambda s: sequence.order_key(s.run.path, seq))]
 
     def _suggest_blanks(self) -> None:
-        """Fill empty blank assignments of samples from the injection order."""
+        """Fill empty blank assignments of samples from the injection order.
+
+        Assignments the analyst made (``blanks_manual``) are left alone; for the
+        others, a referenced run that no longer has a blank role is dropped first.
+        """
         order = self.ordered_ids_by_injection()
         roles = {s.id: s.role for s in self.states()}
         paths = {s.id: s.run.path for s in self.states()}
         for st in self.states():
-            if st.role != sequence.SAMPLE:
+            if st.role != sequence.SAMPLE or st.blanks_manual:
                 continue
+            st.blanks = [b for b in st.blanks if roles.get(b) == sequence.BLANK]
+            st.blanks_istd = [b for b in st.blanks_istd if roles.get(b) == sequence.BLANK_ISTD]
             b, bi = sequence.suggest_blanks(st.id, paths, roles, order)
             if not st.blanks and b:
                 st.blanks = b
             if not st.blanks_istd and bi:
                 st.blanks_istd = bi
+
+    # -- blank subtraction ------------------------------------------------------
+
+    def blank_options(self):
+        from gcws.signal.blank import BlankOptions
+        return BlankOptions.from_dict(self.quant.get("blank_sub"))
+
+    def blank_ids(self, st: RunState) -> list[str]:
+        """The blanks subtracted from ``st`` (by the configured source: Blank, Blank+ISTD or both)."""
+        src = self.blank_options().source
+        ids = (st.blanks if src in ("blank", "both") else []) + (st.blanks_istd if src in ("blank_istd", "both") else [])
+        return [b for b in dict.fromkeys(ids) if b in self.runs and b != st.id]
+
+    def _derive(self, run: Run, key: str):
+        """Provider of derived traces: ``"<key> - Blank"`` = sample minus its aligned blank(s)."""
+        base, suffix = split_key(key)
+        st = self.runs.get(run.id)
+        if suffix != BLANK_SUFFIX or st is None:
+            return None
+        sample = run.signal(base)
+        if sample is None:
+            return None
+        blanks = []
+        for b in self.blank_ids(st):
+            sig = self.runs[b].run.signal(base)
+            if sig is not None:
+                bres = self.result(b, base)
+                blanks.append((self.runs[b].name, sig, [p.apex_rt for p in bres.peaks] if bres else None))
+        if not blanks:
+            return None
+        from gcws.integration.autoparams import _integration_start
+        from gcws.signal import blank as B
+        opts = self.blank_options()
+        t_from = _integration_start(sample.rt, self.method_for(st, base))
+        sres = self.result(st.id, base)
+        sig, aligns = B.subtract(sample, blanks, opts, opts.mode_fid if is_fid(base) else opts.mode_ms, key, t_from,
+                                 [p.apex_rt for p in sres.peaks] if sres else None)
+        st.blank_alignment[base] = aligns
+        return sig
+
+    def invalidate_blank(self, run_ids=None) -> None:
+        """Forget blank-subtracted traces, their integrations and the peak blank matches
+        of the runs in ``run_ids`` and of every sample using one of them as blank
+        (``None``: all runs). Views are told through ``runChanged``."""
+        ids = set(run_ids) if run_ids is not None else None
+        affected = [st for st in self.states()
+                    if ids is None or st.id in ids or ids & set(st.blanks + st.blanks_istd)]
+        for st in affected:
+            st.run.drop_derived()
+            st.blank_alignment.clear()
+            for key in [k for k in st.results if is_derived(k)]:
+                st.results.pop(key, None)
+            self._blank_matches = {k: v for k, v in self._blank_matches.items() if k[0] != st.id}
+        for st in affected:
+            if is_derived(self.signal_key) or st.blanks or st.blanks_istd:
+                self.runChanged.emit(st.id)
+
+    def _drop_matches(self, run_id: str, key: str) -> None:
+        users = {s.id for s in self.states() if run_id in s.blanks + s.blanks_istd} | {run_id}
+        self._blank_matches = {k: v for k, v in self._blank_matches.items() if k[0] not in users}
+
+    def blank_matches(self, run_id: str, key: Optional[str] = None) -> dict:
+        """``{peak index: BlankMatch}`` of ``run_id``'s peaks found in its blank(s) (cached)."""
+        key = key or self.signal_key
+        ck = (run_id, key)
+        if ck in self._blank_matches:
+            return self._blank_matches[ck]
+        st = self.runs.get(run_id)
+        res = self.result(run_id, key) if st is not None else None
+        out: dict = {}
+        if st is None or res is None or not self.blank_ids(st):
+            self._blank_matches[ck] = out
+            return out
+        from gcws.quant import blank_match as BM
+        from gcws.signal import blank as B
+        opts = self.blank_options()
+        base = base_key(key)
+        if opts.rt_tol:
+            rt_tol = float(opts.rt_tol)
+        elif is_fid(base):
+            from gcws.quant.nias_bridge import make_settings
+            rt_tol = float(getattr(make_settings(self.quant.get("settings")), "blank_rt_tolerance", 0.04) or 0.04)
+        else:
+            rt_tol = 0.03
+        sample_sig = st.run.signal(base)
+        for b in self.blank_ids(st):
+            bst = self.runs[b]
+            bres = self.result(b, base)
+            bsig = bst.run.signal(base)
+            if bres is None or bsig is None or sample_sig is None:
+                continue
+            known = [a for a in st.blank_alignment.get(base, []) if a.blank == bst.name]
+            shift = known[0].shift if known else B.align(
+                sample_sig, bsig, opts, None, ([p.apex_rt for p in res.peaks], [p.apex_rt for p in bres.peaks]))[0]
+            spectra = self._pair_spectra(st, res, key, bst, bres, base) if (st.run.ms is not None
+                                                                           and bst.run.ms is not None) else None
+            m = BM.match(res.peaks, bres.peaks, shift=shift, rt_tol=rt_tol, blank_run=b, scale=opts.scale,
+                         ratio_limit=opts.ratio_limit, spectra=spectra, spectral_min=opts.spectral_min)
+            for i, bm in m.items():
+                if i not in out or bm.ratio < out[i].ratio:
+                    out[i] = bm
+        self._blank_matches[ck] = out
+        return out
+
+    def _pair_spectra(self, st, res, key, bst, bres, bkey):
+        from gcws.ms.similarity import cosine
+        from gcws.ms.spectra import extract
+        cache: dict = {}
+
+        def spec(s, peaks, k, i):
+            ck = (s.id, k, i)
+            if ck not in cache:
+                p = peaks[i]
+                sp = extract(s.run, p, base_key(k), s.delay_value, "average_bg",
+                             override=s.spectrum_overrides.get(round(p.apex_rt, 4)))
+                cache[ck] = sp if sp is not None and sp.ab.size else None
+            return cache[ck]
+
+        def cos(i, j):
+            a, b = spec(st, res.peaks, key, i), spec(bst, bres.peaks, bkey, j)
+            return cosine(a, b) if a is not None and b is not None else None
+        return cos
+
+    def blank_shifts(self, st: RunState, base: str = TIC) -> list[tuple[str, float]]:
+        """``[(blank id, shift)]`` aligning each blank of ``st`` on the ``base`` trace (cached)."""
+        from gcws.signal import blank as B
+        from gcws.signal.align import Alignment
+        known = {a.blank: a.shift for a in st.blank_alignment.get(base, [])}
+        sample = st.run.signal(base)
+        out, new = [], []
+        for b in self.blank_ids(st):
+            bst = self.runs[b]
+            if bst.name in known:
+                out.append((b, known[bst.name]))
+                continue
+            bsig = bst.run.signal(base)
+            if sample is None or bsig is None:
+                continue
+            sres, bres = self.result(st.id, base), self.result(b, base)
+            apexes = ([p.apex_rt for p in sres.peaks], [p.apex_rt for p in bres.peaks]) if sres and bres else None
+            shift, quality, method = B.align(sample, bsig, self.blank_options(), None, apexes)
+            out.append((b, shift))
+            new.append(Alignment(shift, quality, method, bst.name))
+        if new:
+            st.blank_alignment.setdefault(base, []).extend(new)
+        return out
+
+    def blank_spectrum(self, st: RunState, scans) -> tuple:
+        """Mean spectrum of ``st``'s blanks at the times of ``scans`` (aligned, scaled): (mz, ab)."""
+        import numpy as np
+        ms = st.run.ms
+        parts = []
+        for b, shift in self.blank_shifts(st, TIC):
+            bms = self.runs[b].run.ms
+            if bms is None or ms is None:
+                continue
+            bscans = sorted({bms.scan_at_rt(float(ms.rt[s]) - shift) for s in scans})
+            parts.append(bms.nominal_spectrum_arrays(bscans))
+        if not parts:
+            return np.zeros(0, np.int64), np.zeros(0)
+        masses = np.unique(np.concatenate([p[0] for p in parts]))
+        acc = np.zeros(masses.size)
+        for mz, ab in parts:
+            acc[np.searchsorted(masses, mz)] += ab
+        return masses, acc / len(parts) * self.blank_options().scale
+
+    def blank_level_peaks(self, run_id: str) -> set[int]:
+        st = self.runs.get(run_id)
+        if st is None or not self.blank_ids(st) or is_derived(self.signal_key):
+            return set()
+        return {i for i, m in self.blank_matches(run_id).items() if m.status == "blank"}
 
     def suggest_replicate_groups(self) -> list[list[str]]:
         names = {s.id: s.run.path.name for s in self.states()}

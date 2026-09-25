@@ -85,6 +85,11 @@ class PeakTable(QWidget):
         cols = tb.addAction("Columns...")
         cols.setToolTip("Choose and order the table columns")
         cols.triggered.connect(self.choose_columns)
+        self.hide_blank = tb.addAction("Hide blank peaks")
+        self.hide_blank.setCheckable(True)
+        self.hide_blank.setToolTip("Hide peaks that are at blank level (sample area below the ratio limit "
+                                   "x the blank peak's area)")
+        self.hide_blank.toggled.connect(self._hide_blank_toggled)
         self.filter = QLineEdit()
         self.filter.setPlaceholderText("Filter...")
         self.filter.setClearButtonEnabled(True)
@@ -111,7 +116,7 @@ class PeakTable(QWidget):
 
         self._restore_columns()
         self._syncing = False
-        for sig in (ws.activeRunChanged, ws.signalKeyChanged, ws.identsChanged, ws.quantChanged):
+        for sig in (ws.activeRunChanged, ws.signalKeyChanged, ws.identsChanged, ws.quantChanged, ws.runChanged):
             sig.connect(lambda *_: self.reload())
         ws.resultChanged.connect(self._on_result)
         ws.selectionChanged.connect(self._on_selection)
@@ -122,19 +127,29 @@ class PeakTable(QWidget):
     # -- data ----------------------------------------------------------------
 
     def _on_result(self, run_id, key):
-        if run_id == self.ws.active_id and key == self.ws.signal_key:
+        st = self.ws.active
+        if st is None:
+            return
+        if (run_id == st.id and key == self.ws.signal_key) or run_id in st.blanks + st.blanks_istd:
             self.reload()
 
     def reload(self):
         self._syncing = True
         self.model.reload()
         self._syncing = False
+        self.proxy.invalidateFilter()
+        self._update_info()
+        self._on_selection(self.ws.active_id, self.ws.selected)
+
+    def _update_info(self):
         n = len(self.model.rows)
         idn = sum(1 for r in self.model.rows if r.ident and r.ident.name and
                   not r.ident.name.lower().startswith("unknown"))
         extra = f"  •  {len(self.model.orphans)} orphaned IDs" if self.model.orphans else ""
+        hidden = n - self.proxy.rowCount() if self.proxy.hide_predicate is not None else 0
+        if hidden:
+            extra += f"  •  {hidden} blank peaks hidden"
         self.info.setText(f"{n} peaks  •  {idn} identified{extra}")
-        self._on_selection(self.ws.active_id, self.ws.selected)
 
     def _row_changed(self, current, previous):
         if self._syncing or not current.isValid():
@@ -202,6 +217,20 @@ class PeakTable(QWidget):
         m.addSeparator()
         m.addAction("Choose columns...").triggered.connect(self.choose_columns)
         m.exec(self.view.viewport().mapToGlobal(pos))
+
+    def _hide_blank_toggled(self, on):
+        if on:
+            def hidden(row):
+                st = self.ws.active
+                if st is None:
+                    return False
+                m = self.ws.blank_matches(st.id).get(row)
+                return m is not None and m.status == "blank"
+            self.proxy.hide_predicate = hidden
+        else:
+            self.proxy.hide_predicate = None
+        self.proxy.invalidateFilter()
+        self._update_info()
 
     def set_context_actions(self, actions) -> None:
         self.context_actions = list(actions)

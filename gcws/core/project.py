@@ -54,6 +54,7 @@ def to_dict(ws, project_path: Path) -> dict:
             "role": st.role,
             "blanks": st.blanks,
             "blanks_istd": st.blanks_istd,
+            "blanks_manual": st.blanks_manual,
             "methods": {k: m.to_dict() for k, m in st.methods.items()},
             "manual": {k: [e.to_dict() for e in v] for k, v in st.manual.items() if v},
             "identifications": {k: s.to_list() for k, s in st.idents.items() if s.items},
@@ -123,6 +124,7 @@ def apply_run_state(st, entry: dict) -> list[str]:
     st.run.role = entry.get("role", st.run.role)
     st.blanks = list(entry.get("blanks", []))
     st.blanks_istd = list(entry.get("blanks_istd", []))
+    st.blanks_manual = bool(entry.get("blanks_manual", False))
     if entry.get("name") and st.run.meta is not None and entry["name"] != st.run.meta.display_name:
         st.run.meta.sample_name = entry["name"]
     for kind, md in (entry.get("methods") or {}).items():

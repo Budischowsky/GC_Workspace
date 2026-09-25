@@ -177,6 +177,12 @@ class MainWindow(QMainWindow):
         self.signal_box.setMinimumWidth(110)
         self.signal_box.activated.connect(self._signal_picked)
         tb.addWidget(self.signal_box)
+        self.a_blank = QAction("− Blank", self)
+        self.a_blank.setCheckable(True)
+        self.a_blank.setToolTip("Show and integrate the chromatogram minus its assigned blank "
+                                "(settings: Quantify > Blank subtraction settings)")
+        self.a_blank.toggled.connect(self._blank_toggled)
+        tb.addAction(self.a_blank)
         tb.addSeparator()
         tb.addAction(self.a_integrate)
         tb.addAction(self.a_search)
@@ -258,6 +264,7 @@ class MainWindow(QMainWindow):
         for role, label in ROLE_LABELS.items():
             roles.addAction(label, lambda r=role: self.ws.active_id and self.set_role(self.ws.active_id, r))
         self.quant_menu.addAction("Assign blanks...", lambda: self.ws.active_id and self.assign_blanks(self.ws.active_id))
+        self.quant_menu.addAction("Blank subtraction settings...", self.edit_blank_options)
         self.quant_menu.addAction(self.setIstdAction)
         self.quant_menu.addSeparator()
         self.quant_menu.addAction("Quantification panel", lambda: self._show_dock("quant"))
@@ -322,6 +329,7 @@ class MainWindow(QMainWindow):
         self.ws.runRemoved.connect(lambda *_: self._refresh_signals())
         self.ws.activeRunChanged.connect(lambda *_: self._refresh_signals())
         self.ws.signalKeyChanged.connect(lambda *_: self._refresh_signals())
+        self.ws.runChanged.connect(lambda *_: self._refresh_signals())
         self.run_tabs.closeRequested.connect(self.close_run)
         self.run_tabs.roleRequested.connect(self.set_role)
         self.run_tabs.blanksRequested.connect(self.assign_blanks)
@@ -380,6 +388,36 @@ class MainWindow(QMainWindow):
             self.signal_box.addItem("EIC ...")
         self.signal_box.setCurrentText(self.ws.signal_key)
         self.signal_box.blockSignals(False)
+        from gcws.core.keys import is_derived
+        st = self.ws.active
+        self.a_blank.blockSignals(True)
+        self.a_blank.setChecked(is_derived(self.ws.signal_key))
+        self.a_blank.setEnabled(bool(st is not None and self.ws.blank_ids(st)) or is_derived(self.ws.signal_key))
+        self.a_blank.blockSignals(False)
+
+    def _blank_toggled(self, on):
+        from gcws.core.keys import base_key, derived_key
+        key = derived_key(self.ws.signal_key) if on else base_key(self.ws.signal_key)
+        if key != self.ws.signal_key:
+            if on and self.ws.active is not None and self.ws.active.run.signal(key) is None:
+                self.a_blank.blockSignals(True)
+                self.a_blank.setChecked(False)
+                self.a_blank.blockSignals(False)
+                self.statusBar().showMessage("No blank assigned to this chromatogram (Quantify > Assign blanks)",
+                                             6000)
+                return
+            self.ws.set_signal_key(key)
+
+    def edit_blank_options(self):
+        import copy
+        from gcws.ui.dialogs.blank import BlankOptionsDialog
+        dlg = BlankOptionsDialog(self.ws.blank_options(), self)
+        if dlg.exec() != BlankOptionsDialog.Accepted:
+            return
+        q = copy.deepcopy(self.ws.quant)
+        q["blank_sub"] = dlg.options().to_dict()
+        if q.get("blank_sub") != self.ws.quant.get("blank_sub"):
+            self.ws.push_quant("blank subtraction settings", q, "blank subtraction")
 
     def _signal_picked(self, i):
         text = self.signal_box.itemText(i)
@@ -511,6 +549,7 @@ class MainWindow(QMainWindow):
             if s is not None:
                 s.run.role = v
                 self.ws._suggest_blanks()
+                self.ws.invalidate_blank([rid])
                 self.ws.runChanged.emit(rid)
                 self.ws.quantChanged.emit()
 
@@ -530,16 +569,19 @@ class MainWindow(QMainWindow):
 
         def getter(rid=run_id):
             s = self.ws.runs[rid]
-            return (list(s.blanks), list(s.blanks_istd))
+            return (list(s.blanks), list(s.blanks_istd), s.blanks_manual)
 
         def setter(v, rid=run_id):
             s = self.ws.runs.get(rid)
             if s is not None:
                 s.blanks, s.blanks_istd = list(v[0]), list(v[1])
+                s.blanks_manual = bool(v[2]) if len(v) > 2 else True
+                self.ws.invalidate_blank([rid])
                 self.ws.runChanged.emit(rid)
                 self.ws.quantChanged.emit()
 
         names = lambda ids: ", ".join(self.ws.runs[i].name for i in ids if i in self.ws.runs)
+        new = (list(new[0]), list(new[1]), True)          # the analyst's choice: never re-suggested
         st.undo.push(ValueCommand(f"blanks of {st.name}", getter, setter, new,
                                   lambda t, o, n: self.ws.log(t, st.name, "", f"{names(o[0])} | {names(o[1])}",
                                                               f"{names(n[0])} | {names(n[1])}")))
@@ -955,6 +997,8 @@ class MainWindow(QMainWindow):
         self._pending_project = None
         order = [e["id"] for e in data.get("runs", []) if e["id"] in self.ws.runs]
         self.ws.reorder(order + [i for i in self.ws.order if i not in order])
+        # runs load in parallel: blank-subtracted traces are rebuilt once every blank is in
+        self.ws.invalidate_blank(None)
         changed = []
         for st in self.ws.states():
             for key, dig in st.saved_digests.items():
