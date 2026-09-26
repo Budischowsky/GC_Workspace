@@ -105,3 +105,39 @@ def test_triplicate_nias_report(samples, qapp, tmp_path):
     means = [r[3] for r in ws3.iter_rows(min_row=2, values_only=True) if isinstance(r[3], (int, float))]
     assert means, "N-fold mean must be written as values"
     assert "Bestimmung_3" in wb.sheetnames
+
+
+def _small_pdf(path, pages=2):
+    from PySide6.QtGui import QPageSize, QPainter, QPdfWriter
+    writer = QPdfWriter(str(path))
+    writer.setPageSize(QPageSize(QPageSize.A5))
+    painter = QPainter(writer)
+    for i in range(pages):
+        if i:
+            writer.newPage()
+        painter.drawText(200, 400, f"page {i + 1}")
+    painter.end()
+    return path
+
+
+def test_render_pages_gives_qimages(qapp, tmp_path):
+    pytest.importorskip("pypdfium2")
+    from PySide6.QtGui import QImage
+    from gcws.report.service import render_pages
+    pages = render_pages(_small_pdf(tmp_path / "x.pdf"), scale=0.5)
+    assert len(pages) == 2
+    assert all(isinstance(p, QImage) and not p.isNull() and p.width() > 50 for p in pages)
+    # the page is white with some dark text pixels
+    img = pages[0]
+    assert img.pixelColor(2, 2).lightness() > 240
+
+
+def test_preview_dialog_shows_warnings(qapp, tmp_path):
+    from gcws.report.service import render_pages
+    from gcws.ui.dialogs.report_preview import ReportPreview
+    pages = render_pages(_small_pdf(tmp_path / "x.pdf", 1), scale=0.5)
+    dlg = ReportPreview("t", {"xlsx": tmp_path / "r.xlsx"}, pages, warnings=["Register not updated: x"])
+    assert "Register not updated" in dlg.notes.text() and not dlg.notes.isHidden()
+    assert dlg.col.count() == 1
+    empty = ReportPreview("t", {"xlsx": tmp_path / "r.xlsx"}, [], warnings=[])
+    assert "No page images" in empty.notes.text()

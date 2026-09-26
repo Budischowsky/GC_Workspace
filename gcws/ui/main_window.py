@@ -945,7 +945,7 @@ class MainWindow(QMainWindow):
             from gcws.ui.dialogs.report_preview import ReportPreview
             dlg = ReportPreview(f"{RS.KINDS[kind]} - preview", {"xlsx": res.target, "docx": res.word,
                                                                "batch": res.batch, "default": res.target.name},
-                                pages, self)
+                                pages, self, warnings=res.warnings)
             if dlg.exec() and dlg.saved_to is not None:
                 err = RS.record_seen(kind, res.reported, dlg.saved_to, job.sample_key)
                 self.statusBar().showMessage(f"Saved {dlg.saved_to}" + (f" ({err})" if err else ""), 8000)
@@ -985,6 +985,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Saved {path}", 5000)
 
     def open_project(self, path=None):
+        if not isinstance(path, (str, Path)):        # QAction.triggered passes its checked state
+            path = None
         if path is None:
             fn, _ = QFileDialog.getOpenFileName(self, "Open project", self.tree.root,
                                                 "GC Workspace project (*.gcws)")

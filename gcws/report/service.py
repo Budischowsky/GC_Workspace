@@ -199,10 +199,18 @@ def docx_to_pdf(docx: Path, pdf: Path) -> Path:
 
 
 def render_pages(pdf: Path, scale: float = 1.5) -> list:
-    """PIL images of every page (pypdfium2)."""
+    """``QImage`` of every page (pypdfium2; needs numpy only, not Pillow)."""
+    import numpy as np
     import pypdfium2
+    from PySide6.QtGui import QImage
     doc = pypdfium2.PdfDocument(str(pdf))
+    pages = []
     try:
-        return [doc[i].render(scale=scale).to_pil() for i in range(len(doc))]
+        for i in range(len(doc)):
+            bitmap = doc[i].render(scale=scale, rev_byteorder=True)      # RGB byte order
+            arr = np.ascontiguousarray(bitmap.to_numpy()[:, :, :3])
+            h, w = arr.shape[:2]
+            pages.append(QImage(arr.data, w, h, 3 * w, QImage.Format_RGB888).copy())
     finally:
         doc.close()
+    return pages

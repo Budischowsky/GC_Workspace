@@ -8,6 +8,27 @@ import sys
 ROOT = Path(__file__).resolve().parent
 
 
+#: which optional features work on this PC (report preview: Word over COM, pypdfium2, Pillow)
+OPTIONAL_CHECK = r"""
+def ok(label, test):
+    try:
+        test()
+        print(f"  [ok]      {label}")
+    except Exception as exc:
+        print(f"  [missing] {label}: {exc}")
+
+def word():
+    import winreg
+    winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, "Word.Application").Close()
+
+print("Optional features:")
+ok("pywin32 (Word -> PDF for the report preview)", lambda: __import__("win32com.client"))
+ok("Microsoft Word (report preview)", word)
+ok("pypdfium2 (report preview pages)", lambda: __import__("pypdfium2"))
+ok("Pillow (images)", lambda: __import__("PIL.Image"))
+"""
+
+
 def setup():
     if sys.version_info < (3, 12):
         raise RuntimeError("Python 3.12 or newer is required (3.14 recommended).")
@@ -35,6 +56,7 @@ def setup():
                     "from gcws import paths; paths.initialize(); print('data folder:', paths.DATA)"],
                    check=True, cwd=str(ROOT))
     marker.write_text(json.dumps(identity, indent=2), encoding="utf-8")
+    subprocess.run([str(python), "-c", OPTIONAL_CHECK], check=False, cwd=str(ROOT))
     try:
         sys.path.insert(0, str(ROOT))
         import gcws  # noqa: F401

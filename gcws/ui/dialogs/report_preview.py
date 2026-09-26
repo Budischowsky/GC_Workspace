@@ -11,15 +11,18 @@ from PySide6.QtWidgets import (QDialog, QFileDialog, QHBoxLayout, QLabel, QPushB
                                QVBoxLayout, QWidget)
 
 
-def _qimage(pil):
-    pil = pil.convert("RGB")
+def _qimage(page):
+    """A page as ``QImage`` (already one, or a PIL image)."""
+    if isinstance(page, QImage):
+        return page
+    pil = page.convert("RGB")
     data = pil.tobytes("raw", "RGB")
     img = QImage(data, pil.width, pil.height, pil.width * 3, QImage.Format_RGB888)
     return img.copy()
 
 
 class ReportPreview(QDialog):
-    def __init__(self, title, files: dict, pages: list, parent=None):
+    def __init__(self, title, files: dict, pages: list, parent=None, warnings=None):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.resize(980, 1000)
@@ -47,10 +50,16 @@ class ReportPreview(QDialog):
         bar.addWidget(save)
         lay = QVBoxLayout(self)
         lay.addLayout(bar)
-        lay.addWidget(self.area, 1)
+        notes = list(warnings or [])
         if not self.images:
-            self.col.addWidget(QLabel("No page images (Word or pypdfium2 not available). "
-                                      "Use 'Open in Word' to look at the report."))
+            notes.insert(0, "No page images: the preview needs Microsoft Word and pypdfium2. "
+                            "Use 'Open in Word' to look at the report.")
+        self.notes = QLabel("\n".join(notes))
+        self.notes.setWordWrap(True)
+        self.notes.setObjectName("warning")
+        self.notes.setVisible(bool(notes))
+        lay.addWidget(self.notes)
+        lay.addWidget(self.area, 1)
         self._render()
         self.saved_to = None
 
