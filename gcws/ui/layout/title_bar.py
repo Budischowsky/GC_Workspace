@@ -14,8 +14,6 @@ from PySide6.QtWidgets import QDockWidget, QHBoxLayout, QLabel, QToolButton, QWi
 
 from gcws.ui.icons import icon
 
-ICON_DARK = "#124658"          # = theme.ACCENT_PRESSED
-ICON_LIGHT = "#FFFFFF"
 
 
 class DockTitleBar(QWidget):
@@ -23,6 +21,8 @@ class DockTitleBar(QWidget):
         super().__init__(parent or dock)
         self.dock = dock
         self.on_maximize = on_maximize
+        from gcws.ui import theme
+        theme.notifier().changed.connect(self._theme_changed)      # dropped with this widget
         self.active = False
         self.maximized = False
         self.setObjectName("dockTitle")
@@ -63,12 +63,19 @@ class DockTitleBar(QWidget):
             w.style().polish(w)
         self.update_buttons()
 
+    def _theme_changed(self, _dark: bool = False) -> None:
+        try:
+            self.update_buttons()
+        except RuntimeError:                  # the dock is already gone
+            pass
+
     def set_maximized(self, on: bool) -> None:
         self.maximized = bool(on)
         self.update_buttons()
 
     def update_buttons(self) -> None:
-        color = ICON_LIGHT if self.active else ICON_DARK
+        from gcws.ui import theme
+        color = theme.ON_ACCENT if self.active else theme.ACCENT_TEXT     # on the title's background
         feats = self.dock.features()
         floating = self.dock.isFloating()
         self.b_max.setIcon(icon("panel-restore" if self.maximized else "panel-maximize", color))

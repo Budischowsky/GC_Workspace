@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import numpy as np
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout,
                                QHBoxLayout, QHeaderView, QLabel, QMessageBox, QPushButton, QRadioButton,
                                QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
@@ -136,7 +135,8 @@ class CompoundReview(QDialog):
                 cell = QTableWidgetItem("" if v is None else str(v))
                 cell.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                 if c == 5 and v is not None and float(v) < min_score:
-                    cell.setForeground(QColor("#b03a2e"))
+                    from gcws.ui import theme
+                    cell.setForeground(theme.status_color("bad"))
                 self.peaks.setItem(r, c, cell)
         self.peaks.resizeColumnsToContents()
         self.peaks.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)

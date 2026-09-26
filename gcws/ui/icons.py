@@ -4,7 +4,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
+from PySide6.QtGui import QColor, QIcon, QIconEngine, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 
 S = 32
 
@@ -32,19 +32,63 @@ def _pen(color="#303030", w=2.0, style=Qt.SolidLine):
     return pen
 
 
-ACCENT = "#1F6F8B"          # = theme.ACCENT (kept literal: icons must not import widgets)
+ACCENT = "#1F6F8B"          # the light theme's accent; icons asking for it follow the current theme
+
+#: current colours, set by ``theme.set_mode`` (outline, fill, accent)
+INK, PAPER, CURRENT_ACCENT = "#33424D", "#FFFFFF", ACCENT
+
+
+def set_colors(ink: str, paper: str, accent: str) -> None:
+    global INK, PAPER, CURRENT_ACCENT
+    INK, PAPER, CURRENT_ACCENT = ink, paper, accent
+
+
+class _ThemedIcon(QIconEngine):
+    """Draws the icon in the colours of the moment, so a theme switch needs no new icons."""
+
+    def __init__(self, name: str, color):
+        super().__init__()
+        self.name, self.color = name, color
+
+    def _pixmap(self):
+        color = CURRENT_ACCENT if self.color in (None, ACCENT) else self.color
+        return _render(self.name, color, INK, PAPER)
+
+    def pixmap(self, size, mode, state):
+        pm = self._pixmap().scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        if mode == QIcon.Disabled:
+            faded = QPixmap(pm.size())
+            faded.fill(Qt.transparent)
+            qp = QPainter(faded)
+            qp.setOpacity(0.35)
+            qp.drawPixmap(0, 0, pm)
+            qp.end()
+            return faded
+        return pm
+
+    def paint(self, painter, rect, mode, state):
+        painter.drawPixmap(rect, self.pixmap(rect.size(), mode, state))
+
+    def clone(self):
+        return _ThemedIcon(self.name, self.color)
 
 
 @lru_cache(maxsize=None)
-def icon(name: str, color: str = ACCENT) -> QIcon:
+def icon(name: str, color: str | None = None) -> QIcon:
+    """The icon ``name``; ``color`` is its accent (default: the theme's accent)."""
+    return QIcon(_ThemedIcon(name, color))
+
+
+@lru_cache(maxsize=None)
+def _render(name: str, color: str, ink: str, paper: str) -> QPixmap:
     pm, qp = _canvas()
-    dark = "#33424D"
+    dark = ink
     accent = QColor(color)
     if name == "select":
         poly = QPolygonF([QPointF(9, 5), QPointF(9, 25), QPointF(14, 20), QPointF(18, 28),
                           QPointF(21, 27), QPointF(17, 19), QPointF(24, 19)])
         qp.setPen(_pen(dark, 1.5))
-        qp.setBrush(QColor("white"))
+        qp.setBrush(QColor(paper))
         qp.drawPolygon(poly)
     elif name == "zoom":
         qp.setPen(_pen(dark, 2.5))
@@ -166,7 +210,7 @@ def icon(name: str, color: str = ACCENT) -> QIcon:
             qp.drawLine(QPointF(24, 8), QPointF(8, 24))
     elif name == "report":
         qp.setPen(_pen(dark, 1.5))
-        qp.setBrush(QColor("white"))
+        qp.setBrush(QColor(paper))
         qp.drawRect(QRectF(7, 3, 18, 26))
         qp.setPen(_pen(color, 1.5))
         for y in (9, 14, 19, 24):
@@ -175,7 +219,7 @@ def icon(name: str, color: str = ACCENT) -> QIcon:
         qp.setPen(_pen(dark, 2))
         qp.drawEllipse(QRectF(6, 6, 20, 20))
     qp.end()
-    return QIcon(pm)
+    return pm
 
 
 def color_chip(color: str, size: int = 12) -> QIcon:

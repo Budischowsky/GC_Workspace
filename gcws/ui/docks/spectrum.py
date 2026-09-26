@@ -39,7 +39,14 @@ class StickPlot(pg.PlotWidget):
         self.setToolTip("Click an ion to show its extracted ion chromatogram; drag to zoom, double-click resets")
         self.texts = []
         self._mz = np.zeros(0)
+        self._last = None                           # the last drawing, redrawn on a theme switch
         self.scene().sigMouseClicked.connect(self._clicked)
+        theme.register_plot(self, self._redraw)
+
+    def _redraw(self):
+        if self._last is not None:
+            args, kw = self._last
+            self.show_spectrum(*args, **kw)
 
     def _clicked(self, ev):
         if ev.button() != Qt.LeftButton or ev.double() or self._mz.size == 0:
@@ -53,6 +60,7 @@ class StickPlot(pg.PlotWidget):
 
     def show_spectrum(self, mz, ab, ref=None, title="", marks=None):
         """``marks``: optional {m/z: (label, level)} drawn above the bars (interpretation)."""
+        self._last = ((mz, ab), dict(ref=ref, title=title, marks=marks))
         self.clear()
         for t in self.texts:
             self.removeItem(t)
@@ -219,6 +227,7 @@ class SpectrumDock(QWidget):
         self.scan_plot.setMenuEnabled(False)
         self.scan_plot.setMaximumHeight(140)
         self.scan_plot.setLabel("bottom", "MS RT", units="min")
+        theme.register_plot(self.scan_plot, self._scan_theme)
         self.apex_reg = pg.LinearRegionItem(brush=pg.mkBrush(theme.qcolor(theme.PLOT["apex_region"], 50)))
         self.bg_reg = pg.LinearRegionItem(brush=pg.mkBrush(theme.qcolor(theme.PLOT["bg_region"], 40)))
         self.scan_curve = pg.PlotDataItem(pen=pg.mkPen(theme.PLOT["secondary"]))
@@ -716,6 +725,11 @@ class SpectrumDock(QWidget):
             self.own_menu.addAction("(no library - add one under Identify > Libraries...)").setEnabled(False)
         self.own_menu.addSeparator()
         self.own_menu.addAction("Options...", lambda: OS.OwnSearchOptionsDialog(self).exec())
+
+    def _scan_theme(self):
+        self.apex_reg.setBrush(pg.mkBrush(theme.qcolor(theme.PLOT["apex_region"], 50)))
+        self.bg_reg.setBrush(pg.mkBrush(theme.qcolor(theme.PLOT["bg_region"], 40)))
+        self.scan_curve.setPen(pg.mkPen(theme.PLOT["secondary"]))
 
     def _emit(self, signal):
         pts = self.points()

@@ -135,6 +135,7 @@ class ChromPanel(QWidget):
         self.vb.addItem(self.cursor_label, ignoreBounds=True)
         self.plot.scene().sigMouseMoved.connect(self._mouse_moved)
         self._markers = None
+        theme.register_plot(self.plot, self._theme_changed)
         self._fit = QTimer(self)
         self._fit.setSingleShot(True)
         self._fit.setInterval(0)
@@ -392,6 +393,17 @@ class ChromPanel(QWidget):
         elif key == self.ws.active_key:
             self.refresh_active()            # the selection maps onto the table's peaks
 
+    def _theme_changed(self):
+        """Dark / light switch: the items that took their colours when made, then a redraw."""
+        self.cursor.setPen(_pen(theme.PLOT["cursor"], 1, 140, Qt.DotLine))
+        self.cursor_label.setColor(theme.PLOT["cursor_text"])
+        pen = QPen(QColor(theme.PLOT["baseline"]))
+        pen.setCosmetic(True)
+        pen.setWidthF(1.5)
+        pen.setStyle(Qt.DashLine)
+        self.vb.preview.setPen(pen)
+        self.refresh()
+
     def refresh_active(self):
         st = self.ws.active
         k = self.run_key(st) if st is not None else self.key
@@ -495,7 +507,7 @@ class ChromPanel(QWidget):
         for c in comps:
             x = c.rt + shift
             spots.append({"pos": (x, float(np.interp(x, xs, ys))), "data": c, "symbol": "t", "size": 11,
-                          "brush": pg.mkBrush(theme.qcolor(theme.WARN, 200)), "pen": pg.mkPen("w", width=0.8)})
+                          "brush": pg.mkBrush(theme.qcolor(theme.WARN, 200)), "pen": pg.mkPen(theme.PLOT["bg"], width=0.8)})
         tip = (lambda x, y, data: f"Deconvoluted component without a peak\n{data.rt:.3f} min (MS), model m/z "
                f"{data.model_mz}, quality {data.quality:.0f}\nclick: its spectrum")
         self._markers = pg.ScatterPlotItem(spots=spots, hoverable=True, tip=tip)

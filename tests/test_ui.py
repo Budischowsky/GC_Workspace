@@ -1076,3 +1076,62 @@ def test_processing_method_save_and_load(qtbot, win, samples, tmp_path, monkeypa
     load.import_file(str(tmp_path / "shared.json"))
     assert PM.names() == ["NIAS EtOH"]
     ws.methods.set_default("FID", None)
+
+
+def _contrast(a, b) -> float:
+    from PySide6.QtGui import QColor
+
+    def lum(c):
+        c = QColor(c)
+        ch = []
+        for v in (c.redF(), c.greenF(), c.blueF()):
+            ch.append(v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4)
+        return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2]
+    hi, lo = sorted((lum(a), lum(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def test_dark_mode(qtbot, win, samples, tmp_path):
+    from PySide6.QtCore import QSettings, QSize
+    from PySide6.QtGui import QImage, QPalette
+    from PySide6.QtWidgets import QApplication
+    from gcws.ui import icons, theme
+    from gcws.ui.dialogs import export_chrom as E
+    app = QApplication.instance()
+    _load(qtbot, win, samples, ["07_"])
+    st = win.ws.active
+    light_color = st.color
+    before = icons.icon("zoom").pixmap(QSize(32, 32)).toImage()
+    try:
+        win.a_dark.setChecked(True)
+        assert theme.is_dark() and QSettings().value("prefs/dark_mode", False, type=bool)
+        pal = app.palette()
+        assert pal.color(QPalette.Window).name().lower() == theme.DARK["BG"].lower()
+        assert theme.DARK["ACCENT"].lower() in app.styleSheet().lower()
+        # every text stays readable, buttons included (WCAG AA: 4.5:1)
+        for fg, bg in ((theme.TEXT, theme.BG), (theme.TEXT, theme.SURFACE), (theme.TEXT, theme.SURFACE_ALT),
+                       (theme.MUTED, theme.BG), (theme.MUTED, theme.SURFACE), (theme.ACCENT_TEXT, theme.ACCENT_SOFT),
+                       (theme.ACCENT_TEXT, theme.ACCENT_SOFT2), (theme.ON_ACCENT, theme.ACCENT),
+                       (theme.ON_ACCENT, theme.ACCENT_HOVER), (theme.TEXT, theme.ACCENT_SOFT2),
+                       (theme.PLOT["fg"], theme.PLOT["bg"]), (theme.PLOT["label"], theme.PLOT["bg"])):
+            assert _contrast(fg, bg) >= 4.5, (fg, bg)
+        for level in ("ok", "warn", "bad", "info", "neutral"):
+            fg, soft = theme.LEVELS[level]
+            assert _contrast(fg, soft) >= 4.5 and _contrast(fg, theme.SURFACE) >= 4.5, level
+        assert _contrast(theme.BORDER_STRONG, theme.SURFACE) >= 1.8          # button outlines are visible
+        # plots, icons and run colours follow
+        assert win.chrom.plot.backgroundBrush().color().name().lower() == theme.DARK["PLOT"]["bg"].lower()
+        assert st.color == theme.DARK["RUN_COLORS"][theme.LIGHT["RUN_COLORS"].index(light_color)]
+        assert icons.icon("zoom").pixmap(QSize(32, 32)).toImage() != before
+        # a picture for a report stays white
+        out = E.export([win.chrom], tmp_path / "dark.png", 600, 200)
+        img = QImage(str(out))
+        assert img.pixelColor(3, img.height() - 3).lightness() > 240
+        assert theme.is_dark() and win.chrom.plot.backgroundBrush().color().name().lower() == \
+            theme.DARK["PLOT"]["bg"].lower()
+    finally:
+        win.a_dark.setChecked(False)
+    assert not theme.is_dark() and st.color == light_color
+    assert app.palette().color(QPalette.Window).name().lower() == theme.LIGHT["BG"].lower()
+    for fg, bg in ((theme.TEXT, theme.SURFACE), (theme.ACCENT_TEXT, theme.ACCENT_SOFT), (theme.ON_ACCENT, theme.ACCENT)):
+        assert _contrast(fg, bg) >= 4.5

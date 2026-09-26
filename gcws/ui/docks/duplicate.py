@@ -173,6 +173,7 @@ class DuplicatePage(QWidget):
         self._fit_timer.setInterval(0)
         self._fit_timer.timeout.connect(self._fit_y)
         vb.sigXRangeChanged.connect(lambda *_: self._fit_timer.start())
+        theme.register_plot(self.mirror, lambda: self._draw_mirror() if self.members else None)
         self.mirror.scene().sigMouseClicked.connect(lambda ev: self.full_view() if ev.double() else None)
         self.mirror.setToolTip("A up, B down, in FID signal units. Wheel or drag: time; double-click: "
                                "whole chromatogram")

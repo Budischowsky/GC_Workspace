@@ -1,4 +1,4 @@
-"""The application look: one light theme with a single calm accent.
+"""The application look: a light and a dark theme with a single calm accent.
 
 Everything that has a colour takes it from here: the Qt palette and style
 sheet, the plots, status colours in tables and the run colours. Widgets mark
@@ -7,62 +7,96 @@ muted helper text with ``setObjectName("hint")`` and primary actions with
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Qt
+from PySide6.QtCore import QObject, Qt, Signal as QtSignal
 from PySide6.QtGui import QBrush, QColor, QPalette
 from PySide6.QtWidgets import QApplication, QDockWidget, QLabel
 
 # -- tokens --------------------------------------------------------------------
+# Two sets with the same names: LIGHT (default) and DARK. ``set_mode`` loads one into the
+# module names below, so ``theme.ACCENT`` etc. always give the colour of the current mode.
 
-ACCENT = "#1F6F8B"
-ACCENT_HOVER = "#185A71"
-ACCENT_PRESSED = "#124658"
-ACCENT_SOFT = "#E3F0F4"
-ACCENT_SOFT2 = "#C9E1EA"
-BG = "#F3F6F8"
-SURFACE = "#FFFFFF"
-SURFACE_ALT = "#F8FAFB"
-BORDER = "#DCE3E8"
-BORDER_STRONG = "#BFCBD4"
-TEXT = "#1E2A32"
-MUTED = "#5F6F7B"
-FAINT = "#98A6B0"
-
-OK, OK_SOFT = "#1E8E5A", "#E2F3E9"
-WARN, WARN_SOFT = "#B7791F", "#FCF1DA"
-BAD, BAD_SOFT = "#C0392B", "#FBE4E0"
-INFO, INFO_SOFT = "#2563EB", "#E4ECFD"
-NEUTRAL, NEUTRAL_SOFT = "#6B7780", "#EDF0F3"
-ORANGE_SOFT = "#FCE9D6"
-
-LEVELS = {"ok": (OK, OK_SOFT), "warn": (WARN, WARN_SOFT), "bad": (BAD, BAD_SOFT),
-          "info": (INFO, INFO_SOFT), "neutral": (NEUTRAL, NEUTRAL_SOFT), "accent": (ACCENT, ACCENT_SOFT)}
-
-#: run colours: colour-blind-safe (Okabe-Ito first), all dark enough for thin lines on white
-RUN_COLORS = ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#8C564B", "#6A3D9A",
-              "#B8860B", "#E7298A", "#1F3A93", "#11A579", "#A6761D", "#7F3C8D", "#3969AC", "#666666"]
-
-PLOT = {
-    "bg": SURFACE,
-    "fg": "#46555F",
-    "grid_alpha": 0.12,
-    "cursor": ACCENT,
-    "cursor_text": "#35444E",
-    "baseline": "#C0392B",
-    "drop": (90, 102, 112, 160),
-    "manual_fill": (230, 126, 34, 70),
-    "blank_fill": (140, 150, 160, 70),
-    "label": "#33424D",
-    "label_selected": ACCENT_PRESSED,
-    "event": "#7E57C2",
-    "off_region": (120, 130, 140, 26),
-    "spectrum": ACCENT,
-    "reference": "#C0392B",
-    "apex_region": ACCENT,
-    "bg_region": "#C0392B",
-    "secondary": "#46555F",
-    "band": (31, 111, 139, 45),
-    "band_bg": (192, 57, 43, 45),
+LIGHT = {
+    "ACCENT": "#1F6F8B", "ACCENT_HOVER": "#185A71", "ACCENT_PRESSED": "#124658",
+    "ACCENT_SOFT": "#E3F0F4", "ACCENT_SOFT2": "#C9E1EA",
+    "ACCENT_TEXT": "#124658",          # text on the soft accent backgrounds
+    "ON_ACCENT": "#FFFFFF",            # text on the accent colour
+    "BG": "#F3F6F8", "SURFACE": "#FFFFFF", "SURFACE_ALT": "#F8FAFB",
+    "BORDER": "#DCE3E8", "BORDER_STRONG": "#BFCBD4",
+    "TEXT": "#1E2A32", "MUTED": "#5F6F7B", "FAINT": "#98A6B0",
+    "OK": "#1E8E5A", "OK_SOFT": "#E2F3E9", "WARN": "#B7791F", "WARN_SOFT": "#FCF1DA",
+    "BAD": "#C0392B", "BAD_SOFT": "#FBE4E0", "INFO": "#2563EB", "INFO_SOFT": "#E4ECFD",
+    "NEUTRAL": "#6B7780", "NEUTRAL_SOFT": "#EDF0F3", "ORANGE_SOFT": "#FCE9D6",
+    "INK": "#33424D",                  # icon outlines
+    "PAPER": "#FFFFFF",                # icon fills
+    "CHEVRON": "", "CLOSE_ICON": "",   # icon file suffix ("" or "-dark")
+    #: run colours: colour-blind-safe (Okabe-Ito first), all dark enough for thin lines on white
+    "RUN_COLORS": ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#8C564B", "#6A3D9A",
+                   "#B8860B", "#E7298A", "#1F3A93", "#11A579", "#A6761D", "#7F3C8D", "#3969AC", "#666666"],
+    "PLOT": {
+        "bg": "#FFFFFF", "fg": "#46555F", "grid_alpha": 0.12, "cursor": "#1F6F8B", "cursor_text": "#35444E",
+        "baseline": "#C0392B", "drop": (90, 102, 112, 160), "manual_fill": (230, 126, 34, 70),
+        "blank_fill": (140, 150, 160, 70), "label": "#33424D", "label_selected": "#124658", "event": "#7E57C2",
+        "off_region": (120, 130, 140, 26), "spectrum": "#1F6F8B", "reference": "#C0392B",
+        "apex_region": "#1F6F8B", "bg_region": "#C0392B", "secondary": "#46555F", "band": (31, 111, 139, 45),
+        "band_bg": (192, 57, 43, 45),
+    },
 }
+
+DARK = {
+    "ACCENT": "#4DB6D0", "ACCENT_HOVER": "#6CC6DC", "ACCENT_PRESSED": "#3A9DB6",
+    "ACCENT_SOFT": "#173541", "ACCENT_SOFT2": "#1F4A59",
+    "ACCENT_TEXT": "#A6E1F0", "ON_ACCENT": "#07161B",
+    "BG": "#11171B", "SURFACE": "#192126", "SURFACE_ALT": "#1E272D",
+    "BORDER": "#2B3740", "BORDER_STRONG": "#465661",
+    "TEXT": "#E4EBEF", "MUTED": "#A0B0BA", "FAINT": "#6C7C86",
+    "OK": "#4CC38A", "OK_SOFT": "#15352A", "WARN": "#E6AE4A", "WARN_SOFT": "#3A2E15",
+    "BAD": "#F2766A", "BAD_SOFT": "#3E201C", "INFO": "#7BA4FF", "INFO_SOFT": "#1B2745",
+    "NEUTRAL": "#A7B4BD", "NEUTRAL_SOFT": "#28333A", "ORANGE_SOFT": "#3C2B1A",
+    "INK": "#D7E1E7", "PAPER": "#2A353C",
+    "CHEVRON": "-dark", "CLOSE_ICON": "-dark",
+    #: the same hues, lighter: thin lines stay visible on the dark plots
+    "RUN_COLORS": ["#56B4E9", "#FF8A4C", "#2FD1A0", "#E890C6", "#F4C04F", "#9AD9FF", "#C99A86", "#B695F0",
+                   "#E0BD55", "#FF6BB0", "#7F9CFF", "#43DDB0", "#D8A860", "#C68ADB", "#78A8FF", "#BDBDBD"],
+    "PLOT": {
+        "bg": "#151C20", "fg": "#B9C6CE", "grid_alpha": 0.16, "cursor": "#4DB6D0", "cursor_text": "#D6E0E6",
+        "baseline": "#FF7A6B", "drop": (170, 182, 190, 160), "manual_fill": (240, 140, 50, 90),
+        "blank_fill": (150, 162, 172, 70), "label": "#D3DDE3", "label_selected": "#A6E1F0", "event": "#B79CFF",
+        "off_region": (200, 210, 220, 22), "spectrum": "#4DB6D0", "reference": "#FF7A6B",
+        "apex_region": "#4DB6D0", "bg_region": "#FF7A6B", "secondary": "#B9C6CE", "band": (77, 182, 208, 55),
+        "band_bg": (242, 118, 106, 55),
+    },
+}
+
+MODE = "light"
+RUN_COLORS: list = []
+PLOT: dict = {}
+LEVELS: dict = {}
+
+
+def _load(tokens: dict) -> None:
+    """Make ``tokens`` the current colours (lists and dicts keep their identity)."""
+    g = globals()
+    for k, v in tokens.items():
+        if k == "PLOT":
+            PLOT.clear()
+            PLOT.update(v)
+        elif k == "RUN_COLORS":
+            RUN_COLORS[:] = v
+        else:
+            g[k] = v
+    LEVELS.clear()
+    LEVELS.update({"ok": (g["OK"], g["OK_SOFT"]), "warn": (g["WARN"], g["WARN_SOFT"]),
+                   "bad": (g["BAD"], g["BAD_SOFT"]), "info": (g["INFO"], g["INFO_SOFT"]),
+                   "neutral": (g["NEUTRAL"], g["NEUTRAL_SOFT"]), "accent": (g["ACCENT"], g["ACCENT_SOFT"])})
+    from gcws.ui import icons
+    icons.set_colors(g["INK"], g["PAPER"], g["ACCENT"])
+
+
+_load(LIGHT)
+
+
+def is_dark() -> bool:
+    return MODE == "dark"
 
 
 def qcolor(value, alpha: int | None = None) -> QColor:
@@ -129,7 +163,8 @@ def _icon_url(name: str) -> str:
 
 
 def qss() -> str:
-    down, up, close = _icon_url("chevron-down.svg"), _icon_url("chevron-up.svg"), _icon_url("close.svg")
+    down, up = _icon_url(f"chevron-down{CHEVRON}.svg"), _icon_url(f"chevron-up{CHEVRON}.svg")
+    close = _icon_url(f"close{CLOSE_ICON}.svg")
     return f"""
 QMainWindow, QDialog {{ background: {BG}; }}
 QWidget {{ color: {TEXT}; }}
@@ -139,8 +174,8 @@ QMainWindow::separator {{ background: {BG}; width: 5px; height: 5px; }}
 QMainWindow::separator:hover {{ background: {ACCENT_SOFT2}; }}
 QWidget#dockTitle {{ background: {ACCENT_SOFT}; border-left: 3px solid {ACCENT_SOFT2}; }}
 QWidget#dockTitle[active="true"] {{ background: {ACCENT}; border-left: 3px solid {ACCENT_PRESSED}; }}
-QLabel#dockTitleText {{ color: {ACCENT_PRESSED}; font-weight: 600; background: transparent; }}
-QWidget#dockTitle[active="true"] QLabel#dockTitleText {{ color: white; }}
+QLabel#dockTitleText {{ color: {ACCENT_TEXT}; font-weight: 600; background: transparent; }}
+QWidget#dockTitle[active="true"] QLabel#dockTitleText {{ color: {ON_ACCENT}; }}
 QToolButton#dockButton {{ border: 1px solid transparent; border-radius: 4px; padding: 2px; margin: 0;
     background: transparent; }}
 QToolButton#dockButton:hover {{ background: {ACCENT_SOFT2}; border-color: {ACCENT_SOFT2}; }}
@@ -149,10 +184,10 @@ QWidget#dockTitle[active="true"] QToolButton#dockButton:hover {{ background: {AC
     border-color: {ACCENT_SOFT2}; }}
 QWidget#dockTitle[active="true"] QToolButton#dockButton[role="close"]:hover {{ background: {BAD}; }}
 QDockWidget::title {{
-    background: {ACCENT_SOFT}; color: {ACCENT_PRESSED}; padding: 5px 8px 5px 10px;
+    background: {ACCENT_SOFT}; color: {ACCENT_TEXT}; padding: 5px 8px 5px 10px;
     border-left: 3px solid {ACCENT_SOFT2}; font-weight: 600; text-align: left;
 }}
-QDockWidget[active="true"]::title {{ background: {ACCENT}; color: white; border-left: 3px solid {ACCENT_PRESSED}; }}
+QDockWidget[active="true"]::title {{ background: {ACCENT}; color: {ON_ACCENT}; border-left: 3px solid {ACCENT_PRESSED}; }}
 QDockWidget > QWidget {{ background: {SURFACE}; }}
 
 QToolBar {{ background: {SURFACE}; border: none; border-bottom: 1px solid {BORDER}; padding: 3px 4px; spacing: 3px; }}
@@ -160,20 +195,20 @@ QToolBar::separator {{ background: {BORDER}; width: 1px; margin: 4px 6px; }}
 QToolButton {{ border: 1px solid transparent; border-radius: 5px; padding: 3px 5px; background: transparent; }}
 QToolButton:hover {{ background: {ACCENT_SOFT}; border-color: {ACCENT_SOFT2}; }}
 QToolButton:pressed {{ background: {ACCENT_SOFT2}; }}
-QToolButton:checked {{ background: {ACCENT_SOFT2}; border-color: {ACCENT}; color: {ACCENT_PRESSED}; }}
+QToolButton:checked {{ background: {ACCENT_SOFT2}; border-color: {ACCENT}; color: {ACCENT_TEXT}; }}
 QToolButton#segment {{ border: 1px solid {BORDER_STRONG}; border-radius: 0; padding: 3px 9px; background: {SURFACE}; }}
-QToolButton#segment:checked {{ background: {ACCENT}; border-color: {ACCENT}; color: white; font-weight: 600; }}
+QToolButton#segment:checked {{ background: {ACCENT}; border-color: {ACCENT}; color: {ON_ACCENT}; font-weight: 600; }}
 QToolButton#segment:hover:!checked {{ background: {ACCENT_SOFT}; }}
-QToolButton[primary="true"] {{ background: {ACCENT_SOFT}; border: 1px solid {ACCENT_SOFT2}; color: {ACCENT_PRESSED};
+QToolButton[primary="true"] {{ background: {ACCENT_SOFT}; border: 1px solid {ACCENT_SOFT2}; color: {ACCENT_TEXT};
     font-weight: 600; }}
 QToolButton[primary="true"]:hover {{ background: {ACCENT_SOFT2}; border-color: {ACCENT}; }}
 
 QMenuBar {{ background: {SURFACE}; border-bottom: 1px solid {BORDER}; }}
 QMenuBar::item {{ padding: 4px 9px; background: transparent; }}
-QMenuBar::item:selected {{ background: {ACCENT_SOFT}; color: {ACCENT_PRESSED}; border-radius: 4px; }}
+QMenuBar::item:selected {{ background: {ACCENT_SOFT}; color: {ACCENT_TEXT}; border-radius: 4px; }}
 QMenu {{ background: {SURFACE}; border: 1px solid {BORDER_STRONG}; padding: 4px; }}
 QMenu::item {{ padding: 5px 22px 5px 20px; border-radius: 4px; }}
-QMenu::item:selected {{ background: {ACCENT_SOFT}; color: {ACCENT_PRESSED}; }}
+QMenu::item:selected {{ background: {ACCENT_SOFT}; color: {ACCENT_TEXT}; }}
 QMenu::item:disabled {{ color: {FAINT}; }}
 QMenu::separator {{ height: 1px; background: {BORDER}; margin: 4px 8px; }}
 
@@ -183,7 +218,7 @@ QStatusBar::item {{ border: none; }}
 QTabBar::tab {{ background: transparent; color: {MUTED}; padding: 5px 12px; border: none;
     border-bottom: 2px solid transparent; margin-right: 2px; }}
 QTabBar::tab:hover {{ color: {TEXT}; background: {SURFACE_ALT}; }}
-QTabBar::tab:selected {{ color: {ACCENT_PRESSED}; border-bottom: 2px solid {ACCENT}; font-weight: 600; }}
+QTabBar::tab:selected {{ color: {ACCENT_TEXT}; border-bottom: 2px solid {ACCENT}; font-weight: 600; }}
 QTabWidget::pane {{ border: 1px solid {BORDER}; border-radius: 4px; top: -1px; background: {SURFACE}; }}
 QTabBar#runTabs::tab {{ padding: 5px 12px; min-width: 60px; }}
 QTabBar::close-button {{ image: url("{close}"); subcontrol-position: right; border-radius: 3px; margin: 2px; }}
@@ -194,7 +229,7 @@ QPushButton:hover {{ border-color: {ACCENT}; background: {ACCENT_SOFT}; }}
 QPushButton:pressed {{ background: {ACCENT_SOFT2}; }}
 QPushButton:disabled {{ color: {FAINT}; border-color: {BORDER}; }}
 QPushButton:checked {{ background: {ACCENT_SOFT2}; border-color: {ACCENT}; }}
-QPushButton[primary="true"] {{ background: {ACCENT}; color: white; border-color: {ACCENT}; font-weight: 600; }}
+QPushButton[primary="true"] {{ background: {ACCENT}; color: {ON_ACCENT}; border-color: {ACCENT}; font-weight: 600; }}
 QPushButton[primary="true"]:hover {{ background: {ACCENT_HOVER}; }}
 QPushButton[primary="true"]:pressed {{ background: {ACCENT_PRESSED}; }}
 
@@ -210,7 +245,7 @@ QComboBox {{ padding-right: 22px; }}
 QComboBox::drop-down {{ border: none; width: 20px; }}
 QComboBox::down-arrow {{ image: url("{down}"); width: 10px; height: 10px; }}
 QComboBox QAbstractItemView {{ border: 1px solid {BORDER_STRONG}; selection-background-color: {ACCENT_SOFT};
-    selection-color: {ACCENT_PRESSED}; background: {SURFACE}; }}
+    selection-color: {ACCENT_TEXT}; background: {SURFACE}; }}
 QSpinBox, QDoubleSpinBox {{ padding-right: 18px; }}
 QSpinBox::up-button, QDoubleSpinBox::up-button {{ subcontrol-origin: border; subcontrol-position: top right;
     width: 16px; border: none; }}
@@ -222,7 +257,7 @@ QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{ image: url("{down}"); width:
 QCheckBox, QRadioButton {{ spacing: 6px; }}
 QGroupBox {{ border: 1px solid {BORDER}; border-radius: 6px; margin-top: 14px; padding: 8px 6px 6px 6px;
     background: {SURFACE}; }}
-QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 4px; color: {ACCENT_PRESSED}; font-weight: 600; }}
+QGroupBox::title {{ subcontrol-origin: margin; left: 10px; padding: 0 4px; color: {ACCENT_TEXT}; font-weight: 600; }}
 
 QTableView, QTreeView, QListView, QTableWidget, QListWidget, QTreeWidget {{
     background: {SURFACE}; alternate-background-color: {SURFACE_ALT}; border: 1px solid {BORDER};
@@ -231,7 +266,7 @@ QTableView, QTreeView, QListView, QTableWidget, QListWidget, QTreeWidget {{
 QTableView::item:selected, QTreeView::item:selected, QListView::item:selected {{
     background: {ACCENT_SOFT2}; color: {TEXT};
 }}
-QHeaderView::section {{ background: {ACCENT_SOFT}; color: {ACCENT_PRESSED}; font-weight: 600; padding: 4px 6px;
+QHeaderView::section {{ background: {ACCENT_SOFT}; color: {ACCENT_TEXT}; font-weight: 600; padding: 4px 6px;
     border: none; border-right: 1px solid {BORDER}; border-bottom: 2px solid {ACCENT_SOFT2}; }}
 QHeaderView::section:hover {{ background: {ACCENT_SOFT2}; }}
 QTableCornerButton::section {{ background: {ACCENT_SOFT}; border: none; }}
@@ -257,7 +292,7 @@ QLabel#chip[level="ok"] {{ background: {OK_SOFT}; color: {OK}; }}
 QLabel#chip[level="warn"] {{ background: {WARN_SOFT}; color: {WARN}; }}
 QLabel#chip[level="bad"] {{ background: {BAD_SOFT}; color: {BAD}; }}
 QLabel#chip[level="info"] {{ background: {INFO_SOFT}; color: {INFO}; }}
-QLabel#chip[level="accent"] {{ background: {ACCENT_SOFT}; color: {ACCENT_PRESSED}; }}
+QLabel#chip[level="accent"] {{ background: {ACCENT_SOFT}; color: {ACCENT_TEXT}; }}
 QFrame#card {{ background: {SURFACE}; border: 1px solid {BORDER}; border-radius: 8px; }}
 QFrame#card[level="ok"] {{ border-left: 4px solid {OK}; }}
 QFrame#card[level="warn"] {{ border-left: 4px solid {WARN}; }}
@@ -273,7 +308,7 @@ def palette() -> QPalette:
     roles = {
         QPalette.Window: BG, QPalette.WindowText: TEXT, QPalette.Base: SURFACE,
         QPalette.AlternateBase: SURFACE_ALT, QPalette.Text: TEXT, QPalette.Button: SURFACE,
-        QPalette.ButtonText: TEXT, QPalette.Highlight: ACCENT, QPalette.HighlightedText: "#FFFFFF",
+        QPalette.ButtonText: TEXT, QPalette.Highlight: ACCENT, QPalette.HighlightedText: ON_ACCENT,
         QPalette.ToolTipBase: SURFACE, QPalette.ToolTipText: TEXT, QPalette.PlaceholderText: FAINT,
         QPalette.Link: ACCENT, QPalette.BrightText: "#FFFFFF", QPalette.Light: SURFACE,
         QPalette.Midlight: SURFACE_ALT, QPalette.Mid: BORDER_STRONG, QPalette.Dark: FAINT, QPalette.Shadow: MUTED,
@@ -322,23 +357,110 @@ class ActiveDockTracker(QObject):
 
 
 def apply(app=None) -> None:
-    """Apply the theme to ``app`` (idempotent)."""
+    """Apply the theme to ``app`` (idempotent); the mode is the saved preference."""
     app = app or QApplication.instance()
     if app is None:
         return
-    configure_plots()
     if app.property("gcws_theme"):
+        configure_plots()
         return
+    from PySide6.QtCore import QSettings
+    dark = QSettings().value("prefs/dark_mode", False, type=bool)
     app.setStyle("Fusion")
-    try:
-        app.styleHints().setColorScheme(Qt.ColorScheme.Light)   # ignore a dark Windows setting
-    except (AttributeError, TypeError):
-        pass
-    app.setPalette(palette())
-    app.setStyleSheet(qss())
+    set_mode(dark, app)
     app._gcws_dock_tracker = ActiveDockTracker(app)
     app.setProperty("gcws_theme", True)
 
 
 def ensure_applied() -> None:
     apply(QApplication.instance())
+
+
+# -- switching the mode --------------------------------------------------------
+
+class _Notifier(QObject):
+    changed = QtSignal(bool)                    # dark
+
+
+_notifier = None
+_plots: list = []                                # [(weakref to plot widget, callback or None)]
+
+
+def notifier() -> _Notifier:
+    global _notifier
+    if _notifier is None:
+        _notifier = _Notifier()
+    return _notifier
+
+
+def set_mode(dark: bool, app=None) -> None:
+    """Switch between the light and the dark look, live: palette, style sheet, plots, icons."""
+    global MODE
+    _load(DARK if dark else LIGHT)
+    MODE = "dark" if dark else "light"
+    configure_plots()
+    app = app or QApplication.instance()
+    if app is not None:
+        try:
+            app.styleHints().setColorScheme(Qt.ColorScheme.Dark if dark else Qt.ColorScheme.Light)
+        except (AttributeError, TypeError):
+            pass
+        app.setPalette(palette())
+        app.setStyleSheet(qss())
+    _restyle_plots()
+    notifier().changed.emit(dark)
+
+
+def register_plot(widget, on_change=None) -> None:
+    """Keep a plot widget in the current colours; ``on_change()`` redraws its items."""
+    import weakref
+    _plots.append((weakref.ref(widget), on_change))
+    restyle_plot(widget)
+
+
+def restyle_plot(widget) -> None:
+    widget.setBackground(PLOT["bg"])
+    item = widget.getPlotItem()
+    for name in ("left", "bottom", "right", "top"):
+        ax = item.getAxis(name) if name in item.axes else None
+        if ax is not None:
+            ax.setPen(PLOT["fg"])
+            ax.setTextPen(PLOT["fg"])
+    try:
+        item.showGrid(x=item.ctrl.xGridCheck.isChecked(), y=item.ctrl.yGridCheck.isChecked(),
+                      alpha=PLOT["grid_alpha"])
+    except (AttributeError, RuntimeError):
+        pass
+
+
+def _restyle_plots(callbacks: bool = True) -> None:
+    alive = []
+    for ref, cb in _plots:
+        w = ref()
+        if w is None:
+            continue
+        try:
+            restyle_plot(w)
+            if cb is not None and callbacks:
+                cb()
+        except RuntimeError:                      # the C++ widget is gone
+            continue
+        alive.append((ref, cb))
+    _plots[:] = alive
+
+
+class light_plots:
+    """``with theme.light_plots():`` - pictures for reports and exports are always light."""
+
+    def __enter__(self):
+        self.dark = is_dark()
+        if self.dark:                             # colours only: the items read them when painted
+            _load(LIGHT)
+            _restyle_plots(callbacks=False)
+        return self
+
+    def __exit__(self, *exc):
+        if self.dark:
+            _load(DARK)
+            _restyle_plots(callbacks=False)
+        return False

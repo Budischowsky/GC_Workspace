@@ -260,7 +260,8 @@ class EventsDock(QWidget):
             item = QTableWidgetItem(desc)
             item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             if e.uid in unresolved:
-                item.setForeground(Qt.darkRed)
+                from gcws.ui import theme
+                item.setForeground(theme.status_color("bad"))
             self.manual.setItem(r, 1, item)
             for c, v in ((2, e.user), (3, e.timestamp.replace("T", " "))):
                 it = QTableWidgetItem(v)

@@ -176,6 +176,7 @@ class DeconvolutionDialog(QDialog):
         self.profiles = pg.PlotWidget()
         self.profiles.setLabel("bottom", "MS RT", units="min")
         self.profiles.setMenuEnabled(False)
+        theme.register_plot(self.profiles)
         self.profiles.showGrid(x=True, y=True, alpha=theme.PLOT["grid_alpha"])
         self.profiles.addLegend(offset=(-10, 10))
         self.spec = StickPlot()

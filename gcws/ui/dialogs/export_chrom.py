@@ -82,7 +82,14 @@ def _render_plot(panel, painter: QPainter, target: QRectF) -> None:
 
 
 def render(panels, painter: QPainter, width: float, height_each: float, title: str = "") -> None:
-    """Paint ``panels`` stacked (``height_each`` logical px each) under an optional title line."""
+    """Paint ``panels`` stacked (``height_each`` logical px each) under an optional title line.
+
+    Pictures are always light (white paper), also in the dark theme."""
+    with theme.light_plots():
+        _render(panels, painter, width, height_each, title)
+
+
+def _render(panels, painter: QPainter, width: float, height_each: float, title: str = "") -> None:
     y = 0.0
     painter.fillRect(QRectF(0, 0, width, total_height(len(panels), height_each, title)), QColor("white"))
     if title:

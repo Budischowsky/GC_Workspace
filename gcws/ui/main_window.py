@@ -236,6 +236,14 @@ class MainWindow(QMainWindow):
             self.view_menu.addAction(d.toggleViewAction())
         self.view_menu.addSeparator()
         self.view_menu.addAction(self.a_eic)
+        self.view_menu.addSeparator()
+        self.a_dark = self.view_menu.addAction("Dark mode")
+        self.a_dark.setCheckable(True)
+        self.a_dark.setShortcut("Ctrl+Shift+D")
+        self.a_dark.setToolTip("Switch between the light and the dark look (remembered)")
+        from gcws.ui import theme as _theme
+        self.a_dark.setChecked(_theme.is_dark())
+        self.a_dark.toggled.connect(self.set_dark_mode)
 
         m = mb.addMenu("&Integration")
         m.addAction(self.a_integrate)
@@ -684,6 +692,29 @@ class MainWindow(QMainWindow):
                 self.manage_libraries()
             return
         QMessageBox.warning(self, "Library search", text)
+
+    # -- look ------------------------------------------------------------------------------
+
+    def set_dark_mode(self, on: bool):
+        """View > Dark mode: switch live; run colours follow (same hue, visible on the new background)."""
+        from gcws.ui import theme
+        if on == theme.is_dark():
+            return
+        old = list(theme.RUN_COLORS)
+        theme.set_mode(on)
+        QSettings().setValue("prefs/dark_mode", on)
+        for st in self.ws.states():
+            if st.color in old:
+                st.color = theme.RUN_COLORS[old.index(st.color)]
+        for panel in (self.chrom, self.chrom2):
+            panel.refresh()
+        self.table.reload()
+        self.spectrum.refresh()
+        self.replicates.duplicate._reapply()
+        self._refresh_run_chips()
+        self.run_tabs.update()
+        if self.a_dark.isChecked() != on:
+            self.a_dark.setChecked(on)
 
     # -- processing methods --------------------------------------------------------------
 
