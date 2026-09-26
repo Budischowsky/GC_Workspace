@@ -51,4 +51,30 @@ class MethodStore:
         self.reload()
 
     def default_name(self, signal_kind: str) -> str:
+        """The method new runs start with: the one a loaded processing method set, else built-in."""
+        chosen = self._defaults().get(signal_kind)
+        if chosen in self.methods:
+            return chosen
         return nias_fid_method().name if signal_kind == "FID" else ms_method().name
+
+    def _defaults_file(self) -> Path:
+        return self.folder.parent / "method_defaults.json"
+
+    def _defaults(self) -> dict:
+        import json
+        try:
+            data = json.loads(self._defaults_file().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def set_default(self, signal_kind: str, name: str | None) -> None:
+        """Make ``name`` the method new ``signal_kind`` runs start with (None: built-in again)."""
+        import json
+        data = self._defaults()
+        if name:
+            data[signal_kind] = name
+        else:
+            data.pop(signal_kind, None)
+        self._defaults_file().parent.mkdir(parents=True, exist_ok=True)
+        self._defaults_file().write_text(json.dumps(data, indent=2), encoding="utf-8")

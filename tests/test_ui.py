@@ -1014,3 +1014,65 @@ def test_edit_library_new_entry_takes_a_spectrum(qtbot, win, samples, tmp_path, 
     dlg.close()
     ws.dirty = False
     service.reset()
+
+
+def test_processing_method_save_and_load(qtbot, win, samples, tmp_path, monkeypatch):
+    import copy
+    from PySide6.QtCore import QSettings
+    from gcws import paths
+    from gcws.core import proc_method as PM
+    from gcws.signal.blank import BlankOptions
+    from gcws.ui.dialogs.own_search import load_options, save_options
+    from gcws.ui.dialogs.proc_method import LoadMethodDialog, SaveMethodDialog
+    from gcws.ui.undo import SetMethodCommand
+    monkeypatch.setattr(paths, "DATA", tmp_path / "data")
+    _load(qtbot, win, samples, ["07_"])
+    ws = win.ws
+    ws.methods.folder = tmp_path / "data" / "methods"          # never the shared test data folder
+    st = ws.active
+    # the analyst's settings: an own FID method, blank options, report and own-library options
+    fid = ws.method_for(st, "FID").copy()
+    fid.name, fid.min_sn = "My FID", 7.0
+    st.undo.push(SetMethodCommand(ws, [st.id], "FID", fid, "own FID method"))
+    q = copy.deepcopy(ws.quant)
+    q["blank_sub"] = BlankOptions(scale=1.5).to_dict()
+    ws.push_quant("blank", q)
+    win.a_keep_middle.setChecked(True)
+    save_options({"library": "Own", "top_n": 7})
+    dlg = SaveMethodDialog(win)
+    qtbot.addWidget(dlg)
+    dlg.name.setEditText("NIAS EtOH")
+    dlg.comment.setPlainText("test method")
+    dlg._save()
+    assert dlg.saved.is_file() and PM.names() == ["NIAS EtOH"]
+    # everything changed afterwards ...
+    st.undo.push(SetMethodCommand(ws, [st.id], "FID", ws.methods.get(ws.methods.default_name("FID")), "built-in"))
+    q = copy.deepcopy(ws.quant)
+    q["blank_sub"] = BlankOptions(scale=1.0).to_dict()
+    ws.push_quant("blank", q)
+    win.a_keep_middle.setChecked(False)
+    save_options({"library": "", "top_n": 10})
+    # ... and the method brings it back, except the part the analyst leaves out
+    load = LoadMethodDialog(win)
+    qtbot.addWidget(load)
+    assert load.method["name"] == "NIAS EtOH" and "test method" in load.details.text()
+    assert all(load.checks[k].isEnabled() for k in PM.SECTIONS)
+    load.checks["own_search"].setChecked(False)
+    load._load()
+    assert "own_search" not in load.applied and "integration" in load.applied
+    assert ws.method_for(st, "FID").name == "My FID" and ws.method_for(st, "FID").min_sn == 7.0
+    assert ws.blank_options().scale == 1.5 and win.a_keep_middle.isChecked()
+    assert QSettings().value("report/keep_middle", False, type=bool)
+    assert load_options()["library"] == ""                        # left out
+    assert ws.methods.default_name("FID") == "My FID"              # runs loaded later start with it
+    assert any(r.action == "Processing method loaded" for r in ws.audit.records)
+    # one undo step takes the workspace settings and the integration back
+    win.a_undo.trigger()
+    assert ws.blank_options().scale == 1.0 and ws.method_for(st, "FID").name != "My FID"
+    # export / import / delete
+    load.export_file(str(tmp_path / "shared.json"))
+    PM.delete("NIAS EtOH")
+    assert PM.names() == []
+    load.import_file(str(tmp_path / "shared.json"))
+    assert PM.names() == ["NIAS EtOH"]
+    ws.methods.set_default("FID", None)

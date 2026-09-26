@@ -226,6 +226,11 @@ class MainWindow(QMainWindow):
         m.addSeparator()
         m.addAction("Preferences...", self.preferences)
 
+        m = mb.addMenu("&Method")                  # processing methods: all settings under one name
+        m.addAction("Save current settings as Method...", self.save_method)
+        m.addAction("Load Method...", self.load_method)
+        self.method_menu = m
+
         self.view_menu = mb.addMenu("&View")
         for key, d in self.docks.items():
             self.view_menu.addAction(d.toggleViewAction())
@@ -282,6 +287,7 @@ class MainWindow(QMainWindow):
             self.report_menu.addAction(label + " - preview", lambda k=kind: self.report(k, preview=True))
             self.report_menu.addSeparator()
         a = self.report_menu.addAction("Keep intermediate workbook")
+        self.a_keep_middle = a
         a.setCheckable(True)
         a.setChecked(QSettings().value("report/keep_middle", False, type=bool))
         a.toggled.connect(lambda on: QSettings().setValue("report/keep_middle", on))
@@ -323,6 +329,11 @@ class MainWindow(QMainWindow):
             sb.addPermanentWidget(c)
         self.tool_label = QLabel()
         sb.addPermanentWidget(self.tool_label)
+        self.method_label = QLabel()
+        self.method_label.setObjectName("hint")
+        self.method_label.setToolTip("The processing method loaded or saved last (Method menu)")
+        sb.addPermanentWidget(self.method_label)
+        self._show_method_name()
         sb.addPermanentWidget(self.progress)
         sb.addPermanentWidget(self.cancel_btn)
 
@@ -673,6 +684,27 @@ class MainWindow(QMainWindow):
                 self.manage_libraries()
             return
         QMessageBox.warning(self, "Library search", text)
+
+    # -- processing methods --------------------------------------------------------------
+
+    def _show_method_name(self):
+        name = QSettings().value("method/current", "") or ""
+        self.method_label.setText(f"Method: {name}" if name else "")
+
+    def save_method(self):
+        from gcws.ui.dialogs.proc_method import SaveMethodDialog
+        dlg = SaveMethodDialog(self)
+        if dlg.exec() == SaveMethodDialog.Accepted:
+            self._show_method_name()
+            self.statusBar().showMessage(f"Method saved: {dlg.saved}", 8000)
+
+    def load_method(self):
+        from gcws.ui.dialogs.proc_method import LoadMethodDialog
+        dlg = LoadMethodDialog(self)
+        if dlg.exec() == LoadMethodDialog.Accepted and dlg.applied:
+            self._show_method_name()
+            self.statusBar().showMessage(f"Method '{dlg.method['name']}' loaded: {len(dlg.applied)} parts applied",
+                                         8000)
 
     def manage_libraries(self):
         from gcws.ui.dialogs.libraries import LibraryManagerDialog
