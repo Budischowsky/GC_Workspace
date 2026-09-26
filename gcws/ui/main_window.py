@@ -950,10 +950,11 @@ class MainWindow(QMainWindow):
         blank_istd_ids = [b for m in members for b in self.ws.runs[m].blanks_istd]
         # every blank used by any determination of the group (display only in the report)
         bname = lambda ids: "; ".join(dict.fromkeys(str(self.ws.runs[i].run.path) for i in ids if i in self.ws.runs))
+        from gcws.quant import migration as MG
         job = RS.ReportJob(
             kind=kind, samples=samples, names=names, settings=make_settings(self.ws.quant.get("settings")),
             target=target, word=target.with_suffix(".docx"), cas_path=cas,
-            migration=self.ws.quant.get("migration") or {}, blank_names=(bname(blank_ids), bname(blank_istd_ids)),
+            migration=MG.current(self.ws.quant), blank_names=(bname(blank_ids), bname(blank_istd_ids)),
             audit=[r for r in self.ws.audit.records if r.run in names or not r.run],
             policy=g.get("policy", "all"),
             batch_target=(target.parent / f"{stem}_Doppelbestimmung.xlsx") if kind == "nias" else None,

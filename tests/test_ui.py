@@ -912,3 +912,46 @@ def test_double_determination_sheet_keys_and_fill(qtbot, win, samples):
     QTest.mouseMove(vp, QPoint(h.center().x(), target.y()))
     QTest.mouseRelease(vp, Qt.LeftButton, Qt.NoModifier, QPoint(h.center().x(), target.y()))
     qtbot.waitUntil(lambda: names() == ["Fill name"] * 3, timeout=20000)
+
+
+def test_migration_dialog_derives_cell_and_occupancy(qtbot, win, monkeypatch):
+    import copy
+    from PySide6.QtWidgets import QMessageBox
+    from gcws.quant import migration as MG
+    from gcws.quant.nias_bridge import make_settings, settings_dict
+    from gcws.ui.docks.quant import MigrationDialog
+    assert MG.cell_text(0.51) == "Zelle groß (0.51 dm²)" and MG.cell_text("0,34") == "Zelle klein (0.34 dm²)"
+    assert MG.cell_text(0.6) == "Zelle (0.6 dm²)" and MG.occupancy_text(2) == "doppelt"
+    assert MG.occupancy_text(1.5) == "1.5-fach"
+    ws = win.ws
+    s = make_settings(ws.quant.get("settings"))
+    s.cell_area_dm2, s.coverage = 0.34, 2.0          # as the parameter table has them now
+    stale = {"cell_area_dm2": 0.51, "occupancy_factor": 1.0, "analyst": "Old", "simulant": "EtOH 20%"}
+    dlg = MigrationDialog(stale, s, win)
+    qtbot.addWidget(dlg)
+    assert "migration_cell" not in dlg.edits and "occupancy" not in dlg.edits
+    assert dlg.edits["cell_area_dm2"].text() == "0.34"            # the parameters, not the stale values
+    assert "Zelle klein (0.34 dm²), doppelt" in dlg.derived.text()
+    assert dlg.edits["simulant"].currentText() == "EtOH 20%"
+    sim = dlg.edits["simulant"]
+    sim.setCurrentIndex(sim.findText(MG.OTHER))
+    sim.activated.emit(sim.currentIndex())
+    assert sim.currentText() == ""
+    sim.setEditText("Isooctane")
+    for k, v in (("temperature", "40 °C"), ("duration", "10 d"), ("volume_ml", "100"), ("ov_ratio", "6")):
+        dlg.edits[k].setText(v)
+    warned = []
+    monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: warned.append(a)))
+    dlg._ok()
+    assert not warned and dlg.result() == 1
+    m = dlg.metadata
+    assert m["simulant"] == "Isooctane" and m["migration_cell"] == "Zelle klein (0.34 dm²)" and m["occupancy"] == "doppelt"
+    assert m["effective_area_dm2"] == pytest.approx(0.68)
+    # the report takes the current parameters even when they changed after the dialog
+    q = copy.deepcopy(ws.quant)
+    q["migration"] = m
+    s.cell_area_dm2 = 0.44
+    q["settings"] = settings_dict(s)
+    cur = MG.current(q)
+    assert cur["cell_area_dm2"] == pytest.approx(0.44) and cur["migration_cell"] == "Glaszelle (0.44 dm²)"
+    assert MG.current({}) == {}

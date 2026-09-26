@@ -378,30 +378,51 @@ class QuantDock(QScrollArea):
 
 
 class MigrationDialog(QDialog):
-    FIELDS = [("analyst", "Analyst"), ("migration_cell", "Migration cell"), ("occupancy", "Occupancy"),
-              ("simulant", "Simulant"), ("temperature", "Temperature"), ("duration", "Duration"),
-              ("cell_area_dm2", "Cell area (dm²)"), ("occupancy_factor", "Coverage factor"),
+    """Migration conditions. The cell and the occupancy texts follow from the cell area and the
+    coverage factor (``gcws.quant.migration``); the numbers start from the parameter table."""
+    FIELDS = [("analyst", "Analyst"), ("simulant", "Simulant"), ("temperature", "Temperature"),
+              ("duration", "Duration"), ("cell_area_dm2", "Cell area (dm²)"), ("occupancy_factor", "Coverage factor"),
               ("volume_ml", "Volume (mL)"), ("ov_ratio", "Surface/volume (dm²/kg)"),
               ("syneris_summary_report_no", "Syneris summary report no. (optional)")]
+    #: remembered from the last conditions entered (texts only - numbers come from the parameters)
+    REMEMBERED = ("analyst", "simulant", "temperature", "duration", "volume_ml", "syneris_summary_report_no")
 
     def __init__(self, initial: dict, settings, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Migration conditions")
+        from gcws.quant import migration as MG
         from gcws.report.legacy_api import main_script
         from gcws.ui.dialogs.preferences import load_settings
         self.main = main_script()
-        values = self.main.migration_metadata_from_settings(settings)
-        values.update((load_settings().get("last_migration_metadata") or {}))
+        last = load_settings().get("last_migration_metadata") or {}
+        values = {k: v for k, v in last.items() if k in self.REMEMBERED}
         values.update(initial or {})
+        values.update(self.main.migration_metadata_from_settings(settings))   # today's parameter table
         self.values = values
         self.edits = {}
         f = QFormLayout()
         for key, label in self.FIELDS:
-            e = QLineEdit(str(values.get(key, "") if values.get(key) is not None else ""))
+            v = values.get(key)
+            text = "" if v is None else str(v)
+            if key == "simulant":
+                e = QComboBox()
+                e.setEditable(True)
+                e.addItems(MG.SIMULANTS + [MG.OTHER])
+                e.setCurrentIndex(-1)
+                e.setEditText(text)
+                e.lineEdit().setPlaceholderText("choose, or type another simulant")
+                e.activated.connect(lambda i, e=e: self._simulant_picked(e))
+            else:
+                e = QLineEdit(text)
             self.edits[key] = e
             f.addRow(label, e)
-        note = QLabel("These values are calculation inputs (cell area, coverage, O/V) and appear in the report "
-                      "next to 'Migrate'. Texts are reported as entered.")
+        self.derived = QLabel()
+        self.derived.setObjectName("hint")
+        for key in ("cell_area_dm2", "occupancy_factor"):
+            self.edits[key].textChanged.connect(self._update_derived)
+        f.addRow("", self.derived)
+        note = QLabel(MG.CELL_NOTE + " Cell area, coverage and surface/volume are calculation inputs; they "
+                      "change the NIAS parameters too.")
         note.setWordWrap(True)
         note.setObjectName("hint")
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -412,16 +433,36 @@ class MigrationDialog(QDialog):
         lay.addWidget(note)
         lay.addWidget(bb)
         self.metadata = None
+        self._update_derived()
+
+    def _simulant_picked(self, combo):
+        from gcws.quant import migration as MG
+        if combo.currentText() == MG.OTHER:
+            combo.setEditText("")
+            combo.lineEdit().setFocus()
+
+    def _update_derived(self):
+        from gcws.quant import migration as MG
+        cell = MG.cell_text(self.edits["cell_area_dm2"].text())
+        occ = MG.occupancy_text(self.edits["occupancy_factor"].text())
+        self.derived.setText(f"Reported as: {cell or '–'}, {occ or '–'}")
+
+    def field_text(self, key: str) -> str:
+        e = self.edits[key]
+        return (e.currentText() if isinstance(e, QComboBox) else e.text()).strip()
 
     def _ok(self):
-        data = {**self.values, **{k: e.text() for k, e in self.edits.items()}}
+        from gcws.quant import migration as MG
+        data = {**self.values, **{k: self.field_text(k) for k in self.edits}}
+        if data.get("simulant") == MG.OTHER:
+            data["simulant"] = ""
         try:
-            self.metadata = self.main.validate_migration_metadata(data)
+            self.metadata = self.main.validate_migration_metadata(MG.complete(data))
         except ValueError as exc:
             QMessageBox.warning(self, "Migration conditions", str(exc))
             return
         from gcws.ui.dialogs.preferences import load_settings, save_settings
         s = load_settings()
-        s["last_migration_metadata"] = {k: v for k, v in self.metadata.items() if k != "schema_version"}
+        s["last_migration_metadata"] = {k: v for k, v in self.metadata.items() if k in self.REMEMBERED}
         save_settings(s)
         self.accept()
