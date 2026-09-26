@@ -376,3 +376,31 @@ def test_deconvolution_dialog_whole_run_and_markers(qtbot, win, samples):
     win.spectrum.mode.setCurrentIndex(i)
     assert win.spectrum.spec.mode == "deconvoluted" and "quality" in win.spectrum.spec.note
     win.spectrum.mode.setCurrentIndex(0)
+
+
+def test_quant_panel_istd_concentration_mode(qtbot, win, samples):
+    _load(qtbot, win, samples, ["07_"])
+    ws, qd = win.ws, win.quant
+    win._show_dock("quant")
+    # NIAS mode: fixed unit shown, no editable unit / ISTD concentration
+    assert qd.result_unit.isVisibleTo(qd) and "mg/kg" in qd.result_unit.text()
+    assert not qd.unit.isVisibleTo(qd) and not qd.istd_conc.isVisibleTo(qd)
+    qd.mode.setCurrentIndex(qd.mode.findData("istd_conc"))
+    qd.mode.activated.emit(qd.mode.currentIndex())
+    assert ws.quant["mode"] == "istd_conc"
+    assert qd.unit.isVisibleTo(qd) and qd.istd_conc.isVisibleTo(qd) and qd.istd_conc.isEnabled()
+    qd.istd_conc.setValue(10.0)
+    qd.unit.setCurrentText("µg/mL")
+    qtbot.waitUntil(lambda: ws.quant.get("istd_conc_value") == 10.0 and ws.quant.get("unit") == "µg/mL",
+                    timeout=3000)
+    ws.recompute_quant()
+    rows = ws.quant_result.rows[ws.active_id]
+    assert sum(1 for r in rows.values() if r["conc"]) > 10          # no ISTD concentration table needed
+    assert ws.quant_unit() == "µg/mL"
+    # an edit of the ISTD table applies at once (no Apply button to forget)
+    from PySide6.QtCore import Qt
+    item = qd.defs.item(0, 2)
+    item.setText("0.5")
+    assert ws.quant["istd_defs"][0]["concentration"] == 0.5
+    win.a_undo.trigger()
+    assert not ws.quant.get("istd_defs") or ws.quant["istd_defs"][0]["concentration"] != 0.5

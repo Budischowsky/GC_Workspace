@@ -31,26 +31,42 @@ class QuantDock(QScrollArea):
 
         mode_box = QGroupBox("Quantification")
         f = QFormLayout(mode_box)
+        self.mode_form = f
         self.mode = QComboBox()
         for k, v in MODES.items():
             self.mode.addItem(v, k)
         self.mode.activated.connect(self._mode_changed)
+        # the unit and ISTD concentration only exist for the "Internal standard concentration" mode;
+        # the other modes have a fixed unit (shown read-only)
         self.unit = QComboBox()
         self.unit.addItems(UNITS)
         self.unit.setEditable(True)
-        self.unit.activated.connect(self._mode_changed)
+        self.unit.setToolTip("Unit of the ISTD concentration below; the results come out in the same unit")
         self.istd_conc = QDoubleSpinBox()
         self.istd_conc.setDecimals(6)
         self.istd_conc.setMaximum(1e9)
-        self.istd_conc.editingFinished.connect(self._mode_changed)
+        self.istd_conc.setToolTip("Concentration of the internal standard in the analysed solution")
+        self.result_unit = QLabel()
         self.mode_note = QLabel()
         self.mode_note.setWordWrap(True)
         self.mode_note.setObjectName("hint")
+        self.mode_note.setTextFormat(Qt.RichText)
         f.addRow("Mode", self.mode)
-        f.addRow("Unit", self.unit)
         f.addRow("ISTD concentration", self.istd_conc)
-        f.addRow("", self.mode_note)
+        f.addRow("Unit", self.unit)
+        f.addRow("Result unit", self.result_unit)
+        f.addRow(self.mode_note)
         lay.addWidget(mode_box)
+        # typed values are committed after a short pause (and on Enter / leaving the field)
+        from PySide6.QtCore import QTimer
+        self._commit = QTimer(self)
+        self._commit.setSingleShot(True)
+        self._commit.setInterval(600)
+        self._commit.timeout.connect(self._mode_changed)
+        self.unit.currentTextChanged.connect(lambda *_: None if self._loading else self._commit.start())
+        self.unit.lineEdit().editingFinished.connect(self._mode_changed)
+        self.istd_conc.valueChanged.connect(lambda *_: None if self._loading else self._commit.start())
+        self.istd_conc.editingFinished.connect(self._mode_changed)
 
         par = QGroupBox("NIAS parameters")
         pl = QVBoxLayout(par)
@@ -71,21 +87,26 @@ class QuantDock(QScrollArea):
         self.defs.setHorizontalHeaderLabels(["Code", "Name", "Conc.", "Target RT", "Quantify"])
         self.defs.verticalHeader().setVisible(False)
         self.defs.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.defs.itemChanged.connect(self._def_edited)
         self.mean_area = QCheckBox("Factor from the mean of the ISTD areas")
+        self.mean_area.toggled.connect(lambda *_: None if self._loading else self._apply_defs())
         h = QHBoxLayout()
         add = QPushButton("Add")
         add.clicked.connect(self._add_def)
         rem = QPushButton("Remove")
         rem.clicked.connect(self._remove_def)
-        apply_defs = QPushButton("Apply")
-        apply_defs.clicked.connect(self._apply_defs)
         for b in (add, rem):
             h.addWidget(b)
         h.addStretch(1)
-        h.addWidget(apply_defs)
+        self.defs_note = QLabel("Changes apply at once (Undo reverts them). Conc. = ISTD concentration in "
+                                "mg/mL for the NIAS factor; once this table is set, the FC17/BBP/DNNP "
+                                "concentrations of the NIAS parameters no longer apply.")
+        self.defs_note.setWordWrap(True)
+        self.defs_note.setObjectName("hint")
         il.addWidget(self.defs)
         il.addWidget(self.mean_area)
         il.addLayout(h)
+        il.addWidget(self.defs_note)
         lay.addWidget(istd)
 
         run = QGroupBox("ISTDs in the active chromatogram")
@@ -142,19 +163,43 @@ class QuantDock(QScrollArea):
         q = self.ws.quant
         self.mode.setCurrentIndex(max(0, self.mode.findData(q.get("mode", "nias_mgkg"))))
         mode = self.mode.currentData()
-        self.unit.setCurrentText(q.get("unit", UNITS[0]))
-        self.unit.setEnabled(mode == "istd_conc")
-        self.istd_conc.setEnabled(mode == "istd_conc")
-        self.istd_conc.setValue(float(q.get("istd_conc_value") or 0))
+        own = mode == "istd_conc"
+        self.mode_form.setRowVisible(self.unit, own)
+        self.mode_form.setRowVisible(self.istd_conc, own)
+        self.mode_form.setRowVisible(self.result_unit, not own)
+        unit = q.get("unit", UNITS[0]) or UNITS[0]
+        pending = self._commit.isActive()           # never overwrite a value that is still being typed
+        if not (pending or self.unit.hasFocus() or self.unit.lineEdit().hasFocus()):
+            self.unit.setCurrentText(unit)
+        if not (pending or self.istd_conc.hasFocus()):
+            self.istd_conc.setValue(float(q.get("istd_conc_value") or 0))
+        self.istd_conc.setSuffix(f" {unit}")
+        from gcws.quant.service import mode_unit
+        self.result_unit.setText(f"<b>{mode_unit(q)}</b> (fixed by the mode)")
         self.mode_note.setText({
-            "nias_mgkg": "mg/dm² = corrected FID area × mean ISTD factor; mg/kg = mg/dm² × O/V. "
-                         "Blank correction from the assigned blanks (larger of Blank / Blank+ISTD).",
-            "istd_conc": "c = corrected area / mean ISTD area × ISTD concentration (unit as entered).",
-            "total_ugl": "c [µg/L] = corrected area / mean ISTD area × c(ISTD in the extract) "
-                         "from ISTD amount and extract volume.",
-            "area_pct": "Area % of all integrated peaks (solvent excluded).",
+            "nias_mgkg": "<b>What it computes:</b> mg/kg food simulant.<br>"
+                         "mg/dm² = blank-corrected FID area × mean ISTD factor; mg/kg = mg/dm² × O/V.<br>"
+                         "The factor comes from the Internal standards table (concentration, area) and the "
+                         "migration conditions (cell area, coverage, O/V). Blank correction: the larger of "
+                         "the Blank / Blank+ISTD areas.",
+            "istd_conc": "<b>What it computes:</b> the concentration of every peak relative to the internal "
+                         "standard,<br>c(substance) = corrected area ÷ ISTD area × c(ISTD).<br>"
+                         "Enter the ISTD concentration in the analysed solution and its unit; the results come "
+                         "out in that unit (e.g. 10 µg/mL ISTD → results in µg/mL). The ISTD area is the mean "
+                         "of the quantifying ISTDs found in the run (or the reference ISTD). No response "
+                         "factors: every substance is assumed to respond like the ISTD.",
+            "total_ugl": "<b>What it computes:</b> µg/L in the extract (total extraction).<br>"
+                         "c = corrected area ÷ mean ISTD area × c(ISTD in the extract), where c(ISTD) follows "
+                         "from the ISTD amount and the extract volume of the NIAS parameters.",
+            "area_pct": "<b>What it computes:</b> the area % of every peak among all integrated peaks "
+                        "(solvent excluded). No ISTD needed.",
         }[mode])
         s = self._settings()
+        from PySide6.QtWidgets import QAbstractItemView
+        editing = QAbstractItemView.EditingState
+        if self.params.state() == editing or self.defs.state() == editing:
+            self._loading = False          # a cell is being typed in: rebuild after the edit
+            return
         self.params.setRowCount(0)
         for key, label, unit in gc_fid.PARAMETER_LAYOUT:
             if key is None:
@@ -216,12 +261,23 @@ class QuantDock(QScrollArea):
     def _mode_changed(self, *_):
         if self._loading:
             return
+        self._commit.stop()
         q = copy.deepcopy(self.ws.quant)
         q["mode"] = self.mode.currentData()
-        q["unit"] = self.unit.currentText()
+        q["unit"] = self.unit.currentText().strip() or UNITS[0]
         q["istd_conc_value"] = self.istd_conc.value()
-        if q != self.ws.quant:
-            self._push_quant(f"quantification mode {MODES[q['mode']]}", q)
+        if q == self.ws.quant:
+            return
+        old = self.ws.quant
+        if q["mode"] != old.get("mode"):
+            text = f"quantification mode {MODES[q['mode']]}"
+        else:
+            text = f"ISTD concentration {q['istd_conc_value']:g} {q['unit']}"
+        self._push_quant(text, q)
+
+    def _def_edited(self, item):
+        if not self._loading:
+            self._apply_defs()
 
     def _param_edited(self, item):
         if self._loading or item.column() != 1:
@@ -251,11 +307,20 @@ class QuantDock(QScrollArea):
     def _add_def(self):
         import gc_fid
         code = gc_fid.next_istd_code(self._collect_defs())
+        self._loading = True
         self._def_row({"code": code, "name": "", "quantify": True})
+        self._loading = False
+        self._apply_defs()
 
     def _remove_def(self):
-        for r in sorted({i.row() for i in self.defs.selectedIndexes()}, reverse=True):
+        rows = sorted({i.row() for i in self.defs.selectedIndexes()}, reverse=True)
+        if not rows:
+            return
+        self._loading = True
+        for r in rows:
             self.defs.removeRow(r)
+        self._loading = False
+        self._apply_defs()
 
     def _apply_defs(self):
         import gc_fid
@@ -263,7 +328,8 @@ class QuantDock(QScrollArea):
         q["istd_defs"] = gc_fid.normalise_istd_defs(self._collect_defs())
         q["istd_options"] = {"use_mean_area": self.mean_area.isChecked(),
                              "reference": (q.get("istd_options") or {}).get("reference", "")}
-        self._push_quant("ISTD definitions", q)
+        if q != self.ws.quant:
+            self._push_quant("ISTD definitions", q)
 
     def _set_binding(self, code, rt):
         st = self.ws.active

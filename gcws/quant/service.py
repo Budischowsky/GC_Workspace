@@ -114,6 +114,28 @@ def compute(ws) -> QuantResult:
     return out
 
 
+def istd_reference_area(sample, options) -> Optional[float]:
+    """ISTD area for the "Internal standard concentration" mode: the mean area of the
+    quantifying ISTDs found in the run (or the reference ISTD's area when the factor is not
+    formed from the mean). Unlike the NIAS factor it needs no concentration in the ISTD table:
+    the concentration is the one entered for the mode."""
+    import gc_fid
+    found = []
+    for s in sample.standards:
+        try:
+            area = float(s.get("fid_area") or 0)
+        except (TypeError, ValueError):
+            area = 0.0
+        if s.get("role") == gc_fid.ROLE_QUANTIFICATION and area > 0:
+            found.append((str(s.get("code") or "").upper(), area))
+    if not found:
+        return None
+    if not (options or {}).get("use_mean_area", True):
+        wanted = str((options or {}).get("reference") or "").upper()
+        return next((a for c, a in found if c == wanted), found[0][1])
+    return sum(a for _c, a in found) / len(found)
+
+
 def rows_for(sample, st, mode, quant, settings, defs, options) -> dict[int, dict]:
     import gc_fid
     istd_of = {}
@@ -129,6 +151,7 @@ def rows_for(sample, st, mode, quant, settings, defs, options) -> dict[int, dict
             c_istd = float(quant.get("istd_conc_value") or 0) or None
         except (TypeError, ValueError):
             c_istd = None
+        mean_area = istd_reference_area(sample, options)
     out = {}
     res = st.results.get(FID)
     for row in sample.rows:
