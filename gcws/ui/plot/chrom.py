@@ -115,6 +115,9 @@ class ChromPanel(QWidget):
         self.plot.getAxis("bottom").enableAutoSIPrefix(False)
         self.plot.getAxis("left").enableAutoSIPrefix(True)
         self.plot.getAxis("left").setWidth(AXIS_WIDTH)
+        for side in ("bottom", "left"):             # a drag on an axis moves the time window
+            self.plot.getAxis(side).setCursor(Qt.SizeHorCursor)
+            self.plot.getAxis(side).setToolTip("Drag to move the chromatogram left / right")
         self.plot.showGrid(x=True, y=True, alpha=theme.PLOT["grid_alpha"])
         self.plot.setMenuEnabled(False)
         self.curves: dict[str, pg.PlotDataItem] = {}

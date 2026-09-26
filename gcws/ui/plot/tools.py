@@ -206,7 +206,8 @@ class ToolViewBox(pg.ViewBox):
     Right button (all boxes): a click asks for the mass spectrum at that time,
     a drag for the mean spectrum over the range, Shift+drag marks a background
     range; ``spectrumRequested(t0, t1, bg)`` is emitted in this box's x frame.
-    Right-drag on an axis still scales it. A non-interactive box never runs
+    Right-drag on an axis still scales it; left-drag on either axis pans the
+    time window in every tool mode. A non-interactive box never runs
     integration tools: a left click is emitted as ``clicked(x)`` and left
     drags zoom or pan. ``panel`` (a ChromPanel) supplies the signal key and
     the time offset of the trace, so tools see the trace's own time.
@@ -261,8 +262,25 @@ class ToolViewBox(pg.ViewBox):
         if axis is None and self.panel is not None:
             self.panel.linked_x_changed()
 
+    def _on_axis(self, ev) -> bool:
+        """The click was on an axis (outside the plot area): no tool acts there."""
+        return not self.sceneBoundingRect().contains(ev.scenePos())
+
+    def _axis_pan(self, ev):
+        """Left-drag on the RT or intensity axis: move the time window, whatever tool is active."""
+        ev.accept()
+        x_last = self.mapSceneToView(ev.lastScenePos()).x()
+        x_now = self.mapSceneToView(ev.scenePos()).x()
+        if x_now != x_last:
+            self.translateBy(x=x_last - x_now)
+            if self.panel is not None:
+                self.panel.linked_x_changed()
+
     def mouseClickEvent(self, ev):
         pos = self.mapSceneToView(ev.scenePos())
+        if ev.button() == Qt.LeftButton and not ev.double() and self._on_axis(ev):
+            ev.accept()                                 # a click on an axis never splits or deletes
+            return
         if ev.button() == Qt.RightButton:
             self.spectrumRequested.emit(pos.x(), pos.x(), None, (pos.x(), pos.y()))
             ev.accept()
@@ -303,6 +321,9 @@ class ToolViewBox(pg.ViewBox):
                 self.spectrumRequested.emit(lo, hi, None, (x0, y0))
 
     def mouseDragEvent(self, ev, axis=None):
+        if axis is not None and ev.button() == Qt.LeftButton:
+            self._axis_pan(ev)
+            return
         if ev.button() == Qt.RightButton and axis is None:
             self._right_drag(ev)
             return

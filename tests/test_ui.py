@@ -537,6 +537,37 @@ def test_agilent_style_zoom(qtbot, win, samples):
     assert win.ws.selected == k + 1 and c1.vb.viewRange()[0] == pytest.approx(before)
 
 
+def test_axis_drag_pans_in_every_tool(qtbot, win, samples):
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    _load(qtbot, win, samples, ["07_"])
+    c1, c2 = win.chrom, win.chrom2
+    st = win.ws.active
+    n_events = len(st.events("FID"))
+    for tool, side in (("baseline", "bottom"), ("select", "left"), ("delete", "bottom")):
+        win.tools.set_tool(tool)
+        c1.vb.setXRange(14.0, 18.0, padding=0)
+        QApplication.processEvents()
+        v = c1.vb.sceneBoundingRect()                    # just outside the plot area: on the axis
+        on_axis = QPointF(v.center().x(), v.bottom() + 8) if side == "bottom" else             QPointF(v.left() - 20, v.center().y())
+        centre = c1.plot.mapFromScene(on_axis)
+        vp = c1.plot.viewport()
+        QTest.mousePress(vp, Qt.LeftButton, Qt.NoModifier, centre)
+        step = QPoint(-10, 0) if side == "bottom" else QPoint(-5, 5)    # on the left axis: diagonal
+        for k in range(1, 9):
+            QTest.mouseMove(vp, centre + step * k)
+        end = centre + step * 8
+        QTest.mouseRelease(vp, Qt.LeftButton, Qt.NoModifier, end)
+        QApplication.processEvents()
+        x0, x1 = c1.vb.viewRange()[0]
+        assert x1 - x0 == pytest.approx(4.0, abs=0.01), tool      # moved, not zoomed
+        assert x0 > 14.05, tool                                   # dragged left: later times come in
+        assert c2.vb.viewRange()[0] == pytest.approx((x0, x1), abs=1e-6)
+        assert len(st.events("FID")) == n_events, tool            # no manual event from an axis drag
+    win.tools.set_tool("select")
+
+
 def test_export_chromatogram(qtbot, win, samples, tmp_path):
     from PySide6.QtGui import QImage
     from gcws.ui.dialogs import export_chrom as E
