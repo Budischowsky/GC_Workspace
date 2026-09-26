@@ -326,6 +326,7 @@ class MainWindow(QMainWindow):
         self.tools.toolChanged.connect(self._tool_changed)
         self.ws.message.connect(lambda t: self.statusBar().showMessage(t, 8000))
         self.ws.panelsChanged.connect(self._save_panels)
+        self.ws.peakFocusRequested.connect(lambda *_: self.chrom.zoom_to_selected())
         for sig in (self.ws.activeRunChanged, self.ws.runChanged, self.ws.runRemoved):
             sig.connect(lambda *_: self._refresh_run_chips())
         self.run_tabs.closeRequested.connect(self.close_run)
@@ -1188,8 +1189,11 @@ class MainWindow(QMainWindow):
                   "  right-click              mass spectrum at that time",
                   "  right-drag               mean spectrum over the range",
                   "  Shift+right-drag         background range (subtracted from scan spectra)",
-                  "  wheel                    zoom; right-drag on an axis scales it",
-                  "  double-click             reset the view; Shift disables snapping",
+                  "  left-drag (Select tool)  zoom into the box (time and intensity)",
+                  "  double-click             the whole run in both chromatograms",
+                  "  wheel                    zoom the time around the cursor; on an axis: that axis",
+                  "  right-drag on an axis    scale that axis; Shift disables snapping of tools",
+                  "  a peak picked in the table zooms both chromatograms to it",
                   "",
                   "Panels: double-click a title to maximize the panel, again to restore the layout.",
                   "Spectrum panel: ← / → step one scan, Esc returns to the peak."]

@@ -445,6 +445,7 @@ class DuplicatePage(QWidget):
                 j = min(range(len(res.peaks)), key=lambda q: abs(res.peaks[q].apex_rt - src["rt"]))
                 if abs(res.peaks[j].apex_rt - src["rt"]) < 0.05:
                     self.ws.select_peak(j)
+                    self.ws.peakFocusRequested.emit(j)
             return
 
     # -- output ------------------------------------------------------------------------------------

@@ -141,6 +141,20 @@ def _view_pos(plot_widget, vb, x, y):
     return plot_widget.mapFromScene(scene)
 
 
+def _double_click(widget, pos):
+    """A double-click as Windows delivers it (press, release, double-click, release); QTest's
+    mouseDClick leaves out the first press that pyqtgraph pairs the double-click with."""
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+    at = QPointF(pos)
+    g = QPointF(widget.mapToGlobal(pos))
+    for kind, buttons in ((QEvent.MouseButtonPress, Qt.LeftButton), (QEvent.MouseButtonRelease, Qt.NoButton),
+                          (QEvent.MouseButtonDblClick, Qt.LeftButton), (QEvent.MouseButtonRelease, Qt.NoButton)):
+        QApplication.sendEvent(widget, QMouseEvent(kind, at, g, Qt.LeftButton, buttons, Qt.NoModifier))
+    QApplication.processEvents()
+
+
 def test_right_click_shows_scan_spectrum(qtbot, win, samples):
     from PySide6.QtCore import Qt
     _load(qtbot, win, samples, ["07_"])
@@ -463,3 +477,60 @@ def test_peak_table_value_filter(qtbot, win, samples):
     assert t.proxy.rowCount() == with_conc
     t.clear_value_filter()
     assert t.proxy.rowCount() == n and t.proxy.value_filter is None
+
+
+def test_agilent_style_zoom(qtbot, win, samples):
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    _load(qtbot, win, samples, ["07_"])
+    c1, c2 = win.chrom, win.chrom2
+    win.reset_views()
+    full = c1.vb.viewRange()[0]
+    y2_full = c2.vb.viewRange()[1]
+    # left-drag draws a box: time and intensity of Chromatogram 1, the time of Chromatogram 2 follows
+    (x0, x1), (y0, y1) = c1.vb.viewRange()
+    a = _view_pos(c1.plot, c1.vb, 13.0, y0 + 0.6 * (y1 - y0))
+    b = _view_pos(c1.plot, c1.vb, 15.0, y0 + 0.1 * (y1 - y0))
+    vp = c1.plot.viewport()
+    QTest.mousePress(vp, Qt.LeftButton, Qt.NoModifier, a)
+    for k in range(1, 9):
+        QTest.mouseMove(vp, a + (b - a) * k / 8)
+    QTest.mouseRelease(vp, Qt.LeftButton, Qt.NoModifier, b)
+    QApplication.processEvents()
+    zx = c1.vb.viewRange()[0]
+    assert zx[0] == pytest.approx(13.0, abs=0.05) and zx[1] == pytest.approx(15.0, abs=0.05)
+    assert c1.vb.viewRange()[1][1] == pytest.approx(y0 + 0.6 * (y1 - y0), rel=0.05)
+    assert c2.vb.viewRange()[0] == pytest.approx(zx)
+    assert c2.vb.viewRange()[1] != pytest.approx(y2_full)            # the TIC fitted its own intensity
+    # wheel over the plot: time only, both panels
+    y_before = c1.vb.viewRange()[1]
+    pos = QPointF(_view_pos(c1.plot, c1.vb, 14.0, sum(y_before) / 2))
+    ev = QWheelEvent(pos, QPointF(vp.mapToGlobal(pos.toPoint())), QPoint(0, 0), QPoint(0, 240), Qt.NoButton,
+                     Qt.NoModifier, Qt.ScrollUpdate, False)
+    QApplication.sendEvent(vp, ev)
+    QApplication.processEvents()
+    wx = c1.vb.viewRange()[0]
+    assert wx[1] - wx[0] < zx[1] - zx[0] and c2.vb.viewRange()[0] == pytest.approx(wx)
+    # double-click: the whole run in both
+    yr = c1.vb.viewRange()[1]                                 # the wheel re-fitted the intensity
+    assert yr != y_before
+    _double_click(vp, _view_pos(c1.plot, c1.vb, 14.0, sum(yr) / 2))
+    QApplication.processEvents()
+    assert c1.vb.viewRange()[0] == pytest.approx(full, abs=0.05)
+    assert c2.vb.viewRange()[0] == pytest.approx(full, abs=0.05)
+    # a peak picked in the table zooms both; a click in the chromatogram only selects
+    t = win.table
+    res = win.ws.active_result()
+    k = max(range(len(res.peaks)), key=lambda i: res.peaks[i].area if 20 < res.peaks[i].apex_rt < 22 else 0)
+    row = t.proxy.mapFromSource(t.model.index(k, 0))
+    t.view.setCurrentIndex(row)
+    p = res.peaks[k]
+    zx = c1.vb.viewRange()[0]
+    assert zx[0] < p.apex_rt < zx[1] and zx[1] - zx[0] < 2.0
+    assert c2.vb.viewRange()[0] == pytest.approx(zx)
+    win.reset_views()
+    before = c1.vb.viewRange()[0]
+    win.tools.click(c1.vb, res.peaks[k + 1].apex_rt, 0.0, Qt.NoModifier, (1.0, 0.0), c1.tool_key())
+    assert win.ws.selected == k + 1 and c1.vb.viewRange()[0] == pytest.approx(before)

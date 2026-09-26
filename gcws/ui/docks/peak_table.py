@@ -336,6 +336,7 @@ class PeakTable(QWidget):
         src = self.proxy.mapToSource(current)
         if src.row() != self.ws.selected:
             self.ws.select_peak(src.row())
+            self.ws.peakFocusRequested.emit(src.row())     # picked in the list: the chromatograms zoom to it
 
     def _on_selection(self, run_id, index):
         if index < 0 or index >= self.model.rowCount():

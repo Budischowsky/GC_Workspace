@@ -23,7 +23,8 @@ from gcws.ui import theme
 
 TOOLS = [
     # name, label, shortcut, tooltip
-    ("select", "Select / zoom", "Z", "Click selects a peak, drag zooms, drag a bound of the selected peak to move it"),
+    ("select", "Select / zoom", "Z", "Click selects a peak; drag a box to zoom (double-click: whole run; wheel: "
+                                     "zoom the time); drag a bound of the selected peak to move it"),
     ("pan", "Pan", "H", "Drag to pan"),
     ("baseline", "Draw baseline", "B", "Drag from baseline start to end (Shift: exact mouse height)"),
     ("split", "Split (drop line)", "S", "Click to split the peak with a drop line (snaps to the valley)"),
@@ -245,6 +246,20 @@ class ToolViewBox(pg.ViewBox):
 
     def selected_index(self) -> int:
         return self.panel.selected_index() if self.panel is not None else self.ctl.ws.selected
+
+    # -- zoom like Agilent Enhanced Data Analysis ----------------------------------------------
+    # left-drag (select tool): box zoom of time and intensity; double-click: the whole run in
+    # every chromatogram (``on_reset``); wheel over the plot: time only, around the cursor, and
+    # the intensity follows what is visible; wheel over an axis: that axis.
+
+    def showAxRect(self, ax, **kwargs):
+        kwargs.setdefault("padding", 0)              # exactly the box that was drawn
+        super().showAxRect(ax, **kwargs)
+
+    def wheelEvent(self, ev, axis=None):
+        super().wheelEvent(ev, axis=0 if axis is None else axis)
+        if axis is None and self.panel is not None:
+            self.panel.linked_x_changed()
 
     def mouseClickEvent(self, ev):
         pos = self.mapSceneToView(ev.scenePos())
