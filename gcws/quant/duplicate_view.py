@@ -217,3 +217,119 @@ def limits(ws) -> tuple[float, float]:
         rl = GD.DEFAULT_REPORTING_LIMIT
     rl = float(rl) if ws.quant.get("mode", "nias_mgkg") == "nias_mgkg" else 0.0
     return limit, rl
+
+
+# -- analyst edits (double determination -> report) ----------------------------------------------
+#
+# The analyst can change the areas and concentrations of a pair, its mean, add a comment and decide
+# whether the substance goes into the report. The edits are kept in the replicate group
+# (``group["edits"]``) under the pair's mean RT and found again by RT after a re-integration.
+# Names and CAS are not kept here: they become the identification of both peaks.
+
+NUMERIC_EDITS = ("a1", "a2", "c1", "c2", "mean")
+
+
+def default_report(row: dict, verdict: Verdict | None = None) -> bool:
+    """AutoLib's rule: artefacts (found in one determination only) and substances below the
+    reporting limit are not reported; everything else is."""
+    status = row.get("status") or ""
+    if status.startswith("Artefact"):
+        return False
+    if verdict is not None and verdict.text.startswith("Below reporting limit"):
+        return False
+    return True
+
+
+def edit_key(rt: float) -> str:
+    return f"{float(rt):.3f}"
+
+
+def find_edit(edits: dict, rt: float, tol: float, used: set | None = None):
+    """Key of the stored edit for the pair at ``rt`` (nearest within ``tol``), or ``None``."""
+    best = None
+    for k, e in (edits or {}).items():
+        if used is not None and k in used:
+            continue
+        d = abs(float(e.get("rt", k)) - float(rt))
+        if d <= tol and (best is None or d < best[0]):
+            best = (d, k)
+    return best[1] if best else None
+
+
+def _mean(values):
+    vals = [v for v in values if v is not None]
+    return sum(vals) / len(vals) if vals else None
+
+
+def apply_edits(rows: list[dict], verdicts: list, edits: dict, tol: float) -> list[dict]:
+    """``rows`` with the analyst's changes applied. Every returned row carries ``a1``/``a2`` (areas),
+    ``report`` (bool), ``comment`` and ``edited`` = {field: value before the change}.
+
+    An edited area changes that determination's concentration in proportion (same factor and
+    O/V); an edited concentration and the mean are taken as entered; the mean and the difference
+    follow edited concentrations unless the mean itself was set."""
+    out, used = [], set()
+    for row, v in zip(rows, verdicts):
+        r = dict(row)
+        s1, s2 = row.get("source1") or {}, row.get("source2") or {}
+        r["a1"], r["a2"] = s1.get("area"), s2.get("area")
+        r["report"] = default_report(row, v)
+        r["comment"] = ""
+        r["edited"] = {}
+        k = find_edit(edits, row.get("rt") or 0.0, tol, used) if row.get("rt") is not None else None
+        if k is not None:
+            used.add(k)
+            e = edits[k]
+            r["edit_key"] = k
+            changed_c = False
+            for a, c in (("a1", "c1"), ("a2", "c2")):
+                if e.get(a) is not None:
+                    old_a, old_c = r[a], r.get(c)
+                    r["edited"][a] = old_a
+                    r[a] = float(e[a])
+                    if c not in e and old_a and old_c is not None:
+                        r["edited"].setdefault(c, old_c)
+                        r[c] = old_c * r[a] / old_a
+                        changed_c = True
+            for c in ("c1", "c2"):
+                if e.get(c) is not None:
+                    r["edited"].setdefault(c, r.get(c))
+                    r[c] = float(e[c])
+                    changed_c = True
+            if e.get("mean") is not None:
+                r["edited"]["mean"] = r.get("mean")
+                r["mean"] = float(e["mean"])
+            elif changed_c:
+                r["edited"]["mean"] = r.get("mean")
+                r["mean"] = _mean([r.get("c1"), r.get("c2")])
+            if changed_c or e.get("mean") is not None:
+                c1, c2 = r.get("c1"), r.get("c2")
+                m = _mean([c1, c2])
+                r["reldiff"] = abs(c1 - c2) / m * 100.0 if (c1 is not None and c2 is not None and m) else None
+            if e.get("report") is not None:
+                r["edited"]["report"] = r["report"]
+                r["report"] = bool(e["report"])
+            if e.get("comment"):
+                r["comment"] = str(e["comment"])
+        if r["report"] and r.get("mean") is None:
+            r["mean"] = _mean([r.get("c1"), r.get("c2")])      # a single determination the analyst keeps
+        out.append(r)
+    return out
+
+
+def rows_for_report(rows: list[dict], edits: dict, limit: float, reporting_limit: float, tol: float,
+                    labels=("A", "B")):
+    """``(combined rows to report, numeric overrides by row position)`` for a double determination."""
+    verdicts = [plain_verdict(r, limit, reporting_limit, labels) for r in rows]
+    edited = apply_edits(rows, verdicts, edits, tol)
+    keep, overrides = [], {}
+    for base, r in zip(rows, edited):
+        if not r["report"]:
+            continue
+        if any(f in r["edited"] for f in NUMERIC_EDITS) or (r["report"] and not default_report(base)):
+            overrides[len(keep)] = {f: r.get(f) for f in NUMERIC_EDITS + ("reldiff", "comment")}
+        row = dict(base)
+        if r.get("comment"):
+            row["review"] = "; ".join(x for x in (base.get("review", ""), r["comment"]) if x)
+        keep.append(row)
+    return keep, overrides

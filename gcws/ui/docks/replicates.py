@@ -27,6 +27,7 @@ def _scrolled(widget: QWidget) -> QScrollArea:
 class ReplicatesDock(QWidget):
     """Double determination (A/B) page and the general N-fold replicate groups."""
     reportRequested = QtSignal(str, str)       # kind, group id
+    previewRequested = QtSignal(str, str)      # kind, group id
 
     def __init__(self, ws, parent=None):
         super().__init__(parent)
@@ -35,6 +36,7 @@ class ReplicatesDock(QWidget):
         from gcws.ui.docks.duplicate import DuplicatePage
         self.duplicate = DuplicatePage(ws, self._set_groups)
         self.duplicate.reportRequested.connect(self.reportRequested.emit)
+        self.duplicate.previewRequested.connect(self.previewRequested.emit)
         self.groups = QListWidget()
         self.groups.setToolTip("Replicate groups: the determinations of one sample")
         self.groups.currentRowChanged.connect(lambda *_: self.refresh_sheet())

@@ -362,6 +362,7 @@ class MainWindow(QMainWindow):
         self.spectrum.ionClicked.connect(self.show_ion_eic)
         self.spectrum.libraryRequested.connect(lambda: self.edit_library(True))
         self.replicates.reportRequested.connect(lambda kind, gid: self.report(kind, gid))
+        self.replicates.previewRequested.connect(lambda kind, gid: self.report(kind, gid, preview=True))
         self._tool_changed("select")
 
     # -- helpers -------------------------------------------------------------
@@ -941,7 +942,8 @@ class MainWindow(QMainWindow):
             keep_middle=(target.with_name(target.stem + "_intermediate.xlsx")
                          if QSettings().value("report/keep_middle", False, type=bool) and not preview else None),
             sample_key=stem, record_seen=not preview,
-            ri_options={k: bool((self.ws.quant.get("ri") or {}).get(k)) for k in ("report_ri", "replace_rt")})
+            ri_options={k: bool((self.ws.quant.get("ri") or {}).get(k)) for k in ("report_ri", "replace_rt")},
+            edits=dict(g.get("edits") or {}))
         self.progress.setRange(0, 0)
         self.progress.setFormat(RS.KINDS[kind])
         self.progress.show()

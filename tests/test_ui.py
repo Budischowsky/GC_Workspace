@@ -673,3 +673,52 @@ def test_edit_library_dialog_adds_current_spectrum(qtbot, win, samples, tmp_path
     dlg.close()
     ws.dirty = False
     assert [r.name for r in LE.parse_msp(lib.read_text(encoding="cp1252"))] == ["Test substance, corrected"]
+
+
+def test_double_determination_cells_editable(qtbot, win, samples):
+    from PySide6.QtCore import Qt
+    from gcws.ui.docks.duplicate import C_C1, C_MEAN, C_NAME, C_REPORT
+    _load(qtbot, win, samples, ["07_", "08_", "11_"])
+    ws = win.ws
+    a = next(s.id for s in ws.states() if s.name.startswith("07_"))
+    b = next(s.id for s in ws.states() if s.name.startswith("11_"))
+    win.run_tabs.pairRequested.emit(a, b)
+    page = win.replicates.duplicate
+    t = page.table
+    assert page.rows
+
+    def cell(k, c):
+        r = next(i for i in range(t.rowCount()) if t.item(i, 0).data(Qt.UserRole) == k)
+        return t.item(r, c)
+    k = next(i for i, r in enumerate(page.rows) if r.get("source1") and r.get("source2") and r.get("report"))
+    rt = page.rows[k]["rt"]
+    # the name becomes the identification of the peak in both determinations (one undo step)
+    cell(k, C_NAME).setText("Analyst name")
+    for rid, src in ((a, "source1"), (b, "source2")):
+        st = ws.runs[rid]
+        assert any(i.name == "Analyst name" and i.manual for i in st.ident_set("FID").items), rid
+    # the report box and a number are kept in the group, marked and logged
+    k = min(range(len(page.rows)), key=lambda i: abs(page.rows[i]["rt"] - rt))
+    cell(k, C_REPORT).setCheckState(Qt.Unchecked)
+    k = min(range(len(page.rows)), key=lambda i: abs(page.rows[i]["rt"] - rt))
+    assert page.rows[k]["report"] is False and "report" in page.rows[k]["edited"]
+    cell(k, C_MEAN).setText("0,777")
+    k = min(range(len(page.rows)), key=lambda i: abs(page.rows[i]["rt"] - rt))
+    assert page.rows[k]["mean"] == pytest.approx(0.777)
+    assert cell(k, C_MEAN).font().italic() and "Changed by the analyst" in cell(k, C_MEAN).toolTip()
+    g = page.group()
+    e = next(iter(g["edits"].values()))
+    assert e["report"] is False and e["mean"] == pytest.approx(0.777)
+    assert any(r.action == "Double determination changed" for r in ws.audit.records)
+    # a text that is no number changes nothing
+    cell(k, C_C1).setText("abc")
+    assert "c1" not in next(iter(page.group()["edits"].values()))
+    # undo: mean, report box, then the name
+    win.a_undo.trigger()
+    k = min(range(len(page.rows)), key=lambda i: abs(page.rows[i]["rt"] - rt))
+    assert "mean" not in page.rows[k]["edited"]
+    win.a_undo.trigger()
+    k = min(range(len(page.rows)), key=lambda i: abs(page.rows[i]["rt"] - rt))
+    assert page.rows[k]["report"] is True
+    page.reset_all()
+    assert not page.group().get("edits")

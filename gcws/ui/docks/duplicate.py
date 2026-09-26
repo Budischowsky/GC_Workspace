@@ -6,6 +6,12 @@ a mirror plot (A up, B down) show whether the two determinations agree. The
 difference limit is the report parameter ``duplicate_max_reldiff``, so what
 is flagged here is exactly what the report flags. Choosing A and B keeps the
 replicate group in step, so the reports use the same pair.
+
+The analyst decides what goes out: the *Report* box of each substance (default:
+AutoLib's rule), the name and CAS (they become the identification of the peak
+in both determinations), areas, concentrations and the mean, and a comment.
+Every change is undoable, marked in the table and written to the audit trail;
+the NIAS report uses exactly these rows and values.
 """
 from __future__ import annotations
 
@@ -26,6 +32,10 @@ from gcws.ui import theme
 from gcws.ui.icons import color_chip
 
 ICON = {"ok": "✔", "warn": "⚠", "bad": "✖", "info": "ℹ", "neutral": "·"}
+#: table column -> edited field
+C_ICON, C_REPORT, C_RT, C_NAME, C_CAS, C_A1, C_A2, C_C1, C_C2, C_MEAN, C_DIFF, C_VERDICT, C_NOTES, C_COMMENT = range(14)
+FIELD_OF = {C_REPORT: "report", C_NAME: "name", C_CAS: "cas", C_A1: "a1", C_A2: "a2", C_C1: "c1", C_C2: "c2",
+            C_MEAN: "mean", C_COMMENT: "comment"}
 
 
 class _Card(QFrame):
@@ -50,13 +60,16 @@ class _Card(QFrame):
 
 class DuplicatePage(QWidget):
     reportRequested = QtSignal(str, str)        # kind, group id
+    previewRequested = QtSignal(str, str)       # kind, group id
 
     def __init__(self, ws, set_groups, parent=None):
         super().__init__(parent)
         self.ws = ws
         self.set_groups = set_groups            # callable(groups, text): undoable group change
-        self.rows: list[dict] = []
+        self.rows: list[dict] = []               # with the analyst's edits applied
+        self.base_rows: list[dict] = []          # as merged from the integrations
         self.verdicts: list = []
+        self._filling = False
         self.members: list[str] = []
         self._loading = False
 
@@ -119,7 +132,9 @@ class DuplicatePage(QWidget):
 
         self.table = QTableWidget(0, 0)
         self.table.verticalHeader().setVisible(False)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed
+                                   | QAbstractItemView.AnyKeyPressed)
+        self.table.itemChanged.connect(self._cell_edited)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setAlternatingRowColors(True)
@@ -140,12 +155,25 @@ class DuplicatePage(QWidget):
         split.setSizes([320, 220])
 
         buttons = QHBoxLayout()
+        prev = QPushButton("NIAS report - preview")
+        theme.set_primary(prev)
+        prev.setToolTip("The NIAS report of this double determination with the rows and values chosen here")
+        prev.clicked.connect(lambda: self._report("nias", preview=True))
+        buttons.addWidget(prev)
         for kind, label in (("nias", "NIAS report..."), ("fingerprint", "Fingerprint report..."),
                             ("total_extraction", "Total extraction report...")):
             b = QPushButton(label)
             b.clicked.connect(lambda _=False, k=kind: self._report(k))
             buttons.addWidget(b)
         buttons.addStretch(1)
+        reset_row = QPushButton("Reset row")
+        reset_row.setToolTip("Undo the analyst's changes of the selected substance")
+        reset_row.clicked.connect(self.reset_row)
+        reset_all = QPushButton("Reset all")
+        reset_all.setToolTip("Undo every change made in this double determination")
+        reset_all.clicked.connect(self.reset_all)
+        buttons.addWidget(reset_row)
+        buttons.addWidget(reset_all)
         exp = QPushButton("Export...")
         exp.clicked.connect(self.export)
         buttons.addWidget(exp)
@@ -164,6 +192,10 @@ class DuplicatePage(QWidget):
         ws.runRemoved.connect(lambda *_: self.refresh_choices())
         ws.runChanged.connect(lambda *_: self.refresh_choices())
         ws.quantChanged.connect(self._quant_changed)
+        ws.replicatesChanged.connect(self._reapply)
+        self.edit_note = theme.hint("Double-click a cell to change it; the Report box decides what goes into the "
+                                    "report. Changes are marked, undoable and logged.", True)
+        lay.insertWidget(lay.indexOf(split), self.edit_note)
         self.refresh_choices()
 
     # -- choices ---------------------------------------------------------------------
@@ -293,7 +325,151 @@ class DuplicatePage(QWidget):
         labels = self.labels()
         unit = self.ws.quant_unit()
         verdicts = [DV.plain_verdict(r, limit, rl, labels, unit) for r in rows]
-        self._show(rows, verdicts, problems)
+        self.base_rows = rows
+        self._show(DV.apply_edits(rows, verdicts, self.edits(), self._tol()), verdicts, problems)
+
+    # -- analyst edits ------------------------------------------------------------------------
+
+    def _tol(self) -> float:
+        from gcws.quant.nias_bridge import make_settings
+        return float(getattr(make_settings(self.ws.quant.get("settings")), "rt_tolerance", 0.035) or 0.035)
+
+    def edits(self) -> dict:
+        g = self.group()
+        return dict((g or {}).get("edits") or {})
+
+    def _reapply(self):
+        if not self.base_rows or self._filling:
+            return
+        self.rows = DV.apply_edits(self.base_rows, self.verdicts, self.edits(), self._tol())
+        self._fill_table()
+        self._update_report_note()
+
+    def _update_report_note(self):
+        n = sum(1 for r in self.rows if r.get("report"))
+        changed = sum(1 for r in self.rows if r.get("edited"))
+        text = f"{n} of {len(self.rows)} substances go into the report"
+        if changed:
+            text += f"; {changed} changed by the analyst"
+        self.edit_note.setText(text + ". Double-click a cell to change it; changes are marked, undoable and logged.")
+
+    def _names(self) -> str:
+        return " / ".join(self.ws.runs[m].name for m in self.members if m in self.ws.runs)
+
+    def set_edit(self, row: dict, field: str, value) -> None:
+        """Store (or with ``None`` remove) one analyst change of ``row`` in the replicate group."""
+        from datetime import datetime
+        from gcws.core.audit import current_user
+        self._sync_group(self.members)
+        g = self.group()
+        if g is None:
+            return
+        groups = copy.deepcopy(self.ws.replicate_groups)
+        tg = next(x for x in groups if x["id"] == g["id"])
+        edits = tg.setdefault("edits", {})
+        key = row.get("edit_key") or DV.edit_key(row["rt"])
+        e = edits.setdefault(key, {"rt": float(row["rt"])})
+        before = row.get(field) if field not in ("a1", "a2", "c1", "c2", "mean", "report") else \
+            row.get("edited", {}).get(field, row.get(field))
+        if value is None:
+            e.pop(field, None)
+        else:
+            e[field] = value
+        e["by"], e["at"] = current_user(), datetime.now().isoformat(timespec="seconds")
+        if not any(k in e for k in DV.NUMERIC_EDITS + ("report", "comment")):
+            edits.pop(key, None)
+        name = row.get("name") or f"RT {row['rt']:.3f}"
+        self.set_groups(groups, f"double determination: {field} of {name}")
+        self.ws.log("Double determination changed", self._names(), f"{name} (RT {row['rt']:.3f}): {field}",
+                    "" if before is None else str(before), "reset" if value is None else str(value))
+
+    def set_identity(self, row: dict, name: str | None = None, cas: str | None = None) -> None:
+        """Name / CAS of a substance: the identification of its FID peak in both determinations."""
+        from gcws.core.ident import Identification
+        from gcws.ui.undo import IdentCommand, MultiCommand
+        cmds = []
+        for key, i in (("source1", 0), ("source2", 1)):
+            src = row.get(key)
+            if src is None or i >= len(self.members) or self.members[i] not in self.ws.runs:
+                continue
+            rid = self.members[i]
+            st = self.ws.runs[rid]
+            res = self.ws.result(rid, FID)
+            if res is None or not res.peaks:
+                continue
+            j = min(range(len(res.peaks)), key=lambda q: abs(res.peaks[q].apex_rt - src["rt"]))
+            peak = res.peaks[j]
+            if abs(peak.apex_rt - src["rt"]) > 0.05:
+                continue
+            old = st.ident_set(FID).for_peak(peak)
+            ident = Identification(apex_rt=peak.apex_rt, name=name if name is not None else (old.name if old else ""),
+                                   cas=cas if cas is not None else (old.cas if old else ""),
+                                   score=old.score if old else None, status="Accepted (analyst)",
+                                   formula=old.formula if old else "", library=old.library if old else "",
+                                   hits=list(old.hits) if old else [], source="double determination",
+                                   manual=True, istd=old.istd if old else "")
+            what = "name" if name is not None else "CAS"
+            cmds.append(IdentCommand(self.ws, rid, FID, [(peak.apex_rt, ident)],
+                                     f"{what} of peak {peak.apex_rt:.3f} = {name if name is not None else cas!r}"))
+        if cmds:
+            label = f"double determination: {'name' if name is not None else 'CAS'} = {name if name is not None else cas}"
+            (self.ws.undo_group.activeStack() or self.ws.project_undo).push(MultiCommand(label, cmds))
+
+    def _cell_edited(self, item):
+        if self._filling:
+            return
+        field = FIELD_OF.get(item.column())
+        k = item.data(Qt.UserRole)
+        if field is None or k is None or not (0 <= k < len(self.rows)):
+            return
+        row = self.rows[k]
+        if field == "report":
+            on = item.checkState() == Qt.Checked
+            base = DV.default_report(self.base_rows[k], self.verdicts[k])
+            self.set_edit(row, "report", None if on == base else on)
+            return
+        text = item.text().strip()
+        if field in ("name", "cas"):
+            if text != (row.get(field) or ""):
+                if field == "name" and not text:
+                    self._reapply()
+                    return
+                self.set_identity(row, **{field: text})
+            return
+        if field == "comment":
+            self.set_edit(row, "comment", text or None)
+            return
+        from gcws.ui.docks.peak_table import parse_number
+        value = parse_number(text) if text else None
+        if text and value is None:
+            self.ws.message.emit(f"'{text}' is not a number")
+            self._reapply()
+            return
+        if value is None or value == row.get(field):
+            self.set_edit(row, field, None if value is None else value)
+            return
+        self.set_edit(row, field, value)
+
+    def reset_row(self):
+        row = self._current_row()
+        if row is None or not row.get("edit_key"):
+            return
+        self._sync_group(self.members)
+        g = self.group()
+        groups = copy.deepcopy(self.ws.replicate_groups)
+        tg = next(x for x in groups if x["id"] == g["id"])
+        tg.get("edits", {}).pop(row["edit_key"], None)
+        self.set_groups(groups, f"double determination: reset {row.get('name') or row['rt']}")
+        self.ws.log("Double determination changed", self._names(), f"{row.get('name')}: changes reset")
+
+    def reset_all(self):
+        g = self.group()
+        if g is None or not g.get("edits"):
+            return
+        groups = copy.deepcopy(self.ws.replicate_groups)
+        next(x for x in groups if x["id"] == g["id"])["edits"] = {}
+        self.set_groups(groups, "double determination: all changes reset")
+        self.ws.log("Double determination changed", self._names(), "all changes reset")
 
     def _show(self, rows, verdicts, problems):
         self.rows, self.verdicts = rows, verdicts
@@ -319,48 +495,80 @@ class DuplicatePage(QWidget):
         self.cards["only_b"].findChild(QLabel, "hint").setText(f"only in {labels[1]} (artefact)")
         theme._repolish(self.banner)
         self._fill_table()
+        self._update_report_note()
         self._draw_mirror()
 
     def _fill_table(self):
+        from PySide6.QtGui import QFont
         labels = self.labels()
         unit = self.ws.quant_unit()
         names = [self.ws.runs[m].name for m in self.members if m in self.ws.runs]
-        headers = ["", "RT [min]", "Substance", "CAS", f"{labels[0]} [{unit}]", f"{labels[1]} [{unit}]",
-                   f"Mean [{unit}]", "Diff. %", "Verdict", "Notes"]
+        headers = ["", "Report", "RT [min]", "Substance", "CAS", f"Area {labels[0]}", f"Area {labels[1]}",
+                   f"{labels[0]} [{unit}]", f"{labels[1]} [{unit}]", f"Mean [{unit}]", "Diff. %", "Verdict", "Notes",
+                   "Comment"]
+        self._filling = True
         self.table.setSortingEnabled(False)
         self.table.clear()
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         for i, n in enumerate(names[:2]):
-            self.table.horizontalHeaderItem(4 + i).setToolTip(n)
+            for c in (C_A1 + i, C_C1 + i):
+                self.table.horizontalHeaderItem(c).setToolTip(n)
+        self.table.horizontalHeaderItem(C_REPORT).setToolTip("Goes into the report (default: not for artefacts and "
+                                                             "values below the reporting limit)")
         self.table.setRowCount(0)
+        editable = set(FIELD_OF) - {C_REPORT}
         for k, (row, v) in enumerate(zip(self.rows, self.verdicts)):
-            if self.only_problems.isChecked() and v.level in ("ok", "neutral"):
+            if self.only_problems.isChecked() and v.level in ("ok", "neutral") and not row.get("edited"):
                 continue
             r = self.table.rowCount()
             self.table.insertRow(r)
             notes = "; ".join(x for x in (DV.english(row.get("review", "")),) if x)
-            vals = [ICON.get(v.level, ""), row.get("rt"), row.get("name", ""), row.get("cas", ""), row.get("c1"),
-                    row.get("c2"), row.get("mean"), row.get("reldiff"), v.text, notes]
+            vals = [ICON.get(v.level, ""), None, row.get("rt"), row.get("name", ""), row.get("cas", ""),
+                    row.get("a1"), row.get("a2"), row.get("c1"), row.get("c2"), row.get("mean"), row.get("reldiff"),
+                    v.text, notes, row.get("comment", "")]
+            edited = row.get("edited") or {}
             for c, val in enumerate(vals):
                 it = QTableWidgetItem()
-                if isinstance(val, float):
-                    it.setData(Qt.DisplayRole, round(val, {1: 3, 7: 1}.get(c, 4)))
+                if c == C_REPORT:
+                    it.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                    it.setCheckState(Qt.Checked if row.get("report") else Qt.Unchecked)
+                elif isinstance(val, float):
+                    if c in (C_A1, C_A2):
+                        it.setData(Qt.DisplayRole, int(round(val)))          # areas: whole counts
+                    else:
+                        it.setData(Qt.DisplayRole, round(val, {C_RT: 3, C_DIFF: 1}.get(c, 4)))
                     it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 else:
                     it.setText("" if val is None else str(val))
+                if c not in editable and c != C_REPORT:
+                    it.setFlags(it.flags() & ~Qt.ItemIsEditable)
                 it.setData(Qt.UserRole, k)
                 it.setToolTip(v.detail)
-                if c in (0, 8):
+                if c in (C_ICON, C_VERDICT):
                     it.setBackground(theme.status_brush(v.level))
                     it.setForeground(QBrush(theme.status_color(v.level)))
+                field = FIELD_OF.get(c)
+                if field in edited or (c == C_COMMENT and row.get("comment")):
+                    font = QFont()
+                    font.setItalic(True)
+                    it.setFont(font)
+                    it.setBackground(theme.status_brush("warn"))
+                    was = edited.get(field)
+                    it.setToolTip(f"Changed by the analyst" + (f" (was {was:.4g})" if isinstance(was, float) else
+                                                               (f" (was {'on' if was else 'off'})" if field == "report"
+                                                                else "")))
                 self.table.setItem(r, c, it)
+            if not row.get("report"):
+                for c in (C_RT, C_NAME, C_MEAN):
+                    self.table.item(r, c).setForeground(QBrush(QColor(theme.FAINT)))
         self.table.resizeColumnsToContents()
         hh = self.table.horizontalHeader()
         hh.setSectionResizeMode(QHeaderView.Interactive)
-        self.table.setColumnWidth(2, min(260, max(140, self.table.columnWidth(2))))
+        self.table.setColumnWidth(C_NAME, min(260, max(140, self.table.columnWidth(C_NAME))))
         hh.setStretchLastSection(True)
         self.table.setSortingEnabled(True)
+        self._filling = False
 
     # -- mirror plot -----------------------------------------------------------------------
 
@@ -426,9 +634,11 @@ class DuplicatePage(QWidget):
             self._navigate(row, prefer_b=False)
 
     def _open_row(self, r, c):
+        if c in FIELD_OF:                       # an editable cell: the double-click edits it
+            return
         k = self.table.item(r, 0).data(Qt.UserRole)
         if k is not None:
-            self._navigate(self.rows[k], prefer_b=c == 5)
+            self._navigate(self.rows[k], prefer_b=c in (C_A2, C_C2))
 
     def _navigate(self, row, prefer_b=False):
         order = [("source2", 1), ("source1", 0)] if prefer_b else [("source1", 0), ("source2", 1)]
@@ -461,11 +671,11 @@ class DuplicatePage(QWidget):
         q["settings"] = settings_dict(s)
         self.ws.push_quant(f"duplicate difference limit = {new:g} %", q)
 
-    def _report(self, kind):
+    def _report(self, kind, preview=False):
         self._sync_group(self.members)
         g = self.group()
         if g is not None:
-            self.reportRequested.emit(kind, g["id"])
+            (self.previewRequested if preview else self.reportRequested).emit(kind, g["id"])
 
     def export(self):
         if not self.rows:
@@ -486,11 +696,12 @@ class DuplicatePage(QWidget):
         sh.append(["Difference limit %", DV.limits(self.ws)[0]])
         sh.append([])
         sh.append(["RT [min]", "Substance", "CAS", f"{labels[0]} [{unit}]", f"{labels[1]} [{unit}]",
-                   f"Mean [{unit}]", "Diff. %", "Verdict", "Explanation"])
+                   f"Mean [{unit}]", "Diff. %", "Verdict", "Explanation", "Report", "Changed by analyst", "Comment"])
         fills = {lvl: PatternFill("solid", fgColor=theme.LEVELS[lvl][1].lstrip("#")) for lvl in theme.LEVELS}
         for row, v in zip(self.rows, self.verdicts):
             sh.append([row.get("rt"), row.get("name"), row.get("cas"), row.get("c1"), row.get("c2"), row.get("mean"),
-                       row.get("reldiff"), v.text, v.detail])
+                       row.get("reldiff"), v.text, v.detail, "yes" if row.get("report") else "no",
+                       ", ".join(sorted(row.get("edited") or {})), row.get("comment", "")])
             sh.cell(sh.max_row, 8).fill = fills.get(v.level, fills["neutral"])
         wb.save(path)
         self.ws.message.emit(f"Double determination exported: {path}")

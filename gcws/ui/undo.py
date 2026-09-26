@@ -134,3 +134,19 @@ class ValueCommand(QUndoCommand):
         self.setter(copy.deepcopy(self.old))
         if self.logfn:
             self.logfn("Undo " + self.text(), self.new, self.old)
+
+
+class MultiCommand(QUndoCommand):
+    """Several commands (e.g. on different runs) as one undo step."""
+
+    def __init__(self, text: str, commands: list):
+        super().__init__(text)
+        self.commands = list(commands)
+
+    def redo(self):
+        for c in self.commands:
+            c.redo()
+
+    def undo(self):
+        for c in reversed(self.commands):
+            c.undo()

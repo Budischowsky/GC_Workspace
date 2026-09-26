@@ -4,6 +4,8 @@ The chain is the NIAS one, unchanged in its later steps:
   1. the determinations of a replicate group as ``gc_model.Session``
   2. the combined rows (single, duplicate or N-fold)
   3. the intermediate workbook (``gc_export``)
+     (a double determination: only the substances the analyst lets through, with the values
+     the analyst set written into the workbook as numbers)
   4. ``process_workbook`` of the NIAS main script -> report .xlsx
   5. ``create_combined_word`` -> report .docx
   6. the reported substances into the unknown register ("already reported")
@@ -42,6 +44,8 @@ class ReportJob:
     sample_key: str = ""
     record_seen: bool = True
     ri_options: Optional[dict] = None
+    edits: dict = field(default_factory=dict)       # analyst edits of the double determination
+    overrides: dict = field(default_factory=dict)   # filled by combined_rows: row position -> values
 
 
 @dataclass
@@ -76,11 +80,56 @@ def build_session(job: ReportJob):
 
 
 def combined_rows(job: ReportJob):
-    import gc_fid
+    """The merged rows of the determinations. For a double determination only the substances
+    the analyst reports (default: AutoLib's rule, no artefacts and nothing below the reporting
+    limit); ``job.overrides`` receives the values the analyst set."""
     from gcws.quant.replicates import combine, engine_peaks
     tol = float(getattr(job.settings, "rt_tolerance", 0.035) or 0.035)
     lists = [engine_peaks(s) for s in job.samples]
-    return combine(lists, tol, job.policy)
+    rows = combine(lists, tol, job.policy)
+    job.overrides = {}
+    if len(job.samples) == 2 and job.policy == "all":
+        from gcws.quant import duplicate_view as DV
+        limit = float(getattr(job.settings, "duplicate_max_reldiff", 30.0) or 30.0)
+        rl = 0.0
+        if job.kind == "nias":
+            import gc_duplicate as GD
+            rl = getattr(job.settings, "reporting_limit", None)
+            rl = float(rl if rl is not None else GD.DEFAULT_REPORTING_LIMIT)
+        rows, job.overrides = DV.rows_for_report(rows, job.edits or {}, limit, rl, tol)
+    return rows
+
+
+def apply_overrides(middle: Path, overrides: dict) -> int:
+    """Write the analyst's values into the intermediate NIAS workbook as numbers (the NIAS main
+    script takes a saved number before its formula fallback). Returns the rows changed."""
+    if not overrides:
+        return 0
+    from openpyxl import load_workbook
+    from openpyxl.comments import Comment
+    wb = load_workbook(middle)
+    if "Doppelbestimmung" not in wb.sheetnames:
+        return 0
+    sh = wb["Doppelbestimmung"]
+    col = {str(c.value): c.column for c in sh[1] if c.value is not None}
+    cells = {"a1": "Area 1", "c1": "Concentration 1 [mg/kg]", "a2": "Area 2", "c2": "Concentration 2 [mg/kg]",
+             "mean": "mg/kg (mean)"}
+    note = Comment("set by the analyst in GC Workspace (double determination)", "GC Workspace")
+    for i, values in overrides.items():
+        r = 2 + int(i)
+        for field, header in cells.items():
+            if header in col and values.get(field) is not None:
+                c = sh.cell(r, col[header])
+                c.value = float(values[field])
+                c.comment = note
+        rd = values.get("reldiff")
+        if "Relative difference [%]" in col:
+            sh.cell(r, col["Relative difference [%]"]).value = None if rd is None else float(rd) / 100.0
+        if "Review" in col:
+            c = sh.cell(r, col["Review"])
+            c.value = "; ".join(x for x in (str(c.value or ""), "values set by the analyst") if x)
+    wb.save(middle)
+    return len(overrides)
 
 
 def generate(job: ReportJob, progress: Callable[[str], None] = lambda s: None) -> ReportResult:
@@ -98,9 +147,14 @@ def generate(job: ReportJob, progress: Callable[[str], None] = lambda s: None) -
                                      blank_path=Path(job.blank_names[0]) if job.blank_names[0] else None,
                                      blank_istd_path=Path(job.blank_names[1]) if job.blank_names[1] else None,
                                      combined=combined, ri_options=job.ri_options)
+        n = apply_overrides(middle, job.overrides)
+        if n:
+            warnings.append(f"{n} value(s) set by the analyst in the double determination")
     else:
         audit = gc_export.write_fingerprint_workbook(session, middle, job.kind, job.settings, combined=combined,
                                                      ri_options=job.ri_options)
+        if any(any(v.get(k) is not None for k in ("a1", "a2", "c1", "c2")) for v in job.overrides.values()):
+            warnings.append("Values edited in the double determination are used in the NIAS report only")
     progress("2/4 report (NIAS main script)")
     main = main_script()
     if job.migration and job.kind == "nias":
@@ -157,8 +211,8 @@ def reported_rows(job: ReportJob, combined, audit) -> list:
         return list(audit["rows"])
     limit = float(getattr(job.settings, "reporting_limit", 0.01) or 0.01)
     out = []
-    for r in combined:
-        mean = r.get("mean")
+    for i, r in enumerate(combined):
+        mean = (job.overrides.get(i) or {}).get("mean", r.get("mean"))
         if mean is None or mean < limit:
             continue
         out.append({"name": r.get("name", ""), "cas": r.get("cas", ""), "mean_mgkg": mean,

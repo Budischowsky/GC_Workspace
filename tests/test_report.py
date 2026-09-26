@@ -141,3 +141,66 @@ def test_preview_dialog_shows_warnings(qapp, tmp_path):
     assert dlg.col.count() == 1
     empty = ReportPreview("t", {"xlsx": tmp_path / "r.xlsx"}, [], warnings=[])
     assert "No page images" in empty.notes.text()
+
+
+MIGRATION = {"analyst": "Test", "migration_cell": "cell", "occupancy": "1", "simulant": "EtOH 95 %",
+             "temperature": "60 C", "duration": "10 d", "cell_area_dm2": 0.51, "occupancy_factor": 1,
+             "volume_ml": 100, "ov_ratio": 6.0}
+
+
+def _report_table(path):
+    """(RT, name, mg/kg) of the rows of a NIAS report."""
+    from openpyxl import load_workbook
+    sh = load_workbook(path, data_only=True).worksheets[0]
+    out, started = [], False
+    for r in sh.iter_rows(values_only=True):
+        if r and r[0] == "RT (min)":
+            started = True
+            continue
+        if started and isinstance(r[0], (int, float)):
+            out.append((float(r[0]), r[1], r[5]))
+    return out
+
+
+def test_duplicate_edits_reach_nias_report(samples, qapp, tmp_path):
+    from gcws.report.service import ReportJob, combined_rows, generate
+    from gcws.quant.nias_bridge import make_settings
+    from gcws.quant.replicates import combine, engine_peaks
+    from gcws import paths
+    ws = _ws_with(samples, ["06_", "07_", "08_", "11_"], qapp)
+    ids = [s.id for s in ws.states() if s.role == "sample"]
+    settings = make_settings(ws.quant.get("settings"))
+
+    def job(name, edits):
+        t = tmp_path / f"{name}_NIAS_Report.xlsx"
+        return ReportJob(kind="nias", samples=[ws.nias_sample(r) for r in ids], names=[ws.runs[r].name for r in ids],
+                         settings=settings, target=t, word=t.with_suffix(".docx"),
+                         cas_path=paths.RESOURCES / "CASINFO.xlsx", migration=MIGRATION, record_seen=False,
+                         edits=edits)
+    raw = combine([engine_peaks(ws.nias_sample(r)) for r in ids], 0.035)
+    plain = generate(job("plain", {}))
+    base = _report_table(plain.target)
+    # no edits: every reported value is the merged mean, and no artefact is reported
+    for rt, _name, mgkg in base:
+        src = min(raw, key=lambda r: abs(r["rt"] - rt))
+        assert not str(src.get("status", "")).startswith("Artefact")
+        assert mgkg == pytest.approx(src["mean"], rel=1e-3, abs=1e-3)
+    confirmed = [r for r in raw if r.get("mean") and r["mean"] > 0.05 and r["c1"] and r["c2"]]
+    drop, change = confirmed[0], confirmed[1]
+    artefact = max((r for r in raw if str(r.get("status", "")).startswith("Artefact")),
+                   key=lambda r: max(v for v in (r.get("c1"), r.get("c2")) if v is not None))
+    edits = {f"{drop['rt']:.3f}": {"rt": drop["rt"], "report": False},
+             f"{change['rt']:.3f}": {"rt": change["rt"], "mean": 1.234},
+             f"{artefact['rt']:.3f}": {"rt": artefact["rt"], "report": True, "c1": 0.5, "c2": 0.5}}
+    j = job("edited", edits)
+    assert len(combined_rows(j)) == len(combined_rows(job("n", {}))) + 0   # one dropped, one kept artefact
+    res = generate(j)
+    rep = _report_table(res.target)
+    near = lambda rt: [r for r in rep if abs(r[0] - rt) < 0.02]
+    assert not near(drop["rt"])
+    assert near(change["rt"]) and near(change["rt"])[0][2] == pytest.approx(1.234, abs=1e-3)
+    assert near(artefact["rt"]) and near(artefact["rt"])[0][2] == pytest.approx(0.5, abs=1e-3)
+    assert any("analyst" in w for w in res.warnings)
+    # everything else is as without edits
+    others = [r for r in base if all(abs(r[0] - x["rt"]) > 0.02 for x in (drop, change, artefact))]
+    assert all(near(r[0]) and near(r[0])[0][2] == pytest.approx(r[2]) for r in others)
