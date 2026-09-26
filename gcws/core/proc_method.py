@@ -33,7 +33,7 @@ SECTIONS = {
     "report": "Report options",
     "table": "Peak table (columns, value filter)",
 }
-QUANT_KEYS = ("mode", "unit", "istd_conc_value", "settings", "istd_defs", "istd_options")
+QUANT_KEYS = ("mode", "unit", "istd_conc_value", "settings", "istd_defs", "istd_options", "solvent_cut")
 #: sections that live in ``ws.quant`` under one key
 QUANT_SECTIONS = {"blank": "blank_sub", "deconv": "deconv", "ri": "ri", "migration": "migration"}
 

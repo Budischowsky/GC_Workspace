@@ -68,11 +68,13 @@ class IntegrationResult:
 
 # -- helpers -----------------------------------------------------------------
 
-def prepare(signal: Signal, method: IntegrationMethod) -> tuple[WorkSignal, Resolved, Timeline]:
+def prepare(signal: Signal, method: IntegrationMethod, t_min=None) -> tuple[WorkSignal, Resolved, Timeline]:
     rt = np.asarray(signal.rt, float)
     y = np.asarray(signal.y, float)
-    res = resolve(rt, y, method)
+    res = resolve(rt, y, method, t_min)
     tl = compile_timeline(rt, method, res)
+    if t_min is not None:
+        tl.on &= rt >= t_min
     step = float(np.median(np.diff(rt))) if rt.size > 1 else 1.0
     ys = savgol.smooth(y, res.window, res.order)
     d1 = savgol.derivative(y, res.window, res.order, 1, step)
@@ -403,8 +405,8 @@ def _accept(p: WP, m: dict, tl: Timeline, sig: WorkSignal, res: Resolved, method
 # -- main entry --------------------------------------------------------------
 
 def integrate(signal: Signal, method: IntegrationMethod,
-              manual_events: Iterable[ManualEvent] = ()) -> IntegrationResult:
-    sig, res, tl = prepare(signal, method)
+              manual_events: Iterable[ManualEvent] = (), t_min=None) -> IntegrationResult:
+    sig, res, tl = prepare(signal, method, t_min)
     rt = sig.rt
     step = float(np.median(np.diff(rt))) if rt.size > 1 else 1.0
     pw_pts = tl.peak_width / step
@@ -532,6 +534,13 @@ def integrate(signal: Signal, method: IntegrationMethod,
     if events:
         peaks, unresolved = MAN.apply(peaks, sig, events, width)
 
+    if t_min is not None:
+        peaks = [p for p in peaks if p.ta >= t_min]
+        for p in peaks:
+            p.t0 = max(p.t0, t_min)
+            p.children = [c for c in p.children if c.ta >= t_min]
+            for c in p.children:
+                c.t0 = max(c.t0, t_min)
     return _finalise(sig, peaks, res, method, unresolved)
 
 

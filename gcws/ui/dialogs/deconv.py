@@ -258,10 +258,13 @@ class DeconvolutionDialog(QDialog):
             return
         if scope == "range":
             (x0, x1), _ = self.win.chrom.vb.viewRange()
-            shift = self.st.delay_value if is_fid(self.key) else 0.0
+            shift = self.st.delay_value if is_fid(self.win.chrom.frame_key()) else 0.0
             t0, t1 = max(float(ms.rt[0]), x0 - shift), min(float(ms.rt[-1]), x1 - shift)
         else:
             t0, t1 = float(ms.rt[0]), float(ms.rt[-1])
+        cut = self.ws.solvent_cut(self.st, "TIC")
+        if cut is not None:
+            t0 = max(t0, cut)
         self.note.setText("Deconvoluting ...")
         st = self.st
 
@@ -269,6 +272,9 @@ class DeconvolutionDialog(QDialog):
             return D.deconvolute_range(ms, t0, t1, s, progress=progress)
 
         def done(comps, scope=scope):
+            if cut != self.ws.solvent_cut(st, "TIC"):
+                self.note.setText("Solvent cut changed; run deconvolution again.")
+                return
             if scope == "run":
                 DC.store_whole_run(st, s, comps)
                 self.ws.deconvChanged.emit(st.id)
@@ -279,7 +285,8 @@ class DeconvolutionDialog(QDialog):
 
     def _show_components(self, comps, res, where):
         from gcws.ms.interpret import Context, interpret
-        self.comps = list(comps)
+        cut = self.ws.solvent_cut(self.st, "TIC")
+        self.comps = [c for c in comps if cut is None or c.rt >= cut]
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
         t0 = t1 = None

@@ -57,6 +57,23 @@ def test_isolated_gaussians_area_and_rt():
         assert p.symmetry == pytest.approx(1.0, abs=0.08)
 
 
+def test_solvent_cut_and_manual_events():
+    sig = make([(2, 0.03, 100000), (7, 0.02, 800)])
+    m = method()
+    original = integrate(sig, m)
+    assert integrate(sig, m, t_min=None).digest == original.digest
+    cut = integrate(sig, m, [ManualEvent(K.ADD_PEAK, 1.8, 2.2)], t_min=5.5)
+    assert cut.peaks and all(p.apex_rt >= 5.5 and p.start >= 5.5 for p in cut.peaks)
+    assert cut.resolved.noise.t0 >= 5.5
+    by_rt(cut, 7)
+    assert integrate(sig, m, t_min=20).peaks == []
+
+
+def test_solvent_cut_preserves_nias_fid(run07):
+    m = nias_fid_method()
+    assert integrate(run07.fid, m).digest == integrate(run07.fid, m, t_min=5.5).digest
+
+
 def test_fused_pair_drop_line_conserves_total():
     peaks = [(4, 0.01, 500), (4.035, 0.01, 400)]
     res = integrate(make(peaks), method(skim_mode="none"))

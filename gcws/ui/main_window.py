@@ -254,6 +254,7 @@ class MainWindow(QMainWindow):
             m.addAction(a)
         m.addSeparator()
         m.addAction("Integration method panel", lambda: self._show_dock("events"))
+        m.addAction("Solvent cut...", self.edit_solvent_cut)
 
         m = mb.addMenu("I&dentify")
         m.addAction(self.a_search)
@@ -460,6 +461,10 @@ class MainWindow(QMainWindow):
     def reset_views(self):
         """Double-click in a chromatogram: the whole run in both, intensity fitted in each."""
         self.view_link.reset()
+
+    def edit_solvent_cut(self):
+        from gcws.ui.dialogs.solvent_cut import SolventCutDialog
+        SolventCutDialog(self.ws, self).exec()
 
     def edit_blank_options(self):
         import copy

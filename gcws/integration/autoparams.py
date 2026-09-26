@@ -36,7 +36,7 @@ class Resolved:
         return (self.slope_mult if mult is None else mult) * self.sigma_d1
 
 
-def _integration_start(rt, method: IntegrationMethod) -> float | None:
+def _integration_start(rt, method: IntegrationMethod, t_min=None) -> float | None:
     """First time the integrator is on (skips the solvent front)."""
     on = True
     start = None
@@ -46,7 +46,7 @@ def _integration_start(rt, method: IntegrationMethod) -> float | None:
         elif e.kind == EventKind.INTEGRATOR_ON and not on:
             start = e.time
             on = True
-    return start
+    return max(start, t_min) if start is not None and t_min is not None else (start if t_min is None else t_min)
 
 
 def measure_width(rt, y, noise_sigma, t_from=None) -> float:
@@ -93,9 +93,11 @@ def measure_width(rt, y, noise_sigma, t_from=None) -> float:
     return float(np.median([w for _, w in top]))
 
 
-def resolve(rt: np.ndarray, y: np.ndarray, method: IntegrationMethod) -> Resolved:
-    t_from = _integration_start(rt, method)
-    noise = N.estimate(rt, y, t_from)
+def resolve(rt: np.ndarray, y: np.ndarray, method: IntegrationMethod, t_min=None) -> Resolved:
+    t_from = _integration_start(rt, method, t_min)
+    # A cut near/past the run end must not fall back to estimating solvent noise.
+    keep = rt >= t_min if t_min is not None else np.ones(rt.size, bool)
+    noise = N.estimate(rt[keep], y[keep], t_from)
     auto = []
     step = float(np.median(np.diff(rt))) if rt.size > 1 else 1.0
     pw = method.peak_width

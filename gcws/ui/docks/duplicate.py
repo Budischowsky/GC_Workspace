@@ -713,7 +713,7 @@ class DuplicatePage(QWidget):
     def _t0(self, st, sig) -> float:
         """Where the mirror plot starts: the integration start, else the solvent end."""
         from gcws.integration.autoparams import _integration_start
-        t = _integration_start(sig.rt, self.ws.method_for(st, FID))
+        t = _integration_start(sig.rt, self.ws.method_for(st, FID), self.ws.solvent_cut(st, FID))
         if t is None:
             from gcws.quant.nias_bridge import make_settings
             t = float(getattr(make_settings(self.ws.quant.get("settings")), "solvent_end", 0.0) or 0.0)

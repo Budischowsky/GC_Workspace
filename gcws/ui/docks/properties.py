@@ -141,6 +141,14 @@ class PropertiesDock(QScrollArea):
             s = self.ws.runs.get(rid)
             if s is not None:
                 s.delay_override = v
+                if self.ws.quant.get("solvent_cut"):
+                    from gcws.core.keys import is_fid
+                    for key in list(s.results):
+                        if not is_fid(key):
+                            self.ws.integrate(rid, key)
+                    s.deconv.clear()
+                    self.ws.deconvChanged.emit(rid)
+                    self.ws.solventCutChanged.emit()
                 self.ws.runChanged.emit(rid)
                 self.ws.selectionChanged.emit(rid, self.ws.selected)
 

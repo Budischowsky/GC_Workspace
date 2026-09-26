@@ -25,9 +25,10 @@ def whole_run(st, settings: D.DeconvSettings):
     return (getattr(st, "deconv", None) or {}).get(("run", _skey(settings)))
 
 
-def compute_whole_run(st, settings: D.DeconvSettings, progress=None, cancel=None) -> list:
+def compute_whole_run(st, settings: D.DeconvSettings, progress=None, cancel=None, t_min=None) -> list:
     ms = st.run.ms
-    comps = D.deconvolute_range(ms, float(ms.rt[0]), float(ms.rt[-1]), settings, progress=progress, cancel=cancel)
+    start = float(ms.rt[0]) if t_min is None else max(float(ms.rt[0]), t_min)
+    comps = D.deconvolute_range(ms, start, float(ms.rt[-1]), settings, progress=progress, cancel=cancel)
     return comps
 
 
@@ -63,4 +64,6 @@ def hidden_components(ws, st, key: str, settings: D.DeconvSettings) -> list:
         return []
     from gcws.core.keys import is_fid
     shift = st.delay_value if is_fid(key) else 0.0
-    return [c for c in comps if res.peak_at(c.rt + shift) is None and c.quality >= 40]
+    cut = ws.solvent_cut(st, "TIC")
+    return [c for c in comps if (cut is None or c.rt >= cut)
+            and res.peak_at(c.rt + shift) is None and c.quality >= 40]

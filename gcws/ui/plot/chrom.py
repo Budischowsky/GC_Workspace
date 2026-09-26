@@ -79,6 +79,7 @@ class ViewLink:
             p.link = self
             p.vb.sigXRangeChanged.connect(lambda vb, rng, src=p: self.time_changed(src, rng))
         self.panels[0].ws.runAdded.connect(lambda *_: QTimer.singleShot(0, self.reset))
+        self.panels[0].ws.solventCutChanged.connect(self.reset)
 
     def time_changed(self, src, rng):
         if self.busy:
@@ -186,6 +187,8 @@ class ChromPanel(QWidget):
         self.blank.setToolTip("Show and integrate this signal minus the assigned blank "
                               "(settings: Quantify > Blank subtraction settings)")
         self.blank.toggled.connect(self._blank_toggled)
+        self.cut = QCheckBox("Cut solvent")
+        self.cut.toggled.connect(lambda on: None if self._loading else self.ws.set_solvent_cut(on))
         self.table_chip = theme.chip("", "accent")
         self.table_chip.setToolTip("The peak table lists the peaks of this chromatogram")
         self.title = QLabel()
@@ -212,7 +215,7 @@ class ChromPanel(QWidget):
         self.export_btn.setText("Export...")
         self.export_btn.setToolTip("Save this chromatogram as a picture (PNG, SVG, PDF ...)")
         self.export_btn.clicked.connect(lambda: self.exportRequested.emit(self.index))
-        for w in (self.signal, self.blank, self.table_chip):
+        for w in (self.signal, self.blank, self.cut, self.table_chip):
             bar.addWidget(w)
         bar.addWidget(self.title, 1)
         for w in (self.others, self.norm, self.stack, self.label_mode, self.export_btn):
@@ -234,6 +237,7 @@ class ChromPanel(QWidget):
         ws.selectionChanged.connect(lambda *_: self.refresh_active())
         ws.methodChanged.connect(lambda *_: self.refresh_events())
         ws.deconvChanged.connect(lambda *_: self.refresh_markers())
+        ws.solventCutChanged.connect(lambda: (self.sync_header(), self.refresh()))
         self._key_shown = self.key
         self.sync_header()
 
@@ -308,6 +312,10 @@ class ChromPanel(QWidget):
             self.signal.addItem(EIC_ITEM)
         self.signal.setCurrentText(cur)
         self.blank.setChecked(self.ws.panel_blank[self.index])
+        self.cut.setChecked(bool(self.ws.quant.get("solvent_cut", False)))
+        end = float((self.ws.quant.get("settings") or {}).get("solvent_end", 5.5))
+        self.cut.setToolTip(f"Hide and exclude solvent before {end:g} min (FID time). "
+                            "Change the time under Integration > Solvent cut; MS follows the FID–MS delay.")
         self.blank.setEnabled(self.ws.panel_blank[self.index]
                               or any(self.ws.blank_ids(st) for st in self.ws.states()))
         theme.set_chip(self.table_chip, "▦ Peak table" if self.is_table() else "", "accent")
@@ -366,7 +374,8 @@ class ChromPanel(QWidget):
         if self.norm.isChecked():
             m = self.ws.method_for(st, key)
             from gcws.integration.autoparams import _integration_start
-            t0 = _integration_start(sig.rt, m) or float(sig.rt[0])
+            t0 = _integration_start(sig.rt, m, self.ws.solvent_cut(st, key))
+            t0 = float(sig.rt[0]) if t0 is None else t0
             sel = sig.y[sig.rt >= t0]
             base = float(np.percentile(sel, 1)) if sel.size else 0.0
             top = float(sel.max()) if sel.size else 1.0
@@ -382,7 +391,10 @@ class ChromPanel(QWidget):
         for st in self.ws.states():
             s = st.run.signal(self.run_key(st))
             if s is not None and s.n:
-                spans.append(float(np.percentile(s.y, 99.5) - np.percentile(s.y, 1)))
+                cut = self.ws.solvent_cut(st, self.run_key(st))
+                y = s.y if cut is None else s.y[s.rt >= cut]
+                if y.size:
+                    spans.append(float(np.percentile(y, 99.5) - np.percentile(y, 1)))
         return max(spans) if spans else 1.0
 
     # -- drawing -------------------------------------------------------------------------------
@@ -412,7 +424,9 @@ class ChromPanel(QWidget):
                 curve.setClipToView(True)
                 self.vb.addItem(curve)
                 self.curves[st.id] = curve
-            curve.setData(sig.rt + self.shift(st), sig.y * sc + off)
+            cut = self.ws.solvent_cut(st, k)
+            start = 0 if cut is None else int(np.searchsorted(sig.rt, cut))
+            curve.setData(sig.rt[start:] + self.shift(st), sig.y[start:] * sc + off)
             curve.setPen(_pen(st.color, 1.8 if is_active else 1.0, 255 if is_active else 150))
             curve.setZValue(10 if is_active else 1)
             if is_active:
@@ -601,7 +615,10 @@ class ChromPanel(QWidget):
         if sig is None or sig.n < 2:
             return None
         dx = self.shift(st)
-        return float(sig.rt[0]) + dx, float(sig.rt[-1]) + dx
+        cut = self.ws.solvent_cut(st, self.run_key(st))
+        start = float(sig.rt[0]) if cut is None else max(float(sig.rt[0]), cut)
+        end = float(sig.rt[-1])
+        return (start + dx, end + dx) if start < end else None
 
     def _t_from(self):
         """Start of the integrated part on the shared axis (the solvent front is left out of the y fit)."""
@@ -610,7 +627,8 @@ class ChromPanel(QWidget):
         if sig is None:
             return None
         from gcws.integration.autoparams import _integration_start
-        t = _integration_start(sig.rt, self.ws.method_for(st, self.run_key(st)))
+        t = _integration_start(sig.rt, self.ws.method_for(st, self.run_key(st)),
+                               self.ws.solvent_cut(st, self.run_key(st)))
         return t + self.shift(st) if t is not None else None
 
     def fit_y(self):
@@ -698,7 +716,8 @@ class ChromPanel(QWidget):
             txt += f"  ({'FID' if is_fid(self.key) else 'MS'} time)"
         if st is not None:
             sig = st.run.signal(self.run_key(st))
-            if sig is not None and sig.rt[0] <= t <= sig.rt[-1]:
+            cut = self.ws.solvent_cut(st, self.run_key(st))
+            if sig is not None and sig.rt[0] <= t <= sig.rt[-1] and (cut is None or t >= cut):
                 txt += f"   {np.interp(t, sig.rt, sig.y):.4g}"
         self.cursor_label.setText(txt)
         vr = self.vb.viewRange()

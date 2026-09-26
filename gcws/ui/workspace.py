@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QObject, QTimer, Signal as QtSignal
+from PySide6.QtCore import QObject, QSettings, QTimer, Signal as QtSignal
 from PySide6.QtGui import QUndoGroup, QUndoStack
 
 from gcws.core.audit import AuditLog, AuditRecord
@@ -85,6 +85,7 @@ class Workspace(QObject):
     replicatesChanged = QtSignal()
     quantChanged = QtSignal()
     deconvChanged = QtSignal(str)              # run id: whole-run deconvolution available / dropped
+    solventCutChanged = QtSignal()
     panelsChanged = QtSignal()                 # signal / blank choice of Chromatogram 1 or 2, table source
     peakFocusRequested = QtSignal(int)         # the analyst picked a peak in a list: zoom the chromatograms to it
     message = QtSignal(str)
@@ -108,7 +109,8 @@ class Workspace(QObject):
         self.undo_group.addStack(self.project_undo)
         self.project_path: Optional[Path] = None
         self.replicate_groups: list[dict] = []
-        self.quant: dict = {"mode": "nias_mgkg", "unit": "µg/L", "settings": {}}
+        self.quant: dict = {"mode": "nias_mgkg", "unit": "µg/L", "settings": {},
+                           "solvent_cut": QSettings().value("integration/solvent_cut", False, type=bool)}
         self.quant_result = None
         self.dirty = False
         self._quant_timer = QTimer(self)
@@ -150,6 +152,9 @@ class Workspace(QObject):
         if results:
             st.results.update(results)
         self.runs[run.id] = st
+        if self.quant.get("solvent_cut"):
+            for key in list(st.results):
+                self.integrate(st.id, key, emit=False)
         self.order.append(run.id)
         self._sort_order()
         if len(self.runs) == 1:                       # the first run: panels on signals it has
@@ -333,6 +338,22 @@ class Workspace(QObject):
             st.methods[kind] = m
         return m
 
+    def solvent_cut(self, st, key: str):
+        """Cut in the signal's detector time; the shared setting is in FID minutes."""
+        if not self.quant.get("solvent_cut", False):
+            return None
+        t = float((self.quant.get("settings") or {}).get("solvent_end", 5.5))
+        return t if is_fid(key) else t - st.delay_value
+
+    def set_solvent_cut(self, enabled: bool, end=None):
+        import copy
+        q = copy.deepcopy(self.quant)
+        q["solvent_cut"] = bool(enabled)
+        if end is not None:
+            q.setdefault("settings", {})["solvent_end"] = float(end)
+        if q != self.quant:
+            self.push_quant("Solvent cut", q, "solvent cut and NIAS solvent end (FID time)")
+
     def integrate(self, run_id: str, key: Optional[str] = None, emit: bool = True) -> Optional[IntegrationResult]:
         st = self.runs.get(run_id)
         if st is None:
@@ -343,7 +364,7 @@ class Workspace(QObject):
             st.results.pop(key, None)
             return None
         res = integrate(sig, self._derived_method(st, key, sig) if is_derived(key) else self.method_for(st, key),
-                        st.events(key))
+                        st.events(key), t_min=self.solvent_cut(st, key))
         st.results[key] = res
         stale = [] if is_derived(key) else self._drop_derived_of(run_id, key)
         if key == FID and st.run.ms is not None and st.delay is not None and st.delay_override is None:
@@ -389,7 +410,7 @@ class Workspace(QObject):
         m.threshold = m.threshold if m.threshold is not None else r.threshold
         if not m.slope_sensitivity:
             from gcws.integration.autoparams import resolve
-            own = resolve(sig.rt, sig.y, m)
+            own = resolve(sig.rt, sig.y, m, self.solvent_cut(st, key))
             m.slope_sensitivity = r.slope_abs() / (own.sigma_d1 or 1e-12)
         return m
 
@@ -485,12 +506,26 @@ class Workspace(QObject):
 
     def _quant_settings_changed(self, old: dict, new: dict) -> None:
         """Sub-settings that feed derived data: only what changed is invalidated."""
+        def cut(q):
+            return bool(q.get("solvent_cut", False)), (q.get("settings") or {}).get("solvent_end", 5.5)
+        cut_changed = cut(old or {}) != cut(new or {})
+        if cut_changed:
+            QSettings().setValue("integration/solvent_cut", bool(new.get("solvent_cut", False)))
+            # Snapshot all keys first: base integrations invalidate derived results in other runs.
+            keys = {st.id: list(st.results) for st in self.states()}
+            for derived in (False, True):
+                for st in self.states():
+                    for key in keys[st.id]:
+                        if is_derived(key) == derived:
+                            self.integrate(st.id, key)
         if any((old or {}).get(k) != (new or {}).get(k) for k in ("blank_sub", "istd_defs", "istd_bindings")):
             self.invalidate_blank(None)             # the ISTD windows are kept out of the subtraction
-        if (old or {}).get("deconv") != (new or {}).get("deconv"):
+        if cut_changed or (old or {}).get("deconv") != (new or {}).get("deconv"):
             for st in self.states():
                 st.deconv = {}
                 self.deconvChanged.emit(st.id)
+        if cut_changed:
+            self.solventCutChanged.emit()
 
     def quant_unit(self) -> str:
         from gcws.quant.service import mode_unit
