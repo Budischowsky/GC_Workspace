@@ -151,3 +151,49 @@ def test_nias_numbers_unchanged_by_blank_features(ws_blank):
     after = {i: (r.get("corr_area"), r.get("conc")) for i, r in ws.quant_result.rows.get(rid, {}).items()}
     assert before and before == after
     ws.set_signal_key("FID")
+
+
+def test_subtract_protects_windows():
+    rt = np.linspace(0, 10, 1001)
+    peak = lambda c, h: h * np.exp(-0.5 * ((rt - c) / 0.03) ** 2)
+    sample = Signal("FID", rt, 10 + peak(3, 100) + peak(6, 500))
+    blank = Signal("FID", rt, 10 + peak(3, 100) + peak(6, 500))      # the ISTD at 6 is in the blank too
+    for mode in ("peaks", "full"):
+        out, _ = subtract(sample, [("b", blank, None)], BlankOptions(), mode, "FID - Blank",
+                          protect=[(5.8, 6.2)])
+        m = (rt >= 5.8) & (rt <= 6.2)
+        assert np.allclose(out.y[m], sample.y[m])                     # kept whole
+        assert out.y[np.argmin(abs(rt - 3))] < 20                     # the blank peak is gone
+
+
+@pytest.mark.parametrize("source", ["blank_istd", "both"])
+def test_istds_survive_blank_istd_subtraction(ws_blank, source):
+    import copy
+    ws, ids = ws_blank
+    st = ws.runs[ids["07_"]]
+    st.blanks, st.blanks_istd = [ids["08_"]], [ids["06_"]]
+    old = copy.deepcopy(ws.quant)
+    q = copy.deepcopy(ws.quant)
+    q["blank_sub"] = BlankOptions(source=source).to_dict()
+    ws.quant = q
+    ws._quant_settings_changed(old, q)
+    try:
+        assert ids["06_"] in ws.blank_ids(st)
+        istd = ws.istd_peaks(st.id, "FID")
+        raw = ws.result(st.id, "FID")
+        assert {round(raw.peaks[i].apex_rt, 1) for i in istd} >= {13.4, 18.9}
+        der = ws.result(st.id, "FID - Blank")
+        for t in (13.417, 18.917):
+            pr = min(raw.peaks, key=lambda p: abs(p.apex_rt - t))
+            pd = min(der.peaks, key=lambda p: abs(p.apex_rt - t))
+            assert abs(pd.apex_rt - pr.apex_rt) < 0.005 and pd.area >= 0.95 * pr.area   # not subtracted
+        bm = ws.blank_matches(st.id, "FID")
+        assert not set(bm) & set(istd)
+        # the MS trace: the ISTD windows sit at the FID time minus the delay
+        tic = ws.istd_peaks(st.id, "TIC")
+        rtic = ws.result(st.id, "TIC")
+        assert any(abs(rtic.peaks[i].apex_rt + st.delay_value - 13.42) < 0.05 for i in tic)
+    finally:
+        st.blanks_istd = []
+        ws.quant = old
+        ws._quant_settings_changed(q, old)

@@ -485,8 +485,8 @@ class Workspace(QObject):
 
     def _quant_settings_changed(self, old: dict, new: dict) -> None:
         """Sub-settings that feed derived data: only what changed is invalidated."""
-        if (old or {}).get("blank_sub") != (new or {}).get("blank_sub"):
-            self.invalidate_blank(None)
+        if any((old or {}).get(k) != (new or {}).get(k) for k in ("blank_sub", "istd_defs", "istd_bindings")):
+            self.invalidate_blank(None)             # the ISTD windows are kept out of the subtraction
         if (old or {}).get("deconv") != (new or {}).get("deconv"):
             for st in self.states():
                 st.deconv = {}
@@ -550,6 +550,48 @@ class Workspace(QObject):
         ids = (st.blanks if src in ("blank", "both") else []) + (st.blanks_istd if src in ("blank_istd", "both") else [])
         return [b for b in dict.fromkeys(ids) if b in self.runs and b != st.id]
 
+    #: nominal ISTD retention time (definition) -> peak: search window (min), the largest peak wins
+    ISTD_TARGET_TOL = 0.1
+    #: an explicit ISTD binding (RT of the analyst's peak) -> peak
+    ISTD_BOUND_TOL = 0.02
+
+    def istd_peaks(self, run_id: str, key: str) -> dict[int, tuple[float, float]]:
+        """``{peak index: (start, end)}`` of the internal standards in ``key``'s peaks of a run.
+
+        From the ISTD table (target RT, or the RT bound by the analyst; "unbound" = none); an
+        MS trace takes the peak at the FID time minus the delay. Blank subtraction leaves these
+        peaks alone (trace and peak level): an ISTD is in the Blank+ISTD as well."""
+        st = self.runs.get(run_id)
+        base = base_key(key)
+        res = self.result(run_id, base) if st is not None else None
+        if res is None or not res.peaks:
+            return {}
+        import gc_fid
+        from gcws.quant.nias_bridge import make_settings
+        q = self.quant or {}
+        defs = gc_fid.normalise_istd_defs(q["istd_defs"]) if q.get("istd_defs") else \
+            gc_fid.default_istd_defs(make_settings(q.get("settings")))
+        bound = (q.get("istd_bindings") or {}).get(run_id) or {}
+        shift = 0.0 if is_fid(base) else -st.delay_value
+        out = {}
+        for d in defs:
+            code = d.get("code")
+            if code in bound:
+                if bound[code] is None:
+                    continue                            # the analyst: this ISTD is not in the run
+                target, tol, largest = float(bound[code]) + shift, self.ISTD_BOUND_TOL, False
+            elif d.get("target_rt") is not None:
+                target, tol, largest = float(d["target_rt"]) + shift, self.ISTD_TARGET_TOL, True
+            else:
+                continue
+            near = [i for i, p in enumerate(res.peaks) if abs(p.apex_rt - target) <= tol]
+            if not near:
+                continue
+            i = max(near, key=lambda k: res.peaks[k].area) if largest else \
+                min(near, key=lambda k: abs(res.peaks[k].apex_rt - target))
+            out[i] = (res.peaks[i].start, res.peaks[i].end)
+        return out
+
     def _derive(self, run: Run, key: str):
         """Provider of derived traces: ``"<key> - Blank"`` = sample minus its aligned blank(s)."""
         base, suffix = split_key(key)
@@ -573,7 +615,8 @@ class Workspace(QObject):
         t_from = _integration_start(sample.rt, self.method_for(st, base))
         sres = self.result(st.id, base)
         sig, aligns = B.subtract(sample, blanks, opts, opts.mode_fid if is_fid(base) else opts.mode_ms, key, t_from,
-                                 [p.apex_rt for p in sres.peaks] if sres else None)
+                                 [p.apex_rt for p in sres.peaks] if sres else None,
+                                 protect=list(self.istd_peaks(st.id, base).values()))
         st.blank_alignment[base] = aligns
         return sig
 
@@ -646,7 +689,10 @@ class Workspace(QObject):
                                                                            and bst.run.ms is not None) else None
             m = BM.match(res.peaks, bres.peaks, shift=shift, rt_tol=rt_tol, blank_run=b, scale=opts.scale,
                          ratio_limit=opts.ratio_limit, spectra=spectra, spectral_min=opts.spectral_min)
+            istd = self.istd_peaks(run_id, key)          # never "in blank", hidden or greyed out
             for i, bm in m.items():
+                if i in istd:
+                    continue
                 if i not in out or bm.ratio < out[i].ratio:
                     out[i] = bm
         self._blank_matches[ck] = out

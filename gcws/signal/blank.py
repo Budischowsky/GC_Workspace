@@ -68,8 +68,11 @@ def align(sample: Signal, blank: Signal, opts: BlankOptions, t_from: float | Non
 
 
 def subtract(sample: Signal, blanks: list[tuple], opts: BlankOptions, mode: str, key: str,
-             t_from: float | None = None, sample_apexes=None) -> tuple[Signal, list[Alignment]]:
-    """``blanks``: ``[(name, signal, blank apexes or None)]`` of the same kind as ``sample``."""
+             t_from: float | None = None, sample_apexes=None, protect=()) -> tuple[Signal, list[Alignment]]:
+    """``blanks``: ``[(name, signal, blank apexes or None)]`` of the same kind as ``sample``.
+
+    ``protect``: ``(start, end)`` windows (the internal standards' peaks) where nothing is
+    subtracted - an ISTD is added to the Blank+ISTD too and must keep its full area."""
     rt = np.asarray(sample.rt, float)
     y = np.asarray(sample.y, float)
     aligned = []
@@ -94,18 +97,24 @@ def subtract(sample: Signal, blanks: list[tuple], opts: BlankOptions, mode: str,
     count = valid.sum(axis=0)
     yb = np.where(count > 0, np.nansum(np.where(valid, stack, 0.0), axis=0) / np.maximum(count, 1), np.nan)
     missing = np.isnan(yb)
+    kept = np.zeros(rt.size, bool)
+    for a, b in protect or ():
+        kept |= (rt >= a) & (rt <= b)
     if mode == "peaks":
         filled = np.where(missing, np.interp(rt, rt[~missing], yb[~missing]) if (~missing).any() else 0.0, yb)
         part = filled - envelope(rt, filled, opts.env_window)
         part[missing] = 0.0
+        part[kept] = 0.0
         out = y - opts.scale * part
         if opts.clip:
             out = np.maximum(out, envelope(rt, y, opts.env_window))
     else:
         part = np.where(missing, 0.0, yb)
+        part[kept] = 0.0
         out = y - opts.scale * part
         if opts.clip:
             out = np.maximum(out, 0.0)
+    out[kept] = y[kept]
     names = ", ".join(a.blank for a in aligns)
     shifts = ", ".join(f"{a.shift:+.3f}" for a in aligns)
     label = f"{key} ({names}; shift {shifts} min)"
