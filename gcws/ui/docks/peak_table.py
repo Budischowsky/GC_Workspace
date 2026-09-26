@@ -61,6 +61,7 @@ class SortProxy(QSortFilterProxyModel):
 class PeakTable(QWidget):
     searchRequested = QtSignal()
     integrateRequested = QtSignal(bool)       # all runs?
+    deleteRequested = QtSignal(list)
 
     def __init__(self, ws, parent=None):
         super().__init__(parent)
@@ -90,6 +91,13 @@ class PeakTable(QWidget):
         self.view.selectionModel().currentRowChanged.connect(self._row_changed)
 
         tb = QToolBar()
+        self.delete_action = QAction("Delete peak(s)", self.view)
+        self.delete_action.setShortcut(QKeySequence(Qt.Key_Delete))
+        self.delete_action.setShortcutContext(Qt.WidgetShortcut)
+        self.delete_action.triggered.connect(
+            lambda: self.deleteRequested.emit([r.peak.apex_rt for r in self.selected_rows()]))
+        self.view.addAction(self.delete_action)
+        tb.addAction(self.delete_action)
         tb.setIconSize(tb.iconSize() * 0.8)
         a = tb.addAction(icon("integrate"), "Integrate")
         a.setToolTip("Re-integrate the active chromatogram with its method")
@@ -361,6 +369,7 @@ class PeakTable(QWidget):
         rows = self.selected_rows()
         m = QMenu(self)
         if rows:
+            m.addAction(self.delete_action)
             m.addAction("Copy").triggered.connect(self.copy)
             if any(r.ident for r in rows):
                 m.addAction("Clear identification").triggered.connect(lambda: self._clear(rows))

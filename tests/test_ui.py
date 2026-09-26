@@ -58,6 +58,44 @@ def test_manual_integration_undo_redo(qtbot, win, samples):
     assert st.events("FID")
 
 
+def test_delete_marked_peaks(qtbot, win, samples, monkeypatch):
+    from PySide6.QtCore import QItemSelectionModel, Qt
+    from PySide6.QtWidgets import QMenu
+    _load(qtbot, win, samples, ["07_"])
+    table, st = win.table, win.ws.active
+    before = win.ws.active_result().digest
+    n = table.model.rowCount()
+    table.view.sortByColumn(1, Qt.DescendingOrder)
+
+    def select_three():
+        table.view.clearSelection()
+        for row in range(3):
+            table.view.selectionModel().select(table.proxy.index(row, 0),
+                                               QItemSelectionModel.Select | QItemSelectionModel.Rows)
+        table.view.setFocus()
+
+    select_three()
+    qtbot.keyClick(table.view, Qt.Key_Delete)
+    assert table.model.rowCount() == n - 3
+    assert len(st.events(win.ws.active_key)) == 3
+    win.integrate()
+    assert table.model.rowCount() == n - 3
+    win.a_undo.trigger()
+    assert table.model.rowCount() == n and win.ws.active_result().digest == before
+    select_three()
+    with monkeypatch.context() as mp:
+        from gcws.ui.docks import peak_table
+        class TestMenu(QMenu):
+            def exec(self, *_):
+                assert table.delete_action in self.actions()
+                table.delete_action.trigger()
+        mp.setattr(peak_table, "QMenu", TestMenu)
+        table._menu(table.view.rect().center())
+    assert table.model.rowCount() == n - 3
+    win.a_undo.trigger()
+    assert win.ws.active_result().digest == before
+
+
 def test_layout_presets_roundtrip(qtbot, win):
     from gcws.ui.layout import presets
     for name in presets.PRESETS:

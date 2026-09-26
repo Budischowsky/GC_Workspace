@@ -27,7 +27,7 @@ from gcws.ui.layout.drop_overlay import DropOverlay
 from gcws.ui.plot.chrom import ChromPanel, sync_x
 from gcws.ui.plot.tools import TOOLS, ToolController
 from gcws.ui.run_tabs import RunTabBar
-from gcws.ui.undo import IdentCommand, ValueCommand, add_event
+from gcws.ui.undo import IdentCommand, ManualEventsCommand, ValueCommand, add_event
 from gcws.ui.workspace import Workspace
 
 DOCKS = [  # key, title
@@ -69,6 +69,7 @@ class MainWindow(QMainWindow):
         self.chroms = [self.chrom, self.chrom2]
         sync_x(self.chroms)
         self.table = PeakTable(self.ws)
+        self.table.deleteRequested.connect(self.delete_peaks)
         self.spectrum = SpectrumDock(self.ws)
         self.events = EventsDock(self.ws)
         self.props = PropertiesDock(self.ws)
@@ -572,6 +573,24 @@ class MainWindow(QMainWindow):
             for key in dict.fromkeys(self.ws.effective_key(st, self.ws.panel_key(i)) for i in (0, 1)):
                 self.ws.integrate(rid, key)
         self.statusBar().showMessage(f"Integrated {len(ids)} chromatogram(s)", 3000)
+
+    def delete_peaks(self, rts):
+        from gcws.core.events import ManualEvent, ManualKind
+        st = self.ws.active
+        if st is None or not rts:
+            return
+        rts = list(dict.fromkeys(rts))
+        text = f"delete {len(rts)} peak(s)"
+        reason = ""
+        if QSettings().value("prefs/require_reason", False, type=bool):
+            reason, ok = QInputDialog.getText(self, "Reason", f"Reason for: {text}")
+            if not ok:
+                return
+        key = self.ws.active_key
+        events = st.events(key) + [ManualEvent(ManualKind.DELETE, rt) for rt in rts]
+        st.undo.push(ManualEventsCommand(self.ws, st.id, key, events, text, reason))
+        self.ws.select_peak(-1)
+        self.statusBar().showMessage(f"Deleted {len(rts)} peak(s). Ctrl+Z to undo", 5000)
 
     def _manual_event(self, event, key=None):
         st = self.ws.active
