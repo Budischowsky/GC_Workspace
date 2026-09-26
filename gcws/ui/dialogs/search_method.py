@@ -52,8 +52,16 @@ class SearchMethodDialog(QDialog):
         self.name_include = QLineEdit()
         self.name_exclude = QLineEdit()
         self.libs = QListWidget()
-        refresh = QPushButton("Read libraries from EI Atlas")
+        refresh = QPushButton("Update the list")
+        refresh.setToolTip("Take over the libraries added or removed under Libraries... (new ones switched off)")
         refresh.clicked.connect(self._refresh_libs)
+        manage = QPushButton("Libraries...")
+        manage.setToolTip("Add or remove the libraries on this PC")
+        manage.clicked.connect(self._manage_libs)
+        lib_buttons = QHBoxLayout()
+        lib_buttons.addWidget(refresh)
+        lib_buttons.addWidget(manage)
+        lib_buttons.addStretch(1)
         mz = QHBoxLayout()
         mz.addWidget(self.mz_auto)
         mz.addWidget(self.min_mz)
@@ -73,7 +81,7 @@ class SearchMethodDialog(QDialog):
         f.addRow("", self.dedupe)
         f.addRow("", self.require_cas)
         f.addRow("Libraries", self.libs)
-        f.addRow("", refresh)
+        f.addRow("", lib_buttons)
         bb = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Close)
         bb.accepted.connect(self._save)
         bb.rejected.connect(self.reject)
@@ -113,16 +121,21 @@ class SearchMethodDialog(QDialog):
             it.setCheckState(Qt.Checked if e.enabled else Qt.Unchecked)
             self.libs.addItem(it)
 
+    def _manage_libs(self):
+        from gcws.ui.dialogs.libraries import LibraryManagerDialog
+        LibraryManagerDialog(self).exec()
+        self._refresh_libs()
+
     def _refresh_libs(self):
-        import gc_atlas
+        from gcws.identify.service import adapt_library_names
+        from gcws.libsearch import service as LS
         try:
-            base = gc_atlas.ensure_server()
-            gc_atlas.wait_ready(base)
-            status = gc_atlas.request(base, "/api/status")
+            status = LS.status()
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "EI Atlas", str(exc))
+            QMessageBox.warning(self, "Libraries", str(exc))
             return
         m = self._collect()
+        adapt_library_names(m, [x["name"] for x in self.SM.available_libraries(status)])
         self.SM.reconcile(m, status)
         self._fill_libs(m.libraries)
 

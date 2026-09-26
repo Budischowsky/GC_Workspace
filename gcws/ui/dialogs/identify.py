@@ -79,8 +79,8 @@ class SearchStartDialog(QDialog):
         r.addStretch(1)
         f.addRow("", r)
         f.addRow("", self.review)
-        note = QLabel("ISTD peaks and names entered by hand are never overwritten. The search runs "
-                      "locally in EI Atlas (started without a window if necessary).")
+        note = QLabel("ISTD peaks and names entered by hand are never overwritten. The search runs in "
+                      "GC Workspace over the libraries listed under Identify > Libraries...")
         note.setWordWrap(True)
         note.setObjectName("hint")
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -272,7 +272,7 @@ class AtlasHitsDialog(QDialog):
 
     def __init__(self, points, name, method, parent=None, on_assign=None, on_library=None):
         super().__init__(parent)
-        self.setWindowTitle(f"EI Atlas - {name}")
+        self.setWindowTitle(f"Library search - {name}")
         self.resize(980, 640)
         self.points = points
         self.on_assign = on_assign
@@ -307,20 +307,15 @@ class AtlasHitsDialog(QDialog):
         submit(self._search, on_done=self._done, on_error=lambda e: self.status.setText(f"Error: {e.splitlines()[0]}"))
 
     def _search(self):
-        import gc_atlas
-        import gc_search_method as SM
-        from gcws.identify.service import prepare_server
-        base = prepare_server(self.method)
-        masses = [m for m, _ in self.points]
-        rng = SM.mz_range(self.method, (int(min(masses)), int(max(masses)) + 1))
-        result = gc_atlas.request(base, "/api/analyze", {
-            "text": gc_atlas.msp_text({"spectrum": self.points, "name": self.windowTitle()}),
-            "settings": SM.to_api_settings(self.method, rng)})
-        return result.get("hits") or []
+        from gcws.identify.service import prepare_local, search_spectrum
+        prepare_local(self.method)
+        return search_spectrum(self.points, self.windowTitle(), self.method)
 
     def _done(self, hits):
         self.hits_data = hits
-        self.status.setText(f"{len(hits)} hits  -  score = EI Atlas similarity (0-100), not a NIST match factor")
+        algo = "PBM Qual (0-99)" if getattr(self.method, "algorithm", "pbm") == "pbm" else \
+            "similarity, match factor / 10 (0-99)"
+        self.status.setText(f"{len(hits)} hits  -  score = {algo}")
         for h in hits:
             r = self.table.rowCount()
             self.table.insertRow(r)

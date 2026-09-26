@@ -1,8 +1,11 @@
-# Vendored NIAS modules
+# Vendored modules
+
+Check drift with `python tools/check_vendor.py`.
+
+## NIAS modules
 
 Copied from `NIAS Working` so GC Workspace runs on its own. Only files marked *patched* were
-changed; every change carries a `GCWS-PATCH` comment. Check drift with
-`python tools/check_vendor.py`.
+changed; every change carries a `GCWS-PATCH` comment.
 
 | File | SHA-256 (16) | Kind |
 |---|---|---|
@@ -29,3 +32,23 @@ changed; every change carries a `GCWS-PATCH` comment. Check drift with
 | gc_seen.py | `08c7ce0d7f6b3406` | verbatim |
 | NIAS Reporting v27.py | `66c5c58c1355fb9d` | patched |
 | nias_paths.py | `b0d12c4f12a9a4d0` | patched |
+
+## EI Atlas search engine
+
+EI Atlas's library readers (Agilent .L, NIST MS Search, Wiley/Shimadzu .lib, MSP), its search index
+and scoring (PBM, NIST-style similarity), copied unchanged from `UnknownEvaluation` (working tree of
+2026-09-26) into `gcws/libsearch/vendor`. `gcws/libsearch/service.py` subclasses `Engine` to load an
+explicit list of libraries (Identify > Libraries...), so EI Atlas itself is not needed for searching.
+
+| File | SHA-256 (16) | Kind |
+|---|---|---|
+| agilent.py | `6cda17b80c6545f1` | verbatim |
+| chemistry.py | `562af4c5c09026a9` | verbatim |
+| engine.py | `b1a8858438a86037` | verbatim |
+| msp.py | `2dcfb295a329e8fc` | verbatim |
+| msp_cache.py | `d32d40669291bec9` | verbatim |
+| nist.py | `79bc4efd99b0c0de` | verbatim |
+| pbm.py | `13ece6caa9cb8b49` | verbatim |
+| search_options.py | `024aca9994dd92a3` | verbatim |
+| shimadzu.py | `7a0c0d27152b9527` | verbatim |
+| spectral_index.py | `0ab02093485b9edb` | verbatim |

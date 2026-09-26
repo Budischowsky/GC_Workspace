@@ -35,15 +35,12 @@ def initialize() -> None:
 def import_nias_settings() -> list[str]:
     """Copy NIAS search methods and settings once (never overwrites)."""
     import json
-    import shutil
     src = NIAS_WORKING / "data"
     done = []
     if not src.is_dir():
         return done
-    for name in ("library_search_methods.json", "gc_nist.json"):
-        if (src / name).exists() and not (DATA / name).exists():
-            shutil.copy2(src / name, DATA / name)
-            done.append(name)
+    # Search methods and libraries are GC Workspace's own (Identify > Libraries...); they are
+    # no longer copied from NIAS / EI Atlas.
     target = DATA / "settings.json"
     if (src / "settings.json").exists() and not target.exists():
         try:

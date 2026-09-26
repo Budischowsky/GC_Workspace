@@ -151,9 +151,10 @@ class MainWindow(QMainWindow):
         self.a_integrate_all = A("Integrate all", lambda: self.integrate(True), "Shift+F5",
                                  icon("integrate", "#8e44ad"), "Re-integrate all loaded chromatograms")
         self.a_search = A("Library search...", self.library_search, "Ctrl+F", icon("search"),
-                          "Automatic library search (EI Atlas) of all integrated peaks")
+                          "Automatic library search of all integrated peaks (your libraries)")
         self.a_search_method = A("Search methods...", self.edit_search_methods)
-        self.spectrumSearchAtlasAction = A("EI Atlas hit list (selected peak)", self.atlas_selected, "Ctrl+E")
+        self.spectrumSearchAtlasAction = A("Library hit list (selected peak)", self.atlas_selected, "Ctrl+E")
+        self.a_libraries = A("Libraries...", self.manage_libraries)
         self.spectrumSearchNistAction = A("Search selected peak in NIST", self.nist_selected, "Ctrl+N")
         self.atlasResearchAction = A("Investigate selected peak in EI Atlas...", self.atlas_research, "Ctrl+Shift+E")
         self.a_eic = A("Extracted ion chromatogram...", self.ask_eic, "Ctrl+I")
@@ -243,6 +244,7 @@ class MainWindow(QMainWindow):
         m = mb.addMenu("I&dentify")
         m.addAction(self.a_search)
         m.addAction(self.a_search_method)
+        m.addAction(self.a_libraries)
         m.addSeparator()
         m.addAction(self.spectrumSearchAtlasAction)
         m.addAction(self.spectrumSearchNistAction)
@@ -641,7 +643,7 @@ class MainWindow(QMainWindow):
         self.cancel_btn.clicked.connect(self._search.cancel)
         self._search.progress.connect(lambda t: self.statusBar().showMessage(t))
         self._search.hit.connect(lambda i: self.progress.setValue(self._search.done))
-        self._search.failed.connect(lambda e: QMessageBox.warning(self, "EI Atlas", e))
+        self._search.failed.connect(self._search_failed)
         self._search.finished.connect(lambda cancelled: self._search_done(items, v, protected, cancelled))
         self._search.start()
 
@@ -660,6 +662,19 @@ class MainWindow(QMainWindow):
                 shown = visible_indices(self.ws, rid, table_key, state)
             out[rid] = map_indices(self.ws, rid, table_key, key, shown)
         return out
+
+    def _search_failed(self, text: str):
+        from gcws.libsearch import store
+        if not any(s.enabled for s in store.load()):
+            if QMessageBox.question(self, "Library search", text + "\n\nOpen the library list now?") \
+                    == QMessageBox.Yes:
+                self.manage_libraries()
+            return
+        QMessageBox.warning(self, "Library search", text)
+
+    def manage_libraries(self):
+        from gcws.ui.dialogs.libraries import LibraryManagerDialog
+        LibraryManagerDialog(self).exec()
 
     def search_key(self, target: str) -> str:
         """The TIC or FID key to search: the one a chromatogram shows (with its blank switch)."""
@@ -787,7 +802,7 @@ class MainWindow(QMainWindow):
             ident = identification_from_hits(item, hits, index, method, prev)
             ident.manual = True
             st.undo.push(IdentCommand(self.ws, st.id, self.ws.signal_key, [(peak.apex_rt, ident)],
-                                      f"peak {peak.apex_rt:.3f}: EI Atlas hit {ident.name}"))
+                                      f"peak {peak.apex_rt:.3f}: library hit {ident.name}"))
 
         dlg = AtlasHitsDialog(points, name, method, self, on_assign=assign if peak is not None else None,
                               on_library=lambda: self.edit_library(True))

@@ -1,4 +1,4 @@
-"""Automatic library search of integrated peaks (EI Atlas backend)."""
+"""Automatic library search of integrated peaks (built-in engine over the analyst's libraries)."""
 from __future__ import annotations
 
 import queue
@@ -156,22 +156,112 @@ def identification_from_hits(item: SearchItem, hits: list[dict], chosen: Optiona
         istd=prev.istd if prev else "")
 
 
-def prepare_server(method) -> str:
-    """Start/find EI Atlas and align the method with its libraries (worker thread)."""
-    import gc_atlas
+def adapt_library_names(method, names) -> None:
+    """Keep a method's library choices when a library is now listed under another name.
+
+    EI Atlas named libraries by their path in its folder (``Library\\NIST17.L``); libraries
+    added here are named by their folder or file (``NIST17.L``). A method entry that no
+    longer exists takes the library with the same last path part."""
+    from pathlib import PureWindowsPath
+    present = set(names)
+    by_tail = {}
+    for n in names:
+        for key in (PureWindowsPath(n).name.lower(), PureWindowsPath(n).stem.lower()):
+            by_tail.setdefault(key, n)
+    taken = {e.name for e in method.libraries if e.name in present}
+    for e in method.libraries:
+        if e.name in present:
+            continue
+        old = PureWindowsPath(e.name)
+        new = by_tail.get(old.name.lower()) or by_tail.get(old.stem.lower())
+        if new and new not in taken:
+            e.name = new
+            taken.add(new)
+
+
+def prepare_local(method, progress=lambda t: None) -> dict:
+    """Load the analyst's libraries and align ``method`` with them (worker thread)."""
     import gc_search_method as SM
-    base = gc_atlas.ensure_server()
-    gc_atlas.wait_ready(base)
-    status = gc_atlas.request(base, "/api/status")
+    from gcws.libsearch import service as LS
+    status = LS.status(progress)
+    names = [x["name"] for x in SM.available_libraries(status)]
+    if not names:
+        raise RuntimeError("No library loaded. Add the libraries on this PC under Identify > Libraries...")
+    adapt_library_names(method, names)
     SM.reconcile(method, status)
     if not method.enabled_libraries():
         for e in method.libraries:
             e.enabled = True
-    return base
+    return status
+
+
+def search_spectrum(points, name: str, method, rng=None, lite: bool = True) -> list[dict]:
+    """Hits of one spectrum in the method's libraries (built-in engine)."""
+    import gc_search_method as SM
+    from gcws.libsearch import service as LS
+    masses = [m for m, _ in points]
+    acquired = rng or (max(1, int(min(masses))), int(max(masses)) + 1)
+    result = LS.analyze(points, name, SM.to_api_settings(method, SM.mz_range(method, acquired), lite=lite))
+    return result.get("hits") or []
+
+
+def search_one(job, method, rng) -> list[dict]:
+    """The kept hits of one batch job (``gc_identify.search_one`` without the server)."""
+    import gc_identify as GI
+    hits = search_spectrum(job.spectrum, f"{job.label} Peak {job.peak_no} RT {job.rt:.3f}", method, rng)
+    return [dict(GI.hit_record(h), peaks=h.get("peaks") or [])
+            for h in hits[:max(1, min(method.top_n, GI.MAX_TOP_N))]]
+
+
+class LocalBatchSearch:
+    """``gc_identify.BatchSearch`` on the built-in engine: same messages, no EI Atlas.
+
+    ``("status", text)``, ``("hit", index)``, ``("error", text)``, finally ``("done", cancelled)``.
+    """
+
+    def __init__(self, jobs, method):
+        import threading
+        self.jobs, self.method = jobs, method
+        self.messages: "queue.Queue" = queue.Queue()
+        self.cancelled = threading.Event()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self.thread.start()
+        return self
+
+    def cancel(self):
+        self.cancelled.set()
+
+    def _run(self):
+        import gc_identify as GI
+        try:
+            self.messages.put(("status", "Loading the libraries ..."))
+            prepare_local(self.method, lambda t: self.messages.put(("status", t)))
+        except Exception as exc:  # noqa: BLE001
+            self.messages.put(("error", str(exc)))
+            self.messages.put(("done", True))
+            return
+        rng = GI.mz_range(self.jobs)
+        todo = [n for n, job in enumerate(self.jobs) if not job.done]
+        for count, index in enumerate(todo, 1):
+            if self.cancelled.is_set():
+                break
+            job = self.jobs[index]
+            self.messages.put(("status", f"Searching {count} / {len(todo)}: peak {job.peak_no} ({job.label}), "
+                                         f"RT {job.rt:.3f}"))
+            job.error, job.chosen = "", None
+            try:
+                job.hits = search_one(job, self.method, rng)
+            except Exception as exc:  # noqa: BLE001
+                job.hits, job.error = [], str(exc)
+            job.done = True
+            self.messages.put(("hit", index))
+        self.messages.put(("done", self.cancelled.is_set()))
 
 
 class LibrarySearchWorker(QObject):
-    """Runs ``gc_identify.BatchSearch`` and reports progress on the GUI thread."""
+    """Runs the batch search in a thread and reports progress on the GUI thread."""
     progress = QtSignal(str)
     hit = QtSignal(int)
     finished = QtSignal(bool)
@@ -179,12 +269,9 @@ class LibrarySearchWorker(QObject):
 
     def __init__(self, items: list[SearchItem], method, parent=None):
         super().__init__(parent)
-        import gc_identify as GI
         self.items = items
         self.method = method
-        self.settings = GI.IdentifySettings(method=method)
-        self.batch = GI.BatchSearch([it.job for it in items], self.settings,
-                                    server=lambda: prepare_server(self.method))
+        self.batch = LocalBatchSearch([it.job for it in items], method)
         self.timer = QTimer(self)
         self.timer.setInterval(60)
         self.timer.timeout.connect(self._drain)
@@ -204,7 +291,7 @@ class LibrarySearchWorker(QObject):
             except queue.Empty:
                 return
             if kind == "status":
-                self.progress.emit(_english(str(value)))
+                self.progress.emit(str(value))
             elif kind == "hit":
                 self.done += 1
                 self.hit.emit(int(value))

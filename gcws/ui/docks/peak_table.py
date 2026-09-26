@@ -99,7 +99,7 @@ class PeakTable(QWidget):
         a.triggered.connect(lambda: self.integrateRequested.emit(True))
         tb.addSeparator()
         self.search_action = tb.addAction(icon("search"), "Library search")
-        self.search_action.setToolTip("Automatic library search (EI Atlas) for all peaks")
+        self.search_action.setToolTip("Automatic library search of all peaks in your libraries")
         self.search_action.triggered.connect(self.searchRequested.emit)
         tb.addSeparator()
         exp = tb.addAction("Export...")
