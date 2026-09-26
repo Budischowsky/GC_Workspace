@@ -206,8 +206,8 @@ class ToolViewBox(pg.ViewBox):
     Right button (all boxes): a click asks for the mass spectrum at that time,
     a drag for the mean spectrum over the range, Shift+drag marks a background
     range; ``spectrumRequested(t0, t1, bg)`` is emitted in this box's x frame.
-    Right-drag on an axis still scales it; left-drag on either axis pans the
-    time window in every tool mode. A non-interactive box never runs
+    Right-drag on an axis scales it; left-drag pans that axis in every tool
+    mode. Intensity scaling keeps the bottom fixed. A non-interactive box never runs
     integration tools: a left click is emitted as ``clicked(x)`` and left
     drags zoom or pan. ``panel`` (a ChromPanel) supplies the signal key and
     the time offset of the trace, so tools see the trace's own time.
@@ -258,6 +258,10 @@ class ToolViewBox(pg.ViewBox):
         super().showAxRect(ax, **kwargs)
 
     def wheelEvent(self, ev, axis=None):
+        if axis == 1:
+            ev.accept()
+            self._scale_intensity(1.02 ** (-ev.delta() / 8.0))
+            return
         super().wheelEvent(ev, axis=0 if axis is None else axis)
         if axis is None and self.panel is not None:
             self.panel.linked_x_changed()
@@ -266,9 +270,29 @@ class ToolViewBox(pg.ViewBox):
         """The click was on an axis (outside the plot area): no tool acts there."""
         return not self.sceneBoundingRect().contains(ev.scenePos())
 
-    def _axis_pan(self, ev):
-        """Left-drag on the RT or intensity axis: move the time window, whatever tool is active."""
+    def _intensity_changed(self, old):
+        if self.panel is not None and self.panel.link is not None:
+            self.panel.link.intensity_changed(self.panel, old, self.viewRange()[1])
+
+    def _scale_intensity(self, factor):
+        old = self.viewRange()[1][:]
+        self.setYRange(old[0], old[0] + (old[1] - old[0]) * factor, padding=0)
+        self._intensity_changed(old)
+
+    def _view_drag(self, ev, axis):
+        old = self.viewRange()[1][:]
+        super().mouseDragEvent(ev, axis)
+        self._intensity_changed(old)
+
+    def _axis_pan(self, ev, axis):
+        """Pan only the axis under the pointer, whatever tool is active."""
         ev.accept()
+        if axis == 1:
+            old = self.viewRange()[1][:]
+            delta = self.mapSceneToView(ev.lastScenePos()).y() - self.mapSceneToView(ev.scenePos()).y()
+            self.translateBy(y=delta)
+            self._intensity_changed(old)
+            return
         x_last = self.mapSceneToView(ev.lastScenePos()).x()
         x_now = self.mapSceneToView(ev.scenePos()).x()
         if x_now != x_last:
@@ -287,7 +311,11 @@ class ToolViewBox(pg.ViewBox):
             return
         if ev.button() == Qt.LeftButton:
             if ev.double():
-                (self.on_reset or self.autoRange)()
+                if (self.panel is not None and self.panel.link is not None
+                        and ev.scenePos().x() < self.sceneBoundingRect().left()):
+                    self.panel.link.fit_intensity()
+                else:
+                    (self.on_reset or self.autoRange)()
                 ev.accept()
                 return
             if not self.interactive:
@@ -321,14 +349,18 @@ class ToolViewBox(pg.ViewBox):
                 self.spectrumRequested.emit(lo, hi, None, (x0, y0))
 
     def mouseDragEvent(self, ev, axis=None):
+        if axis == 1 and ev.button() == Qt.RightButton:
+            ev.accept()
+            self._scale_intensity(1.02 ** (ev.scenePos().y() - ev.lastScenePos().y()))
+            return
         if axis is not None and ev.button() == Qt.LeftButton:
-            self._axis_pan(ev)
+            self._axis_pan(ev, axis)
             return
         if ev.button() == Qt.RightButton and axis is None:
             self._right_drag(ev)
             return
         if ev.button() != Qt.LeftButton or not self.interactive:
-            super().mouseDragEvent(ev, axis)
+            self._view_drag(ev, axis)
             return
         self.band.setBrush(pg.mkBrush(*theme.PLOT["band_bg"]))
         tool = self.ctl.tool
@@ -342,11 +374,11 @@ class ToolViewBox(pg.ViewBox):
                 if tool == "select" and self._grab is not None and self._grab[0] != sel:
                     self._grab = None
             if tool not in DRAG_TOOLS and self._grab is None:
-                super().mouseDragEvent(ev, axis)
+                self._view_drag(ev, axis)
                 return
             self._drag_origin = (start.x(), start.y())
         if self._drag_origin is None:
-            super().mouseDragEvent(ev, axis)
+            self._view_drag(ev, axis)
             return
         ev.accept()
         x0, y0 = self._drag_origin

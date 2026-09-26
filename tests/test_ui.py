@@ -528,7 +528,7 @@ def test_agilent_style_zoom(qtbot, win, samples):
     win.reset_views()
     full = c1.vb.viewRange()[0]
     y2_full = c2.vb.viewRange()[1]
-    # left-drag draws a box: time and intensity of Chromatogram 1, the time of Chromatogram 2 follows
+    # A box sets both time and relative intensity in the other detector's units.
     (x0, x1), (y0, y1) = c1.vb.viewRange()
     a = _view_pos(c1.plot, c1.vb, 13.0, y0 + 0.6 * (y1 - y0))
     b = _view_pos(c1.plot, c1.vb, 15.0, y0 + 0.1 * (y1 - y0))
@@ -542,7 +542,9 @@ def test_agilent_style_zoom(qtbot, win, samples):
     assert zx[0] == pytest.approx(13.0, abs=0.05) and zx[1] == pytest.approx(15.0, abs=0.05)
     assert c1.vb.viewRange()[1][1] == pytest.approx(y0 + 0.6 * (y1 - y0), rel=0.05)
     assert c2.vb.viewRange()[0] == pytest.approx(zx)
-    assert c2.vb.viewRange()[1] != pytest.approx(y2_full)            # the TIC fitted its own intensity
+    boxed = c1.vb.viewRange()[1]
+    assert c2.vb.viewRange()[1] == pytest.approx([
+        y2_full[0] + (v - y0) / (y1 - y0) * (y2_full[1] - y2_full[0]) for v in boxed])
     # wheel over the plot: time only, both panels
     y_before = c1.vb.viewRange()[1]
     pos = QPointF(_view_pos(c1.plot, c1.vb, 14.0, sum(y_before) / 2))
@@ -553,8 +555,8 @@ def test_agilent_style_zoom(qtbot, win, samples):
     wx = c1.vb.viewRange()[0]
     assert wx[1] - wx[0] < zx[1] - zx[0] and c2.vb.viewRange()[0] == pytest.approx(wx)
     # double-click: the whole run in both
-    yr = c1.vb.viewRange()[1]                                 # the wheel re-fitted the intensity
-    assert yr != y_before
+    yr = c1.vb.viewRange()[1]                                 # manual intensity survives the time zoom
+    assert yr == pytest.approx(y_before)
     _double_click(vp, _view_pos(c1.plot, c1.vb, 14.0, sum(yr) / 2))
     QApplication.processEvents()
     assert c1.vb.viewRange()[0] == pytest.approx(full, abs=0.05)
@@ -588,6 +590,7 @@ def test_axis_drag_pans_in_every_tool(qtbot, win, samples):
         c1.vb.setXRange(14.0, 18.0, padding=0)
         QApplication.processEvents()
         v = c1.vb.sceneBoundingRect()                    # just outside the plot area: on the axis
+        y_before = c1.vb.viewRange()[1][:]
         on_axis = QPointF(v.center().x(), v.bottom() + 8) if side == "bottom" else             QPointF(v.left() - 20, v.center().y())
         centre = c1.plot.mapFromScene(on_axis)
         vp = c1.plot.viewport()
@@ -600,7 +603,13 @@ def test_axis_drag_pans_in_every_tool(qtbot, win, samples):
         QApplication.processEvents()
         x0, x1 = c1.vb.viewRange()[0]
         assert x1 - x0 == pytest.approx(4.0, abs=0.01), tool      # moved, not zoomed
-        assert x0 > 14.05, tool                                   # dragged left: later times come in
+        if side == "left":
+            assert (x0, x1) == pytest.approx((14.0, 18.0))
+            yr = c1.vb.viewRange()[1]
+            assert yr[0] > y_before[0]
+            assert yr[1] - yr[0] == pytest.approx(y_before[1] - y_before[0])
+        else:
+            assert x0 > 14.05, tool
         assert c2.vb.viewRange()[0] == pytest.approx((x0, x1), abs=1e-6)
         assert len(st.events("FID")) == n_events, tool            # no manual event from an axis drag
     win.tools.set_tool("select")

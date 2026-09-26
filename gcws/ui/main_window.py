@@ -24,7 +24,7 @@ from gcws.ui.docks.spectrum import SpectrumDock
 from gcws.ui.icons import icon
 from gcws.ui.layout import presets
 from gcws.ui.layout.drop_overlay import DropOverlay
-from gcws.ui.plot.chrom import ChromPanel, sync_x
+from gcws.ui.plot.chrom import ChromPanel, ViewLink
 from gcws.ui.plot.tools import TOOLS, ToolController
 from gcws.ui.run_tabs import RunTabBar
 from gcws.ui.undo import IdentCommand, ManualEventsCommand, ValueCommand, add_event
@@ -67,7 +67,7 @@ class MainWindow(QMainWindow):
         self.chrom = ChromPanel(self.ws, self.tools, 0)
         self.chrom2 = ChromPanel(self.ws, self.tools, 1)
         self.chroms = [self.chrom, self.chrom2]
-        sync_x(self.chroms)
+        self.view_link = ViewLink(self.chroms)
         self.table = PeakTable(self.ws)
         self.table.deleteRequested.connect(self.delete_peaks)
         self.spectrum = SpectrumDock(self.ws)
@@ -459,12 +459,7 @@ class MainWindow(QMainWindow):
 
     def reset_views(self):
         """Double-click in a chromatogram: the whole run in both, intensity fitted in each."""
-        ranges = [r for r in (p.data_x_range() for p in self.chroms) if r is not None]
-        if not ranges:
-            return
-        self.chrom.vb.setXRange(min(r[0] for r in ranges), max(r[1] for r in ranges), padding=0)
-        for p in self.chroms:
-            p.fit_y()
+        self.view_link.reset()
 
     def edit_blank_options(self):
         import copy
@@ -1376,7 +1371,12 @@ class MainWindow(QMainWindow):
                   "  left-drag (Select tool)  zoom into the box (time and intensity)",
                   "  double-click             the whole run in both chromatograms",
                   "  wheel                    zoom the time around the cursor; on an axis: that axis",
-                  "  right-drag on an axis    scale that axis; Shift disables snapping of tools",
+                  "  left-drag on an axis     pan time horizontally / intensity vertically",
+                  "  intensity right-drag / wheel   scale both panels with the bottom fixed",
+                  "  double-click intensity axis    fit both intensities, keep the time window",
+                  "  manual intensity stays on later time zooms; double-click fits it again",
+                  "  Shift disables snapping of integration tools",
+                  "  Delete in Peaks / substances   delete marked peaks (one undo step)",
                   "  a peak picked in the table zooms both chromatograms to it",
                   "",
                   "Panels: double-click a title to maximize the panel, again to restore the layout.",

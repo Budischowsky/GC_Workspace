@@ -5,7 +5,7 @@ optionally minus the assigned blank -- with the active run drawn bold with its
 peaks. The two panels share one time axis: Chromatogram 1's detector sets it,
 and a panel showing the other detector draws every run shifted by that run's
 FID-MS delay, so a compound sits at the same x in both. Zoom and pan are kept
-in sync on that axis (:func:`sync_x`); each panel fits its own intensity axis.
+in sync by ViewLink, including relative intensity gestures across detector units.
 
 Integration tools work on the signal of the panel they are used in. The peak
 table lists the peaks of one of the panels (``ws.table_panel``); a click in
@@ -16,9 +16,9 @@ from __future__ import annotations
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QSettings, Qt, QTimer, Signal as QtSignal
-from PySide6.QtGui import QColor, QPen
+from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPen
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QHBoxLayout, QInputDialog, QLabel, QToolButton, QVBoxLayout,
-                               QWidget)
+                               QSizePolicy, QWidget)
 
 from gcws.core.keys import base_key, is_derived, is_fid
 from gcws.integration.method import EventKind
@@ -68,26 +68,53 @@ def frame_offset(frame_key: str, key: str, delay: float) -> float:
     return delay if is_fid(frame_key) else -delay
 
 
-def sync_x(panels) -> None:
-    """Keep the time ranges of ``panels`` equal (in data units, whatever their widths)."""
-    busy = {"on": False}
+class ViewLink:
+    """Shared time and relative intensity gestures across different detector units."""
 
-    def follow(src):
-        def changed(_vb, rng):
-            if busy["on"]:
-                return
-            busy["on"] = True
-            try:
-                for p in panels:
-                    if p is not src:
-                        p.vb.setXRange(float(rng[0]), float(rng[1]), padding=0)
-                        p.linked_x_changed()
-            finally:
-                busy["on"] = False
-        return changed
+    def __init__(self, panels):
+        self.panels = list(panels)
+        self.manual_y = False
+        self.busy = False
+        for p in self.panels:
+            p.link = self
+            p.vb.sigXRangeChanged.connect(lambda vb, rng, src=p: self.time_changed(src, rng))
+        self.panels[0].ws.runAdded.connect(lambda *_: QTimer.singleShot(0, self.reset))
 
-    for p in panels:
-        p.vb.sigXRangeChanged.connect(follow(p))
+    def time_changed(self, src, rng):
+        if self.busy:
+            return
+        self.busy = True
+        try:
+            for p in self.panels:
+                if p is not src:
+                    p.vb.setXRange(*rng, padding=0)
+                p.linked_x_changed()
+        finally:
+            self.busy = False
+
+    def intensity_changed(self, src, old, new):
+        if self.busy or old == new or old[1] <= old[0]:
+            return
+        self.manual_y = True
+        span = old[1] - old[0]
+        lo, hi = (new[0] - old[0]) / span, (new[1] - old[0]) / span
+        for p in self.panels:
+            p._fit.stop()
+            if p is not src:
+                a, b = p.vb.viewRange()[1]
+                p.vb.setYRange(a + lo * (b - a), a + hi * (b - a), padding=0)
+
+    def fit_intensity(self):
+        self.manual_y = False
+        for p in self.panels:
+            p._fit.stop()
+            p.fit_y()
+
+    def reset(self):
+        ranges = [r for r in (p.data_x_range() for p in self.panels) if r is not None]
+        if ranges:
+            self.panels[0].vb.setXRange(min(r[0] for r in ranges), max(r[1] for r in ranges), padding=0)
+        self.fit_intensity()
 
 
 class ChromPanel(QWidget):
@@ -105,12 +132,16 @@ class ChromPanel(QWidget):
         self.index = index
         self._prefix = f"chrom{index + 1}"
         self._loading = False
+        self.link = None
         s = QSettings()
         self.vb = ToolViewBox(tools)
         self.vb.panel = self
         self.vb.spectrumRequested.connect(self._spectrum_request)
         self.vb.on_reset = self.resetRequested.emit
         self.plot = pg.PlotWidget(viewBox=self.vb)
+        self.plot.hideButtons()
+        self.plot.getPlotItem().layout.setContentsMargins(0, 0, 0, 0)
+        self.plot.getPlotItem().layout.setSpacing(0)
         self.plot.setLabel("bottom", "RT", units="min")
         self.plot.getAxis("bottom").enableAutoSIPrefix(False)
         self.plot.getAxis("left").enableAutoSIPrefix(True)
@@ -118,6 +149,9 @@ class ChromPanel(QWidget):
         for side in ("bottom", "left"):             # a drag on an axis moves the time window
             self.plot.getAxis(side).setCursor(Qt.SizeHorCursor)
             self.plot.getAxis(side).setToolTip("Drag to move the chromatogram left / right")
+        self.plot.getAxis("left").setCursor(Qt.SizeVerCursor)
+        self.plot.getAxis("left").setToolTip(
+            "Drag: move up/down · right-drag or wheel: intensity (baseline stays) · double-click: fit")
         self.plot.showGrid(x=True, y=True, alpha=theme.PLOT["grid_alpha"])
         self.plot.setMenuEnabled(False)
         self.curves: dict[str, pg.PlotDataItem] = {}
@@ -139,7 +173,7 @@ class ChromPanel(QWidget):
         self._fit = QTimer(self)
         self._fit.setSingleShot(True)
         self._fit.setInterval(0)
-        self._fit.timeout.connect(self.fit_y)
+        self._fit.timeout.connect(self._auto_fit)
 
         # -- header: signal, blank switch, display options ------------------------------
         bar = QHBoxLayout()
@@ -155,6 +189,7 @@ class ChromPanel(QWidget):
         self.table_chip = theme.chip("", "accent")
         self.table_chip.setToolTip("The peak table lists the peaks of this chromatogram")
         self.title = QLabel()
+        self.title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.title.setObjectName("hint")
         self.others = QCheckBox("Overlay")
         self.others.setToolTip("Show the other loaded chromatograms")
@@ -167,7 +202,7 @@ class ChromPanel(QWidget):
         self.stack.setChecked(s.value(f"{self._prefix}/stack", False, type=bool))
         for name, w in (("overlay", self.others), ("normalize", self.norm), ("stack", self.stack)):
             w.toggled.connect(lambda on, n=name: (QSettings().setValue(f"{self._prefix}/{n}", on),
-                                                  self.refresh(fit=True)))
+                                                  self._display_changed(n)))
         self.label_mode = QComboBox()
         self.label_mode.addItems(["Labels: RT", "Labels: #", "Labels: name", "Labels: off"])
         self.label_mode.setCurrentIndex(s.value(f"{self._prefix}/labels", 0, type=int))
@@ -183,15 +218,15 @@ class ChromPanel(QWidget):
         for w in (self.others, self.norm, self.stack, self.label_mode, self.export_btn):
             bar.addWidget(w)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(2, 2, 2, 2)
-        lay.setSpacing(2)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(1)
         lay.addLayout(bar)
         lay.addWidget(self.plot, 1)
 
-        ws.runAdded.connect(lambda *_: (self.sync_header(), self.refresh(autorange=True)))
+        ws.runAdded.connect(lambda *_: (self.sync_header(), self.refresh()))
         ws.runRemoved.connect(lambda *_: (self.sync_header(), self.refresh()))
         ws.runChanged.connect(lambda *_: (self.sync_header(), self.refresh()))
-        ws.activeRunChanged.connect(lambda *_: (self.sync_header(), self.refresh(fit=True)))
+        ws.activeRunChanged.connect(lambda *_: (self.sync_header(), self.refresh(), self._auto_fit()))
         ws.panelsChanged.connect(self._panels_changed)
         ws.signalKeyChanged.connect(lambda *_: (self.sync_header(), self.refresh_active()))
         ws.resultChanged.connect(self._on_result)
@@ -203,6 +238,17 @@ class ChromPanel(QWidget):
         self.sync_header()
 
     # -- keys and time frames --------------------------------------------------------------
+
+    def _auto_fit(self):
+        if self.link is None or not self.link.manual_y:
+            self.fit_y()
+
+    def _display_changed(self, name):
+        self.refresh()
+        if name in ("normalize", "stack"):
+            self.fit_y()
+        else:
+            self._auto_fit()
 
     @property
     def key(self) -> str:
@@ -587,8 +633,20 @@ class ChromPanel(QWidget):
         if lo is None:
             return
         span = hi - lo or 1.0
-        top = 0.16 if self.label_mode.currentIndex() != 3 else 0.06     # room for the peak labels
-        self.vb.setYRange(lo - 0.06 * span, hi + top * span, padding=0)
+        # Reserve only the headroom required by visible, rotated peak labels.
+        height = max(self.vb.height(), 80)
+        bottom = lo - 0.02 * span
+        upper = hi + 0.02 * span
+        font = QFont()
+        font.setPixelSize(10)
+        metrics = QFontMetricsF(font)
+        for x, y, text, bold in self.labels.labels:
+            if x0 <= x <= x1:
+                font.setBold(bold)
+                metrics = QFontMetricsF(font)
+                pixels = min(metrics.horizontalAdvance(text) + 7, height * 0.65)
+                upper = max(upper, bottom + (y - bottom) / (1 - pixels / height))
+        self.vb.setYRange(bottom, upper, padding=0)
 
     def linked_x_changed(self):
         """The other panel moved the shared time axis: fit this panel's intensity to it."""
@@ -612,7 +670,10 @@ class ChromPanel(QWidget):
         off = frame_offset(self.frame_key(), self.ws.active_key, st.delay_value)
         w = max(p.end - p.start, 0.02)
         self.vb.setXRange(p.start - 1.5 * w + off, p.end + 1.5 * w + off, padding=0)
-        self.fit_y()
+        if self.link:
+            self.link.fit_intensity()
+        else:
+            self.fit_y()
 
     def zoom_to(self, t0, t1):
         self.vb.setXRange(t0, t1, padding=0.02)
