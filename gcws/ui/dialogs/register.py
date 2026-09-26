@@ -264,6 +264,8 @@ class RegisterWindow(QDialog):
         self.reload()
 
     def reload(self):
+        if self.con is None:
+            return
         self.entries = self.RS.search(self.con, self.mode.currentData(), self.search.text(),
                                       min_rel=self.min_rel.value(), base_first=self.base_first.isChecked(),
                                       with_spectra_only=self.only_spec.isChecked(), spectra=self._spectra)
@@ -495,8 +497,10 @@ class RegisterWindow(QDialog):
         self.reload()
 
     def closeEvent(self, ev):
+        self._timer.stop()                      # a pending search must not run on the closed register
         try:
             self.con.close()
         except Exception:  # noqa: BLE001
             pass
+        self.con = None
         super().closeEvent(ev)
