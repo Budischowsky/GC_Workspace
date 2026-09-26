@@ -348,7 +348,7 @@ class ActiveDockTracker(QObject):
                 try:
                     d.setProperty("active", on)
                     _repolish(d)
-                    bar = d.titleBarWidget()
+                    bar = getattr(d, "panel_title_bar", None) or d.titleBarWidget()
                     if hasattr(bar, "set_active"):
                         bar.set_active(on)
                 except RuntimeError:          # dock already deleted

@@ -17,7 +17,7 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QSettings, Qt, QTimer, Signal as QtSignal
 from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPen
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QHBoxLayout, QInputDialog, QLabel, QToolButton, QVBoxLayout,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QInputDialog, QToolButton, QVBoxLayout,
                                QSizePolicy, QWidget)
 
 from gcws.core.keys import base_key, is_derived, is_fid
@@ -75,13 +75,18 @@ class ViewLink:
         self.panels = list(panels)
         self.manual_y = False
         self.busy = False
+        self._reset_timer = QTimer(self.panels[0].ws)
+        self._reset_timer.setSingleShot(True)
+        self._reset_timer.timeout.connect(self.reset)
         for p in self.panels:
             p.link = self
             p.vb.sigXRangeChanged.connect(lambda vb, rng, src=p: self.time_changed(src, rng))
-        self.panels[0].ws.runAdded.connect(lambda *_: QTimer.singleShot(0, self.reset))
+        self.panels[0].ws.runAdded.connect(lambda *_: self._reset_timer.start(0))
         self.panels[0].ws.solventCutChanged.connect(self.reset)
 
     def time_changed(self, src, rng):
+        # A load's deferred fit must not overwrite a newer zoom or axis gesture.
+        self._reset_timer.stop()
         if self.busy:
             return
         self.busy = True
@@ -112,6 +117,7 @@ class ViewLink:
             p.fit_y()
 
     def reset(self):
+        self._reset_timer.stop()
         ranges = [r for r in (p.data_x_range() for p in self.panels) if r is not None]
         if ranges:
             self.panels[0].vb.setXRange(min(r[0] for r in ranges), max(r[1] for r in ranges), padding=0)
@@ -177,21 +183,22 @@ class ChromPanel(QWidget):
         self._fit.timeout.connect(self._auto_fit)
 
         # -- header: signal, blank switch, display options ------------------------------
-        bar = QHBoxLayout()
-        bar.setSpacing(6)
         self.signal = QComboBox()
         self.signal.setToolTip("Signal shown in this chromatogram")
         self.signal.setMinimumWidth(96)
         self.signal.activated.connect(self._signal_picked)
-        self.blank = QCheckBox("− Blank")
+        self.blank = QCheckBox("subtract blank", self)
+        self.blank.hide()
         self.blank.setToolTip("Show and integrate this signal minus the assigned blank "
                               "(settings: Quantify > Blank subtraction settings)")
         self.blank.toggled.connect(self._blank_toggled)
-        self.cut = QCheckBox("Cut solvent")
+        self.cut = QCheckBox("Solvent cut", self)
+        self.cut.hide()
         self.cut.toggled.connect(lambda on: None if self._loading else self.ws.set_solvent_cut(on))
         self.table_chip = theme.chip("", "accent")
         self.table_chip.setToolTip("The peak table lists the peaks of this chromatogram")
-        self.title = QLabel()
+        from gcws.ui.plot.overlay import ElidedLabel
+        self.title = ElidedLabel()
         self.title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.title.setObjectName("hint")
         self.others = QCheckBox("Overlay")
@@ -215,15 +222,12 @@ class ChromPanel(QWidget):
         self.export_btn.setText("Export...")
         self.export_btn.setToolTip("Save this chromatogram as a picture (PNG, SVG, PDF ...)")
         self.export_btn.clicked.connect(lambda: self.exportRequested.emit(self.index))
-        for w in (self.signal, self.blank, self.cut, self.table_chip):
-            bar.addWidget(w)
-        bar.addWidget(self.title, 1)
-        for w in (self.others, self.norm, self.stack, self.label_mode, self.export_btn):
-            bar.addWidget(w)
+        from gcws.ui.plot.overlay import PlotOverlay
+        self.controls = PlotOverlay(self.plot, [self.signal, self.title, self.table_chip, self.others,
+                                                self.norm, self.stack, self.label_mode, self.export_btn])
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(1)
-        lay.addLayout(bar)
+        lay.setSpacing(0)
         lay.addWidget(self.plot, 1)
 
         ws.runAdded.connect(lambda *_: (self.sync_header(), self.refresh()))
@@ -315,7 +319,7 @@ class ChromPanel(QWidget):
         self.cut.setChecked(bool(self.ws.quant.get("solvent_cut", False)))
         end = float((self.ws.quant.get("settings") or {}).get("solvent_end", 5.5))
         self.cut.setToolTip(f"Hide and exclude solvent before {end:g} min (FID time). "
-                            "Change the time under Integration > Solvent cut; MS follows the FID–MS delay.")
+                            "Change the time under Chromatogramm > Solvent end RT; MS follows the FID–MS delay.")
         self.blank.setEnabled(self.ws.panel_blank[self.index]
                               or any(self.ws.blank_ids(st) for st in self.ws.states()))
         theme.set_chip(self.table_chip, "▦ Peak table" if self.is_table() else "", "accent")
@@ -325,6 +329,7 @@ class ChromPanel(QWidget):
             note = f"   (no blank for this run: {base_key(self.key)} shown)"
         self.title.setText((st.name + note) if st is not None else "no chromatogram loaded")
         self._loading = False
+        self.controls.reposition()
 
     def _signal_picked(self, i):
         if self._loading:
@@ -569,7 +574,7 @@ class ChromPanel(QWidget):
             spots.append({"pos": (x, float(np.interp(x, xs, ys))), "data": c, "symbol": "t", "size": 11,
                           "brush": pg.mkBrush(theme.qcolor(theme.WARN, 200)), "pen": pg.mkPen(theme.PLOT["bg"], width=0.8)})
         tip = (lambda x, y, data: f"Deconvoluted component without a peak\n{data.rt:.3f} min (MS), model m/z "
-               f"{data.model_mz}, quality {data.quality:.0f}\nclick: its spectrum")
+               f"{data.model_mz}, purity {data.purity:.2f}\nclick: its spectrum")
         self._markers = pg.ScatterPlotItem(spots=spots, hoverable=True, tip=tip)
         self._markers.setZValue(30)
         self._markers.sigClicked.connect(lambda _item, pts, _ev: pts and self.componentClicked.emit(

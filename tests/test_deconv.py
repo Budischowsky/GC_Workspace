@@ -1,10 +1,9 @@
-"""Deconvolution engine: synthetic co-elution, background, noise, skew; AMDIS benchmark."""
+"""The active engine must reproduce the original NIAS calculations exactly."""
 import numpy as np
 import pytest
 
 from gcws.io.ms_matrix import MSMatrix
 from gcws.ms import deconv as D
-from gcws.ms.similarity import cosine
 
 DT = 1 / (2.23 * 60)                      # 2.23 scans/s, like the reference method
 N = 400
@@ -52,96 +51,68 @@ class _DataMSAdapter:
 
     def spectrum(self, i):
         mz, ab = self.ms.scan(i)
-        return [(float(m), int(a)) for m, a in zip(mz, ab)]
+        return [(float(m), float(a)) for m, a in zip(mz, ab)]
 
 
-def _best(comps, spec, rt):
-    cands = [c for c in comps if abs(c.rt - rt) < 3 * DT]
-    return max((cosine(spec, dict(c.spectrum)) for c in cands), default=0.0)
+def assert_same(actual, expected):
+    assert len(actual) == len(expected)
+    for a, b in zip(actual, expected):
+        for name in ("rt", "apex_scan", "model_mz", "spectrum", "area", "purity", "n_ions", "s_n"):
+            assert getattr(a, name) == getattr(b, name), name
+        np.testing.assert_array_equal(a.profile_rt, b.profile_rt)
+        np.testing.assert_array_equal(a.profile_y, b.profile_y)
 
 
-@pytest.mark.parametrize("sep, target", [(1.5, 0.95), (1.0, 0.90), (0.8, 0.80)])
-def test_coeluting_pair(sep, target):
-    a, b = 200.0, 200.0 + sep
-    ms = build([(a, SPEC_A, 60000.0), (b, SPEC_B, 45000.0)])
-    res = D.deconvolute_window(ms, float(np.interp(a, np.arange(N), RT)), D.DeconvSettings())
-    ta, tb = (float(np.interp(v, np.arange(N), RT)) for v in (a, b))
-    assert _best(res.components, SPEC_A, ta) >= target
-    assert _best(res.components, SPEC_B, tb) >= target
-    # the vendored engine on the same data is never better
+@pytest.mark.parametrize("sep", [0.8, 1.0, 1.5, 3.0])
+def test_coeluting_pair_matches_original_nias(sep):
     import gc_deconv
-    legacy = gc_deconv.deconvolute(_DataMSAdapter(ms), ta, gc_deconv.DeconvParams())
-    new_score = _best(res.components, SPEC_A, ta) + _best(res.components, SPEC_B, tb)
-    old_score = _best(legacy, SPEC_A, ta) + _best(legacy, SPEC_B, tb)
-    assert new_score >= old_score - 1e-6
+    ms = build([(200.0, SPEC_A, 60000.0), (200.0 + sep, SPEC_B, 45000.0)])
+    actual = D.deconvolute_window(ms, float(RT[200]))
+    expected = gc_deconv.deconvolute(_DataMSAdapter(ms), float(RT[200]), gc_deconv.DeconvParams())
+    assert actual.components
+    assert_same(actual.components, expected)
+    assert_same(D.deconvolute_window(ms, float(RT[200])).components, expected)
 
 
-def test_background_is_not_in_the_spectra():
-    ms = build([(200.0, SPEC_A, 60000.0)])
-    res = D.deconvolute_window(ms, float(RT[200]), D.DeconvSettings())
-    comp = max(res.components, key=lambda c: c.area)
-    spec = dict(comp.spectrum)
-    assert spec.get(207, 0) < 20 and spec.get(73, 0) < 30           # bleed / slope stay in the baseline
-    assert cosine(SPEC_A, spec) > 0.97
-    assert 207 in comp.bg_ions or 207 not in spec
-    without = D.deconvolute_window(ms, float(RT[200]), D.DeconvSettings(baseline=False))
-    worse = max(without.components, key=lambda c: c.area)
-    assert cosine(SPEC_A, dict(worse.spectrum)) <= cosine(SPEC_A, spec) + 1e-9
+@pytest.mark.parametrize("rt", [10.0, 13.0, 13.409, 20.0, 30.0])
+def test_real_data_matches_original_reader(run07, rt):
+    import gc_deconv
+    expected = gc_deconv.deconvolute(run07.ms_source, rt, gc_deconv.DeconvParams())
+    assert_same(D.deconvolute_window(run07.ms, rt).components, expected)
 
 
-def test_noise_model_and_determinism():
-    ms = build([(150.0, SPEC_A, 40000.0), (260.0, SPEC_B, 30000.0)])
-    nm = D.estimate_noise(ms)
-    assert nm.k == pytest.approx(K_TRUE, rel=0.25)
-    r1 = D.deconvolute_window(ms, float(RT[150]), D.DeconvSettings())
-    r2 = D.deconvolute_window(ms, float(RT[150]), D.DeconvSettings())
-    assert [(c.rt, c.model_mz, c.spectrum) for c in r1.components] == \
-           [(c.rt, c.model_mz, c.spectrum) for c in r2.components]
-    for c in r1.components:
-        assert 0 <= c.quality <= 100 and 0 <= c.purity <= 1 and c.r2 >= 0
-
-
-def test_skew_is_estimated_and_one_component_remains():
-    comps = [(60.0 + 25 * k, SPEC_A if k % 2 else SPEC_B, 80000.0) for k in range(12)]
-    ms = build(comps, background=False, skew=0.006)                  # 0.6 scans per 100 u
-    skew = D.estimate_skew(ms)
-    assert skew == pytest.approx(0.006, abs=0.002)
-    res = D.deconvolute_window(ms, float(RT[85]), D.DeconvSettings())
-    near = [c for c in res.components if abs(c.rt - RT[85]) < 2 * DT]
-    assert len(near) == 1
-
-
-def test_range_deduplicates_window_borders():
-    ms = build([(120.0, SPEC_A, 50000.0), (210.0, SPEC_B, 50000.0), (300.0, SPEC_A, 50000.0)])
-    comps = D.deconvolute_range(ms, float(RT[20]), float(RT[380]), D.DeconvSettings(window=0.3))
-    for apex in (120, 210, 300):
-        close = [c for c in comps if abs(c.rt - RT[apex]) < 2 * DT and c.quality > 30]
-        assert len(close) == 1, apex
-
-
-def test_settings_roundtrip_and_component_choice():
-    s = D.DeconvSettings(noise_factor=4.0, exclude_model=(18, 207))
+def test_custom_settings_and_settings_migration():
+    import gc_deconv
+    s = D.DeconvSettings(window=0.2, noise_factor=4.0, shape_r=0.95, min_ions=4, apex_tol=0.4)
     assert D.DeconvSettings.from_dict(s.to_dict()) == s
-    big = D.Component(10.00, 0, 57, [(57, 999)], area=100.0, purity=1, n_ions=3, s_n=10, quality=80)
-    small = D.Component(10.02, 0, 91, [(91, 999)], area=5.0, purity=1, n_ions=3, s_n=10, quality=80)
+    assert D.DeconvSettings.from_dict({"shape_r": 0.8, "apex_tol": 0.7,
+                                      "residual_passes": 1, "skew": True}) == D.DeconvSettings()
+    assert D.DeconvSettings().params() == gc_deconv.DeconvParams()
+    ms = build([(200.0, SPEC_A, 60000.0)])
+    expected = gc_deconv.deconvolute(_DataMSAdapter(ms), float(RT[200]), s.params())
+    assert_same(D.deconvolute_window(ms, float(RT[200]), s).components, expected)
+
+
+def test_range_deduplicates_window_borders_and_honors_bounds():
+    ms = build([(120.0, SPEC_A, 50000.0), (210.0, SPEC_B, 50000.0), (300.0, SPEC_A, 50000.0)])
+    t0, t1 = float(RT[20]), float(RT[380])
+    comps = D.deconvolute_range(ms, t0, t1)
+    for apex in (120, 210, 300):
+        assert len([c for c in comps if abs(c.rt - RT[apex]) < 2 * DT]) == 1
+    assert all(t0 <= c.rt <= t1 for c in comps)
+    assert D.deconvolute_range(ms, t0, t1, cancel=lambda: True) == []
+    # A peak exactly on the boundary between adjacent window cores is only kept once.
+    boundary = float(RT[210])
+    comps = D.deconvolute_range(ms, boundary - 0.3, boundary + 0.3)
+    assert len([c for c in comps if abs(c.rt - boundary) < 2 * DT]) == 1
+
+
+def test_empty_window_and_component_choice():
+    ms = build([(200.0, SPEC_A, 60000.0)])
+    assert D.deconvolute_window(ms, -10).components == []
+    with pytest.raises(ValueError):
+        D.deconvolute_range(ms, 10, 12, D.DeconvSettings(window=0))
+    big = D.Component(10.00, 0, 57, [(57, 999)], area=100.0, purity=1, n_ions=3, s_n=10)
+    small = D.Component(10.02, 0, 91, [(91, 999)], area=5.0, purity=1, n_ions=3, s_n=10)
     assert D.component_for_peak([small, big], 9.95, 10.05, 10.02) is big
     assert D.component_for_peak([small], 10.5, 10.6, 10.55) is small
-
-
-def test_amdis_benchmark(samples):
-    from gcws.io.run_loader import load_run
-    from gcws.ms.amdis_elu import benchmark, read_elu
-    elu = next(samples.glob("07_*.ELU"), None)
-    if elu is None:
-        pytest.skip("AMDIS reference not available")
-    run = load_run(next(samples.glob("07_*.D")))
-    comps = read_elu(elu)
-    new = benchmark(comps, lambda rt: [(c.rt, c.spectrum_dict())
-                                       for c in D.deconvolute_window(run.ms, rt, D.DeconvSettings()).components])
-    import gc_deconv
-    old = benchmark(comps, lambda rt: [(c.rt, {int(m): float(v) for m, v in c.spectrum})
-                                       for c in gc_deconv.deconvolute(run.ms_source, rt, gc_deconv.DeconvParams())])
-    assert new["substantial"]["recall"] >= old["substantial"]["recall"]
-    assert new["substantial"]["median_mf"] >= old["substantial"]["median_mf"]
-    assert new["substantial"]["recall"] >= 0.7
-    assert new["seconds"] / len(comps) < 0.5                         # per window

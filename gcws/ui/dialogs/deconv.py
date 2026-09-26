@@ -1,8 +1,8 @@
-"""Spectral deconvolution (GC Workspace engine, see :mod:`gcws.ms.deconv`).
+"""Spectral deconvolution using the original NIAS engine.
 
 Scope: the selected peak's window, the visible range or the whole run (the
 last two run in the background). The table shows every component with its
-quality; a selected component's spectrum and interpretation are shown on
+purity; a selected component's spectrum and interpretation are shown on
 the right. Actions: split the peak between components, add components as
 peaks, use a component's spectrum for the peak (pinned), EI Atlas search.
 """
@@ -13,8 +13,8 @@ import copy
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
-                               QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLineEdit, QPushButton,
+from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QComboBox, QDialog, QDoubleSpinBox,
+                               QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QPushButton,
                                QRadioButton, QSpinBox, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
                                QVBoxLayout, QWidget)
 
@@ -28,7 +28,7 @@ from gcws.ui.docks.interpretation_view import InterpretationView
 from gcws.ui.docks.spectrum import StickPlot
 from gcws.ui.undo import ManualEventsCommand
 
-COLS = ["RT (MS)", "Model m/z", "Quality", "Purity", "R²", "Ions", "S/N", "Area", "In peak", "Found", "Class hint"]
+COLS = ["RT (MS)", "Model m/z", "Purity", "Ions", "S/N", "Area", "In peak", "Class hint"]
 
 
 def _preset_key(settings: D.DeconvSettings, group: str) -> str:
@@ -62,7 +62,7 @@ class DeconvolutionDialog(QDialog):
 
         # -- settings --------------------------------------------------------------------------------
         self.presets = {}
-        preset_box = QGroupBox("Settings")
+        preset_box = QGroupBox("NIAS deconvolution settings")
         pf = QFormLayout(preset_box)
         for group, labels in (("Resolution", ("high", "medium", "low")), ("Sensitivity", ("high", "medium", "low")),
                               ("Shape", ("strict", "medium", "loose"))):
@@ -86,30 +86,13 @@ class DeconvolutionDialog(QDialog):
         self.noise = self._dspin(s.noise_factor, 1.0, 20.0, 1, " σ", 0.5)
         self.shape = self._dspin(s.shape_r, 0.3, 0.999, 2, "", 0.05)
         self.apex_tol = self._dspin(s.apex_tol, 0.2, 3.0, 2, " scans", 0.1)
-        self.min_sep = self._dspin(s.min_sep, 0.2, 3.0, 2, " scans", 0.1)
         self.min_ions = QSpinBox()
         self.min_ions.setRange(2, 50)
         self.min_ions.setValue(s.min_ions)
-        self.smooth = QSpinBox()
-        self.smooth.setRange(0, 21)
-        self.smooth.setSingleStep(2)
-        self.smooth.setSpecialValueText("auto")
-        self.smooth.setValue(s.smoothing)
-        self.baseline = QCheckBox("Fit a background per m/z")
-        self.baseline.setChecked(s.baseline)
-        self.residual = QCheckBox("Look for hidden components in the residual")
-        self.residual.setChecked(s.residual_passes > 0)
-        self.skew = QCheckBox("Correct the scan skew")
-        self.skew.setChecked(s.skew)
-        self.exclude = QLineEdit(", ".join(str(v) for v in s.exclude_model))
-        self.exclude.setToolTip("Masses never used as model ions (air, water, column bleed)")
         for label, w in (("Window (± min)", self.win_spin), ("Noise factor", self.noise),
                          ("Min. profile correlation", self.shape), ("Apex tolerance", self.apex_tol),
-                         ("Min. separation", self.min_sep), ("Min. ions", self.min_ions), ("Smoothing", self.smooth),
-                         ("Not as model ion", self.exclude)):
+                         ("Min. ions", self.min_ions)):
             af.addRow(label, w)
-        for w in (self.baseline, self.residual, self.skew):
-            af.addRow(w)
         self.scope = QButtonGroup(self)
         scope_box = QGroupBox("Deconvolute")
         sl = QVBoxLayout(scope_box)
@@ -145,7 +128,8 @@ class DeconvolutionDialog(QDialog):
         self.table.itemSelectionChanged.connect(self._show)
         self.table.setSortingEnabled(True)
         b_split = QPushButton("Split the peak")
-        b_split.setToolTip("Drop lines at the midpoints between the component apexes inside the peak (undoable)")
+        b_split.setToolTip("Split between components; FID areas follow the MS component area ratios "
+                           "while preserving the original FID total (undoable)")
         b_split.clicked.connect(self.split)
         b_add = QPushButton("Add selected as peaks")
         b_add.setToolTip("Integrate the selected components as new peaks (undoable)")
@@ -214,20 +198,15 @@ class DeconvolutionDialog(QDialog):
 
     def _apply_preset(self, group):
         vals = D.PRESETS.get(f"{group} {self.presets[group].currentText()}", {})
-        widgets = {"apex_tol": self.apex_tol, "min_sep": self.min_sep, "noise_factor": self.noise,
+        widgets = {"apex_tol": self.apex_tol, "noise_factor": self.noise,
                    "shape_r": self.shape, "min_ions": self.min_ions}
         for k, v in vals.items():
             widgets[k].setValue(v)
 
     def settings(self) -> D.DeconvSettings:
-        import re
-        excl = tuple(int(v) for v in re.findall(r"\d+", self.exclude.text()))
         return D.DeconvSettings(window=self.win_spin.value(), noise_factor=self.noise.value(),
                                 shape_r=self.shape.value(), min_ions=self.min_ions.value(),
-                                apex_tol=self.apex_tol.value(), min_sep=self.min_sep.value(),
-                                smoothing=self.smooth.value(), baseline=self.baseline.isChecked(),
-                                residual_passes=1 if self.residual.isChecked() else 0, skew=self.skew.isChecked(),
-                                exclude_model=excl)
+                                apex_tol=self.apex_tol.value())
 
     def save_default(self):
         q = copy.deepcopy(self.ws.quant)
@@ -301,27 +280,22 @@ class DeconvolutionDialog(QDialog):
             self._interps.append(it)
             hint = it.classes[0].label if it is not None and it.classes else ""
             inside = "yes" if t0 is not None and t0 <= c.rt <= t1 else ""
-            vals = [c.rt, c.model_mz, c.quality, c.purity, c.r2, c.n_ions, c.s_n, c.area, inside,
-                    "under a peak" if c.hidden else "", hint]
+            vals = [c.rt, c.model_mz, c.purity, c.n_ions, c.s_n, c.area, inside, hint]
             r = self.table.rowCount()
             self.table.insertRow(r)
             for col, v in enumerate(vals):
                 item = QTableWidgetItem()
                 if isinstance(v, float):
-                    item.setData(Qt.DisplayRole, round(v, {0: 4, 2: 0, 3: 2, 4: 2, 6: 0, 7: 0}.get(col, 3)))
+                    item.setData(Qt.DisplayRole, round(v, {0: 4, 2: 2, 4: 0, 5: 0}.get(col, 3)))
                 else:
                     item.setData(Qt.DisplayRole, v)
                 item.setData(Qt.UserRole, i)
-                if col == 2:
-                    item.setBackground(theme.status_brush("ok" if c.quality >= 60 else "warn" if c.quality >= 40
-                                                          else "neutral"))
                 self.table.setItem(r, col, item)
         self.table.setSortingEnabled(True)
         self.table.sortByColumn(0, Qt.AscendingOrder)
         self._plot_profiles(res)
         n_in = sum(1 for c in self.comps if t0 is not None and t0 <= c.rt <= t1)
-        extra = (f"; noise factor K {res.noise_k:.2f}, skew {res.skew * 100:.2f} scans/100 u, {res.elapsed:.2f} s"
-                 if res is not None else "")
+        extra = f"; NIAS engine, {res.elapsed:.2f} s" if res is not None else "; NIAS engine"
         self.note.setText(f"{len(self.comps)} components in {where}"
                           + (f", {n_in} inside the integrated peak" if t0 is not None else "") + extra)
         if self.comps:
@@ -332,8 +306,6 @@ class DeconvolutionDialog(QDialog):
         ms = self.st.run.ms
         if res is not None:
             self.profiles.plot(res.rt, res.tic, pen=pg.mkPen(theme.PLOT["secondary"], width=1.2), name="TIC")
-            self.profiles.plot(res.rt, res.residual, pen=pg.mkPen(theme.BAD, width=1, style=Qt.DashLine),
-                               name="residual")
         elif self.comps:
             lo = min(float(c.profile_rt[0]) for c in self.comps if len(c.profile_rt))
             hi = max(float(c.profile_rt[-1]) for c in self.comps if len(c.profile_rt))
@@ -367,8 +339,8 @@ class DeconvolutionDialog(QDialog):
         mz = np.array([m for m, _ in c.spectrum], float)
         ab = np.array([v for _, v in c.spectrum], float)
         it = self._interps[k] if k < len(self._interps) else None
-        self.spec.show_spectrum(mz, ab, title=f"component {c.rt:.3f} min (model m/z {c.model_mz}, quality "
-                                               f"{c.quality:.0f})", marks=it.marks() if it else None)
+        self.spec.show_spectrum(mz, ab, title=f"component {c.rt:.3f} min (model m/z {c.model_mz})",
+                               marks=it.marks() if it else None)
         self.interp.show_result(it, f"Component {c.rt:.3f} min")
         for j, curve in enumerate(self._curves):
             if curve is not None:
@@ -387,8 +359,27 @@ class DeconvolutionDialog(QDialog):
             return
         shift = self.st.delay_value if is_fid(self.key) else 0.0
         events = list(self.st.events(self.key))
-        for a, b in zip(inside, inside[1:]):
-            events.append(ManualEvent(K.SPLIT, (a.rt + b.rt) / 2 + shift, comment="deconvolution"))
+        if is_fid(self.key):
+            from gcws.integration.deconv_split import create_event
+            from gcws.integration.engine import integrate
+            from gcws.core.keys import is_derived
+            try:
+                event = create_event(self.peak, inside, shift)
+                events.append(event)
+                sig = self.st.run.signal(self.key)
+                method = (self.ws._derived_method(self.st, self.key, sig) if is_derived(self.key)
+                          else self.ws.method_for(self.st, self.key))
+                preview = integrate(sig, method, events, t_min=self.ws.solvent_cut(self.st, self.key))
+                reason = dict(preview.unresolved).get(event.uid)
+                if reason:
+                    self.note.setText("Peak was not split: " + reason)
+                    return
+            except ValueError as exc:
+                self.note.setText("Peak was not split: " + str(exc))
+                return
+        else:
+            for a, b in zip(inside, inside[1:]):
+                events.append(ManualEvent(K.SPLIT, (a.rt + b.rt) / 2 + shift, comment="deconvolution"))
         self.st.undo.push(ManualEventsCommand(self.ws, self.st.id, self.key, events,
                                               f"split peak {self.peak.apex_rt:.3f} into {len(inside)} components"))
         self.accept()
@@ -418,8 +409,7 @@ class DeconvolutionDialog(QDialog):
         c = sel[0]
         rt_key = round(self.peak.apex_rt, 4)
         self.st.spectrum_overrides[rt_key] = {"component": {"rt": float(c.rt), "model_mz": int(c.model_mz),
-                                                            "spectrum": [[int(m), float(v)] for m, v in c.spectrum],
-                                                            "quality": float(c.quality)}}
+                                                            "spectrum": [[int(m), float(v)] for m, v in c.spectrum]}}
         self.ws.log("Spectrum: deconvoluted component", self.st.name,
                     f"peak {self.peak.apex_rt:.3f}: component {c.rt:.3f} min, model m/z {c.model_mz}")
         self.ws.selectionChanged.emit(self.st.id, self.ws.selected)

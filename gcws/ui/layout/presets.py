@@ -130,6 +130,7 @@ def save_layout(win, name: str) -> None:
     s = QSettings()
     s.setValue(f"layouts/{name}/state", win.saveState(LAYOUT_VERSION))
     s.setValue(f"layouts/{name}/geometry", win.saveGeometry())
+    win.save_view_preferences(f"layouts/{name}")
 
 
 def restore_layout(win, name: str) -> bool:
@@ -140,7 +141,11 @@ def restore_layout(win, name: str) -> bool:
     geo = s.value(f"layouts/{name}/geometry")
     if isinstance(geo, QByteArray):
         win.restoreGeometry(geo)
-    return bool(win.restoreState(state, LAYOUT_VERSION))
+    win.sidebar.expand()
+    restored = bool(win.restoreState(state, LAYOUT_VERSION))
+    if restored:
+        win.restore_view_preferences(f"layouts/{name}")
+    return restored
 
 
 def delete_layout(name: str) -> None:

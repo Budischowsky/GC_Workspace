@@ -33,11 +33,11 @@ def _load(qtbot, w, samples, prefixes):
 
 def test_load_tabs_and_overlay(qtbot, win, samples):
     _load(qtbot, win, samples, ["08_", "07_"])
-    names = [win.run_tabs.tabText(i) for i in range(win.run_tabs.count())]
+    names = [win.loaded_samples.item(i).text() for i in range(win.loaded_samples.count())]
     assert names[0].startswith("07_26016606_130m_min_GIOSUN1635_A")      # injection order
     assert "[Blank]" in names[1]
     assert len(win.chrom.curves) == 2
-    win.run_tabs.setCurrentIndex(1)
+    win.loaded_samples.setCurrentRow(1)
     assert win.ws.active.name == "08_EtOH"
     assert win.table.model.rowCount() > 10
 
@@ -112,10 +112,10 @@ def test_layout_presets_roundtrip(qtbot, win):
 def test_dock_title_buttons_and_maximize(qtbot, win):
     from PySide6.QtCore import QPoint, Qt
     from PySide6.QtTest import QTest
-    from gcws.ui.layout.title_bar import DockTitleBar
+    from gcws.ui.layout.title_bar import DockTitleBar, title_bar
     qtbot.waitUntil(lambda: win.docks["chrom"].isVisible(), timeout=5000)
     for d in win.docks.values():
-        bar = d.titleBarWidget()
+        bar = title_bar(d)
         assert isinstance(bar, DockTitleBar)
         assert not bar.b_close.icon().isNull() and not bar.b_float.icon().isNull()
     bar = win.docks["table"].titleBarWidget()
@@ -141,6 +141,7 @@ def test_dock_title_buttons_and_maximize(qtbot, win):
 
 
 def test_project_roundtrip(qtbot, win, samples, tmp_path):
+    from gcws.ms import deconv as D, deconv_cache as DC
     from gcws.core.events import ManualEvent, ManualKind as K
     from gcws.core.ident import Identification
     _load(qtbot, win, samples, ["07_", "08_"])
@@ -151,6 +152,8 @@ def test_project_roundtrip(qtbot, win, samples, tmp_path):
     st.ident_set("FID").set(Identification(apex_rt=p.apex_rt, name="Test compound", cas="50-00-0", manual=True))
     digest = win.ws.active_result().digest
     win.ws.replicate_groups = [{"id": "g1", "name": "grp", "members": [st.id], "policy": "all"}]
+    settings = D.DeconvSettings(shape_r=0.95, noise_factor=4)
+    win.ws.quant["deconv"] = settings.to_dict()
     from gcws.core import project as P
     target = P.save(win.ws, tmp_path / "test.gcws")
     win.close_all()
@@ -163,6 +166,7 @@ def test_project_roundtrip(qtbot, win, samples, tmp_path):
     assert win.ws.result(st.id, "FID").digest == digest
     assert any(i.name == "Test compound" for i in st2.ident_set("FID").items)
     assert win.ws.replicate_groups[0]["members"] == [st.id]
+    assert DC.settings_of(win.ws) == settings
 
 
 def test_theme_applied(qtbot, win):
@@ -327,7 +331,7 @@ def test_double_determination_from_tab_menu(qtbot, win, samples):
     ws = win.ws
     a = next(s.id for s in ws.states() if s.name.startswith("07_"))
     b = next(s.id for s in ws.states() if s.name.startswith("11_"))
-    win.run_tabs.pairRequested.emit(a, b)
+    win.loaded_samples.pairRequested.emit(a, b)
     page = win.replicates.duplicate
     assert win.replicates.tabs.currentIndex() == 0
     assert page.a.currentData() == a and page.b.currentData() == b
@@ -435,6 +439,15 @@ def test_deconvolution_dialog_whole_run_and_markers(qtbot, win, samples):
     qtbot.addWidget(dlg)
     assert dlg.comps and dlg.table.rowCount() == len(dlg.comps)
     assert any(abs(c.rt - 13.409) < 0.01 for c in dlg.comps)
+    import gc_deconv
+    from gcws.ms.spectra import ms_times
+    from test_deconv import assert_same
+    ta = ms_times(ws.selected_peak(), ws.active_key, ws.active.delay_value)[2]
+    assert_same(dlg.comps, gc_deconv.deconvolute(ws.active.run.ms_source, ta, gc_deconv.DeconvParams()))
+    assert not hasattr(dlg, "residual") and not hasattr(dlg, "skew")
+    # Components from whole-run markers must also display without newer-engine fields.
+    win.spectrum.show_component(ws.active_id, dlg.comps[0])
+    assert win.spectrum.source == "component" and win.spectrum.spec.ab.size
     # pin a component's spectrum to the peak
     dlg.table.selectRow(0)
     dlg.pin()
@@ -449,11 +462,11 @@ def test_deconvolution_dialog_whole_run_and_markers(qtbot, win, samples):
     assert len(DC.whole_run(st, dlg.settings())) > 50
     dlg.save_default()
     assert DC.whole_run(st, DC.settings_of(ws)) is not None or ws.quant.get("deconv")
-    # the "deconvoluted" spectrum mode uses the new engine
+    # The "deconvoluted" spectrum mode uses NIAS, without invented quality scores.
     win.spectrum._clear_override()
     i = win.spectrum.mode.findData("deconvoluted")
     win.spectrum.mode.setCurrentIndex(i)
-    assert win.spectrum.spec.mode == "deconvoluted" and "quality" in win.spectrum.spec.note
+    assert win.spectrum.spec.mode == "deconvoluted" and "purity" in win.spectrum.spec.note
     win.spectrum.mode.setCurrentIndex(0)
 
 
@@ -806,7 +819,7 @@ def test_double_determination_cells_editable(qtbot, win, samples):
     ws = win.ws
     a = next(s.id for s in ws.states() if s.name.startswith("07_"))
     b = next(s.id for s in ws.states() if s.name.startswith("11_"))
-    win.run_tabs.pairRequested.emit(a, b)
+    win.loaded_samples.pairRequested.emit(a, b)
     page = win.replicates.duplicate
     t = page.table
     assert page.rows
@@ -855,7 +868,7 @@ def test_double_determination_mirror_scales_to_view(qtbot, win, samples):
     ws = win.ws
     a = next(s.id for s in ws.states() if s.name.startswith("07_"))
     b = next(s.id for s in ws.states() if s.name.startswith("11_"))
-    win.run_tabs.pairRequested.emit(a, b)
+    win.loaded_samples.pairRequested.emit(a, b)
     page = win.replicates.duplicate
     assert len(page._traces) == 2
     # the solvent front is not drawn and B is drawn downwards in its own units
@@ -888,7 +901,7 @@ def test_double_determination_sheet_keys_and_fill(qtbot, win, samples):
     ws = win.ws
     a = next(s.id for s in ws.states() if s.name.startswith("07_"))
     b = next(s.id for s in ws.states() if s.name.startswith("11_"))
-    win.run_tabs.pairRequested.emit(a, b)
+    win.loaded_samples.pairRequested.emit(a, b)
     page = win.replicates.duplicate
     t = page.table
     t.sortItems(2)                                # by RT
@@ -1064,6 +1077,7 @@ def test_edit_library_new_entry_takes_a_spectrum(qtbot, win, samples, tmp_path, 
 
 
 def test_processing_method_save_and_load(qtbot, win, samples, tmp_path, monkeypatch):
+    from gcws.ms import deconv as D, deconv_cache as DC
     import copy
     from PySide6.QtCore import QSettings
     from gcws import paths
@@ -1083,6 +1097,8 @@ def test_processing_method_save_and_load(qtbot, win, samples, tmp_path, monkeypa
     st.undo.push(SetMethodCommand(ws, [st.id], "FID", fid, "own FID method"))
     q = copy.deepcopy(ws.quant)
     q["blank_sub"] = BlankOptions(scale=1.5).to_dict()
+    nias_settings = D.DeconvSettings(shape_r=0.95, noise_factor=4)
+    q["deconv"] = nias_settings.to_dict()
     ws.push_quant("blank", q)
     win.a_keep_middle.setChecked(True)
     save_options({"library": "Own", "top_n": 7})
@@ -1096,6 +1112,7 @@ def test_processing_method_save_and_load(qtbot, win, samples, tmp_path, monkeypa
     st.undo.push(SetMethodCommand(ws, [st.id], "FID", ws.methods.get(ws.methods.default_name("FID")), "built-in"))
     q = copy.deepcopy(ws.quant)
     q["blank_sub"] = BlankOptions(scale=1.0).to_dict()
+    q["deconv"] = D.DeconvSettings().to_dict()
     ws.push_quant("blank", q)
     win.a_keep_middle.setChecked(False)
     save_options({"library": "", "top_n": 10})
@@ -1109,6 +1126,7 @@ def test_processing_method_save_and_load(qtbot, win, samples, tmp_path, monkeypa
     assert "own_search" not in load.applied and "integration" in load.applied
     assert ws.method_for(st, "FID").name == "My FID" and ws.method_for(st, "FID").min_sn == 7.0
     assert ws.blank_options().scale == 1.5 and win.a_keep_middle.isChecked()
+    assert DC.settings_of(ws) == nias_settings
     assert QSettings().value("report/keep_middle", False, type=bool)
     assert load_options()["library"] == ""                        # left out
     assert ws.methods.default_name("FID") == "My FID"              # runs loaded later start with it
@@ -1116,6 +1134,7 @@ def test_processing_method_save_and_load(qtbot, win, samples, tmp_path, monkeypa
     # one undo step takes the workspace settings and the integration back
     win.a_undo.trigger()
     assert ws.blank_options().scale == 1.0 and ws.method_for(st, "FID").name != "My FID"
+    assert DC.settings_of(ws) == D.DeconvSettings()
     # export / import / delete
     load.export_file(str(tmp_path / "shared.json"))
     PM.delete("NIAS EtOH")

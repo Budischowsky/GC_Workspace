@@ -373,11 +373,18 @@ def _measure(sig: WorkSignal, p: WP, factor: float, noise_pp: float) -> dict:
     area = MS.raw_area(sig, p.t0, p.t1, p.base, p.negative)
     for c in p.children:
         area -= MS.raw_area(sig, c.t0, c.t1, c.base, c.negative)
+    if p.allocated_area_raw is not None:
+        area = p.allocated_area_raw
+    reported_area = area * factor
+    if p.area_allocation is not None:
+        from gcws.integration.deconv_split import share_exactly
+        total, weights, index = p.area_allocation
+        reported_area = share_exactly(total * factor, weights)[index]
     shp = MS.shape(sig, p.t0, p.t1 if not p.children else p.t1, p.base, p.negative)
     p.area_raw = area
     p.height = shp["height"]
     sn = 2.0 * shp["height"] / noise_pp if noise_pp > 0 else None
-    return {**shp, "area_raw": area, "area": area * factor, "sn": sn}
+    return {**shp, "area_raw": area, "area": reported_area, "sn": sn}
 
 
 def _accept(p: WP, m: dict, tl: Timeline, sig: WorkSignal, res: Resolved, method: IntegrationMethod) -> bool:
@@ -566,6 +573,12 @@ def _finalise(sig: WorkSignal, peaks: list[WP], res: Resolved, method: Integrati
                   number=i + 1, negative=p.negative)
         pk.area_pct = (100.0 * pk.area / total) if total > 0 and not p.negative and "S" not in p.flags else 0.0
         pk.extra["cluster"] = p.cluster
+        if p.deconv_component:
+            pk.extra["deconv_component"] = dict(p.deconv_component)
+            pk.extra["area_note"] = (
+                f"Modeled FID area from MS deconvolution: {p.deconv_component['weight']:.2%} "
+                f"of the original peak; component {p.deconv_component['rt']:.4f} min (MS), "
+                f"model m/z {p.deconv_component['model_mz']}.")
         out.append(pk)
     h = hashlib.sha1()
     h.update(str(gcws.INTEGRATOR_VERSION).encode())

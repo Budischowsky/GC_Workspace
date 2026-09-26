@@ -10,27 +10,68 @@ panel from it.
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtWidgets import QDockWidget, QHBoxLayout, QLabel, QToolButton, QWidget
+from PySide6.QtGui import QPainter
+from PySide6.QtWidgets import QApplication, QDockWidget, QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
 
 from gcws.ui.icons import icon
 
 
 
+class RotatedLabel(QLabel):
+    def sizeHint(self):
+        return QSize(24, super().sizeHint().width())
+
+    def minimumSizeHint(self):
+        return QSize(24, 30)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.translate(self.width(), 0)
+        painter.rotate(90)
+        painter.setPen(self.palette().windowText().color())
+        text = self.fontMetrics().elidedText(self.text(), Qt.ElideRight, self.height())
+        painter.drawText(0, 0, self.height(), self.width(), Qt.AlignCenter, text)
+
+
+def title_bar(dock):
+    return getattr(dock, "panel_title_bar", None) or dock.titleBarWidget()
+
+
+class RightTitleDock(QDockWidget):
+    """Keep Qt's dock container and persistence, with a title rail inside its right edge."""
+    def set_panel(self, widget, on_maximize):
+        empty = QWidget(self)
+        empty.setFixedHeight(0)
+        self.setTitleBarWidget(empty)
+        body = QWidget(self)
+        layout = QHBoxLayout(body)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self.panel_title_bar = DockTitleBar(self, on_maximize, body, vertical=True)
+        layout.addWidget(widget, 1)
+        layout.addWidget(self.panel_title_bar)
+        self.setWidget(body)
+
+
 class DockTitleBar(QWidget):
-    def __init__(self, dock: QDockWidget, on_maximize, parent=None):
+    def __init__(self, dock: QDockWidget, on_maximize, parent=None, vertical=False):
         super().__init__(parent or dock)
         self.dock = dock
         self.on_maximize = on_maximize
+        self.vertical = vertical
+        self._press = None
+        self._drag_offset = None
         from gcws.ui import theme
         theme.notifier().changed.connect(self._theme_changed)      # dropped with this widget
         self.active = False
         self.maximized = False
         self.setObjectName("dockTitle")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(10, 2, 3, 2)
+        lay = QVBoxLayout(self) if vertical else QHBoxLayout(self)
+        lay.setContentsMargins(*(2, 3, 2, 3) if vertical else (10, 2, 3, 2))
         lay.setSpacing(1)
-        self.label = QLabel(dock.windowTitle())
+        self.label = RotatedLabel(dock.windowTitle()) if vertical else QLabel(dock.windowTitle())
+        self.label.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.label.setObjectName("dockTitleText")
         lay.addWidget(self.label, 1)
         self.b_max = self._button(lambda: self.on_maximize(self.dock))
@@ -43,6 +84,8 @@ class DockTitleBar(QWidget):
         dock.featuresChanged.connect(lambda *_: self.update_buttons())
         dock.topLevelChanged.connect(lambda *_: self.update_buttons())
         self.update_buttons()
+        if vertical:
+            self.setFixedWidth(30)
 
     def _button(self, slot) -> QToolButton:
         b = QToolButton(self)
@@ -104,12 +147,50 @@ class DockTitleBar(QWidget):
         self.dock.close()
 
     def mouseDoubleClickEvent(self, ev):
+        self._press = None
+        self._drag_offset = None
         if ev.button() == Qt.LeftButton:
             ev.accept()
             self.on_maximize(self.dock)
             return
         super().mouseDoubleClickEvent(ev)
 
+    def mousePressEvent(self, ev):
+        if self.vertical and ev.button() == Qt.LeftButton:
+            self._press = ev.globalPosition().toPoint()
+            ev.accept()
+        else:
+            super().mousePressEvent(ev)
+
+    def mouseMoveEvent(self, ev):
+        if self.vertical and self._press is not None and ev.buttons() & Qt.LeftButton:
+            if not self.dock.features() & QDockWidget.DockWidgetMovable:
+                return
+            pos = ev.globalPosition().toPoint()
+            if self._drag_offset is None:
+                if (pos - self._press).manhattanLength() < QApplication.startDragDistance():
+                    return
+                if self.maximized:
+                    self.on_maximize(self.dock)
+                if not self.dock.isFloating():
+                    if not self.dock.features() & QDockWidget.DockWidgetFloatable:
+                        return
+                    origin = self.dock.mapToGlobal(self.dock.rect().topLeft())
+                    self.dock.setFloating(True)
+                    self.dock.move(origin)
+                self._drag_offset = self._press - self.dock.pos()
+            self.dock.move(pos - self._drag_offset)
+            ev.accept()
+        else:
+            super().mouseMoveEvent(ev)
+
+    def mouseReleaseEvent(self, ev):
+        self._press = None
+        self._drag_offset = None
+        super().mouseReleaseEvent(ev)
+
     def sizeHint(self):
+        if self.vertical:
+            return QSize(30, 180)
         h = max(self.label.sizeHint().height(), 20) + 6
         return QSize(super().sizeHint().width(), h)

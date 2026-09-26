@@ -54,6 +54,11 @@ class WP:
     # measured
     area_raw: float = 0.0
     height: float = 0.0
+    # Deconvolution allocates the measured parent area by MS component weights.
+    # These values are rebuilt from manual events, never stored as cached results.
+    allocated_area_raw: Optional[float] = None
+    area_allocation: Optional[tuple] = None  # (parent raw area, MS weights, component index)
+    deconv_component: dict = field(default_factory=dict)
 
     def add_flag(self, f: str) -> None:
         if f not in self.flags:

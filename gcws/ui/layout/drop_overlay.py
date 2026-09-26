@@ -47,6 +47,7 @@ class DropOverlay(QObject):
         self.band = Band()
         self.dock: QDockWidget | None = None
         self.area = None
+        self.target = None
         self.timer = QTimer(self)
         self.timer.setInterval(30)
         self.timer.timeout.connect(self._poll)
@@ -89,11 +90,23 @@ class DropOverlay(QObject):
     def _update(self, pos: QPoint):
         area, rect = self._zone(pos)
         self.area = area
+        self.target = None
         if area is None:
+            for dock in self.win.docks.values():
+                if dock is self.dock or dock.isFloating() or dock.visibleRegion().isEmpty():
+                    continue
+                bounds = QRect(dock.mapToGlobal(QPoint()), dock.size())
+                center = bounds.adjusted(bounds.width() // 4, bounds.height() // 4,
+                                         -bounds.width() // 4, -bounds.height() // 4)
+                if center.contains(pos):
+                    self.target, rect = dock, bounds
+                    break
+        if area is None and self.target is None:
             self.band.hide()
             return
         title = self.dock.windowTitle() if self.dock else "panel"
-        self.band.text = f"Release to dock “{title}”\nalong the whole {AREA_NAMES[area]} side"
+        self.band.text = (f"Release to tab “{title}” with “{self.target.windowTitle()}”" if self.target else
+                          f"Release to dock “{title}”\nalong the whole {AREA_NAMES[area]} side")
         self.band.setGeometry(rect)
         self.band.show()
         self.band.update()
@@ -105,7 +118,14 @@ class DropOverlay(QObject):
         self.timer.stop()
         self.band.hide()
         dock, area = self.dock, self.area
+        target, self.target = self.target, None
         self.dock, self.area = None, None
+        if dock is not None and target is not None and dock.isFloating():
+            dock.setFloating(False)
+            self.win.tabifyDockWidget(target, dock)
+            dock.show()
+            dock.raise_()
+            return
         if dock is not None and area is not None and dock.isFloating():
             dock.setFloating(False)
             self.win.addDockWidget(area, dock, Qt.Vertical if area in (Qt.LeftDockWidgetArea,

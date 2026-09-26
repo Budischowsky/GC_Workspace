@@ -86,6 +86,7 @@ class Workspace(QObject):
     quantChanged = QtSignal()
     deconvChanged = QtSignal(str)              # run id: whole-run deconvolution available / dropped
     solventCutChanged = QtSignal()
+    orderChanged = QtSignal()
     panelsChanged = QtSignal()                 # signal / blank choice of Chromatogram 1 or 2, table source
     peakFocusRequested = QtSignal(int)         # the analyst picked a peak in a list: zoom the chromatograms to it
     message = QtSignal(str)
@@ -327,6 +328,7 @@ class Workspace(QObject):
 
     def reorder(self, ids: list[str]) -> None:
         self.order = [i for i in ids if i in self.runs]
+        self.orderChanged.emit()
 
     # -- integration -------------------------------------------------------
 

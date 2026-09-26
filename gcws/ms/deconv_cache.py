@@ -49,6 +49,9 @@ def window(st, rt_ms: float, settings: D.DeconvSettings) -> D.DeconvResult:
 
 def for_peak(st, peak, key: str, settings: D.DeconvSettings):
     """The component representing ``peak`` (whole-run result if available, else its window)."""
+    allocated = D.allocated_component(st.run.ms, peak)
+    if allocated is not None:
+        return allocated
     t0, t1, ta = ms_times(peak, key, st.delay_value)
     comps = whole_run(st, settings)
     if comps is None:
@@ -66,4 +69,4 @@ def hidden_components(ws, st, key: str, settings: D.DeconvSettings) -> list:
     shift = st.delay_value if is_fid(key) else 0.0
     cut = ws.solvent_cut(st, "TIC")
     return [c for c in comps if (cut is None or c.rt >= cut)
-            and res.peak_at(c.rt + shift) is None and c.quality >= 40]
+            and res.peak_at(c.rt + shift) is None]

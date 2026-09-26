@@ -237,6 +237,9 @@ def deconvoluted_component(run, peak, key: str, delay: float, settings=None):
     from gcws.ms import deconv as D
     if run.ms is None or peak is None:
         return None
+    allocated = D.allocated_component(run.ms, peak)
+    if allocated is not None:
+        return allocated
     t0, t1, ta = ms_times(peak, key, delay)
     try:
         res = D.deconvolute_window(run.ms, ta, settings or D.DeconvSettings())

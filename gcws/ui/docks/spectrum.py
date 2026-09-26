@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, Signal as QtSignal
-from PySide6.QtGui import QColor, QGuiApplication
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
-                               QMenu, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QToolBar,
+from PySide6.QtCore import QSettings, QSignalBlocker, Qt, Signal as QtSignal
+from PySide6.QtGui import QAction, QActionGroup, QColor, QGuiApplication
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QHeaderView,
+                               QMenu, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
                                QToolButton, QVBoxLayout, QWidget)
 
 from gcws.core.keys import is_fid
@@ -28,8 +28,9 @@ from gcws.ui.docks.interpretation_view import InterpretationView
 
 class StickPlot(pg.PlotWidget):
     ionClicked = QtSignal(int)                  # m/z of the bar clicked
+    contextRequested = QtSignal(object)        # global screen position
 
-    def __init__(self):
+    def __init__(self, *, embedded_title=False):
         super().__init__()
         self.setMenuEnabled(False)
         self.setLabel("bottom", "m/z")
@@ -39,6 +40,11 @@ class StickPlot(pg.PlotWidget):
         self.setToolTip("Click an ion to show its extracted ion chromatogram; drag to zoom, double-click resets")
         self.texts = []
         self._mz = np.zeros(0)
+        self.embedded_title = embedded_title
+        if embedded_title:
+            from gcws.ui.plot.overlay import ElidedLabel, PlotOverlay
+            self.caption = ElidedLabel()
+            self.caption_overlay = PlotOverlay(self, [self.caption])
         self._last = None                           # the last drawing, redrawn on a theme switch
         self.scene().sigMouseClicked.connect(self._clicked)
         theme.register_plot(self, self._redraw)
@@ -49,6 +55,10 @@ class StickPlot(pg.PlotWidget):
             self.show_spectrum(*args, **kw)
 
     def _clicked(self, ev):
+        if ev.button() == Qt.RightButton and not ev.double():
+            self.contextRequested.emit(ev.screenPos())
+            ev.accept()
+            return
         if ev.button() != Qt.LeftButton or ev.double() or self._mz.size == 0:
             if ev.double():
                 self.getPlotItem().getViewBox().autoRange()
@@ -61,13 +71,16 @@ class StickPlot(pg.PlotWidget):
     def show_spectrum(self, mz, ab, ref=None, title="", marks=None):
         """``marks``: optional {m/z: (label, level)} drawn above the bars (interpretation)."""
         self._last = ((mz, ab), dict(ref=ref, title=title, marks=marks))
+        if self.embedded_title:
+            self.caption.setText(title or "no spectrum")
+            self.caption_overlay.reposition()
         self.clear()
         for t in self.texts:
             self.removeItem(t)
         self.texts = []
         self._mz = np.asarray(mz if mz is not None else [], float)
         if mz is None or len(mz) == 0:
-            self.setTitle(title or "no spectrum")
+            self.setTitle(None if self.embedded_title else (title or "no spectrum"))
             return
         mz = np.asarray(mz, float)
         ab = np.asarray(ab, float)
@@ -104,7 +117,7 @@ class StickPlot(pg.PlotWidget):
                     t.setPos(float(rmz[i]), float(-rrel[i]))
                     self.addItem(t)
                     self.texts.append(t)
-        self.setTitle(title, size="9pt")
+        self.setTitle(None if self.embedded_title else title, size="9pt")
         vb = self.getPlotItem().getViewBox()
         vb.setRange(xRange=(float(min(mz)) - 5, float(max(mz)) + 5),
                     yRange=(-118 if ref else 0, 118), padding=0)
@@ -134,59 +147,44 @@ class SpectrumDock(QWidget):
             self.mode.addItem(v, k)
         self.mode.setToolTip("How the spectrum of a selected peak is formed")
         self.mode.currentIndexChanged.connect(lambda *_: self.refresh())
-        b_atlas = QToolButton()
-        b_atlas.setText("Library hits")
-        b_atlas.setToolTip("Hit list of this spectrum in your libraries (default search method)")
-        b_atlas.clicked.connect(lambda: self._emit(self.atlasRequested))
-        self.b_own = QToolButton()
-        self.b_own.setText("Own library")
-        self.b_own.setToolTip("Search this spectrum in one of your libraries; the arrow chooses the library and "
-                              "the search options")
-        self.b_own.setPopupMode(QToolButton.MenuButtonPopup)
-        self.own_menu = QMenu(self.b_own)
-        self.own_menu.aboutToShow.connect(self._fill_own_menu)
-        self.b_own.setMenu(self.own_menu)
-        self.b_own.clicked.connect(lambda: self._emit(self.ownSearchRequested))
-        b_nist = QToolButton()
-        b_nist.setText("NIST")
-        b_nist.setToolTip("Send this spectrum to NIST MS Search")
-        b_nist.clicked.connect(lambda: self._emit(self.nistRequested))
-        b_copy = QToolButton()
-        b_copy.setText("Copy MSP")
-        b_copy.clicked.connect(self.copy_msp)
-        b_save = QToolButton()
-        b_save.setText("Save MSP...")
-        b_save.clicked.connect(self.save_msp)
-        b_res = QToolButton()
-        b_res.setText("Investigate")
-        b_res.setToolTip("Full EI Atlas investigation (native window)")
-        b_res.clicked.connect(self.investigateRequested.emit)
-        b_reg = QToolButton()
-        b_reg.setText("Register unknown")
-        b_reg.clicked.connect(self.registerRequested.emit)
-        b_lib = QToolButton()
-        b_lib.setText("Add to library...")
-        b_lib.setToolTip("Store this spectrum with name, CAS, formula, RI ... in a library (Edit library)")
-        b_lib.clicked.connect(self.libraryRequested.emit)
-        self.mode.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        self.mode.setMinimumContentsLength(12)
-        actions = QToolBar()                    # overflows into a » menu when the panel is narrow
-        actions.setIconSize(actions.iconSize() * 0.8)
-        for b in (b_atlas, self.b_own, b_res, b_nist, b_copy, b_save, b_reg, b_lib):
-            actions.addWidget(b)
-        self.minus_blank = QCheckBox("− blank")
-        self.minus_blank.setToolTip("Subtract the assigned blank's spectrum at the same (aligned) time; "
-                                    "on automatically for blank-subtracted traces")
+        self.mode.setParent(self)
+        self.mode.hide()
+        self.minus_blank = QCheckBox("subtract blank", self)
+        self.minus_blank.hide()
         self.minus_blank.toggled.connect(lambda *_: self.refresh())
-        top = QHBoxLayout()
-        top.setContentsMargins(0, 0, 0, 0)
-        top.addWidget(self.mode, 1)
-        top.addWidget(self.minus_blank)
-        top.addWidget(actions, 2)
+        self.mode_menu = QMenu("Spectrum mode", self)
+        self.mode_group = QActionGroup(self)
+        for i in range(self.mode.count()):
+            action = self.mode_menu.addAction(self.mode.itemText(i))
+            action.setCheckable(True)
+            action.setData(i)
+            self.mode_group.addAction(action)
+            action.triggered.connect(lambda _=False, n=i: self.mode.setCurrentIndex(n))
+        self.mode_group.actions()[0].setChecked(True)
+        self.mode.currentIndexChanged.connect(self._sync_actions)
+        self.blank_action = QAction("subtract blank", self)
+        self.blank_action.setCheckable(True)
+        self.blank_action.toggled.connect(self.minus_blank.setChecked)
+        self.minus_blank.toggled.connect(self._sync_actions)
+        self.own_menu = QMenu("Own library selection and options", self)
+        self.own_menu.aboutToShow.connect(self._fill_own_menu)
+        self.spectrum_actions = []
+        for text, slot in (
+            ("Library hits", self._library_hits),
+            ("Own library", lambda: self._emit(self.ownSearchRequested)),
+            ("Investigate", self.investigateRequested.emit),
+            ("NIST", lambda: self._emit(self.nistRequested)),
+            ("Copy MSP", self.copy_msp), ("Save MSP...", self.save_msp),
+            ("Register unknown", self.registerRequested.emit),
+            ("Add to library...", self.libraryRequested.emit),
+        ):
+            action = QAction(text, self)
+            action.triggered.connect(slot)
+            self.spectrum_actions.append(action)
 
         # scan-mode bar: where the spectrum comes from, stepping, background
-        self.source_chip = theme.chip("", "info")
-        self.source_text = QLabel()
+        from gcws.ui.plot.overlay import ElidedLabel
+        self.source_text = ElidedLabel()
         self.b_prev = QToolButton()
         self.b_prev.setText("◀")
         self.b_prev.setToolTip("Previous scan  [←]")
@@ -203,24 +201,16 @@ class SpectrumDock(QWidget):
         self.b_back.setText("Back to peak")
         self.b_back.setToolTip("Show the selected peak's spectrum again  [Esc]")
         self.b_back.clicked.connect(self.back_to_peak)
-        self.source_bar = QWidget()
-        sb = QHBoxLayout(self.source_bar)
-        sb.setContentsMargins(0, 0, 0, 0)
-        for w in (self.source_chip, self.b_prev, self.b_next, self.source_text):
-            sb.addWidget(w)
-        sb.addStretch(1)
-        for w in (self.bg_chip, self.b_clear_bg, self.b_back):
-            sb.addWidget(w)
-        self.source_bar.hide()
-
-        self.plot = StickPlot()
+        self.plot = StickPlot(embedded_title=True)
         self.plot.ionClicked.connect(self.ionClicked.emit)
+        self.context_menu = QMenu(self.plot)
+        self.plot.contextRequested.connect(self._context_menu)
         self.interp = None
         self._interp_cache: dict = {}
         self.interp_view = InterpretationView()
-        self.info = QLabel()
+        self.info = ElidedLabel()
         self.info.setObjectName("hint")
-        self.info.setWordWrap(True)
+        self.info.setWordWrap(False)
 
         # scan selection
         self.scan_plot = pg.PlotWidget()
@@ -269,18 +259,27 @@ class SpectrumDock(QWidget):
         self.tabs.addTab(self.hits, "Library hits")
         self.tabs.addTab(self.table, "m/z table")
         self.tabs.addTab(scans, "Scans")
-        split = QSplitter(Qt.Vertical)
+        split = self.split = QSplitter(Qt.Vertical)
         split.addWidget(self.plot)
         split.addWidget(self.tabs)
-        split.setSizes([420, 200])
         split.setStretchFactor(0, 3)
         split.setStretchFactor(1, 2)
+        split.setChildrenCollapsible(False)
+        split.setCollapsible(1, True)
+        split.setSizes([420, 0])
+        self.details_height = QSettings().value("window/ms_details_height", 200, type=int)
+        from gcws.ui.plot.overlay import PlotOverlay
+        self.source_bar = PlotOverlay(self.plot, [self.b_prev, self.b_next,
+            self.source_text, self.bg_chip, self.b_clear_bg, self.b_back], bottom=True)
+        self.plot.caption_overlay.deleteLater()
+        self.plot.caption_overlay = PlotOverlay(self.plot, [self.plot.caption, self.info])
+        split.splitterMoved.connect(self._remember_details_height)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(2, 2, 2, 2)
-        lay.addLayout(top)
-        lay.addWidget(self.source_bar)
-        lay.addWidget(self.info)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
         lay.addWidget(split, 1)
+        self.populate_menu(self.context_menu)
+        self._update_source_bar()
 
         ws.selectionChanged.connect(self._on_selection)
         ws.activeRunChanged.connect(self._on_active)
@@ -289,6 +288,53 @@ class SpectrumDock(QWidget):
             sig.connect(lambda *_: self.refresh())
         ws.resultChanged.connect(lambda rid, key: self.refresh() if rid == ws.active_id else None)
         ws.runRemoved.connect(self._on_removed)
+
+    def populate_menu(self, menu):
+        menu.addMenu(self.mode_menu)
+        menu.addAction(self.blank_action)
+        menu.addSeparator()
+        for action in self.spectrum_actions:
+            menu.addAction(action)
+            if action.text() == "Own library":
+                menu.addMenu(self.own_menu)
+        menu.aboutToShow.connect(self._sync_actions)
+
+    def _context_menu(self, pos):
+        self._sync_actions()
+        self.context_menu.popup(pos.toPoint())
+
+    def _sync_actions(self, *_):
+        if not hasattr(self, "blank_action"):
+            return
+        with QSignalBlocker(self.blank_action):
+            self.blank_action.setChecked(self.minus_blank.isChecked())
+        st = self.ws.active
+        self.blank_action.setEnabled(bool(st and st.run.ms is not None and self.ws.blank_ids(st)))
+        for action in self.mode_group.actions():
+            with QSignalBlocker(action):
+                action.setChecked(action.data() == self.mode.currentIndex())
+        for action in self.spectrum_actions:
+            action.setEnabled(bool(self.spec is not None and self.spec.ab.size))
+
+    def _library_hits(self):
+        self.show_details(self.hits)
+        self._emit(self.atlasRequested)
+
+    def show_details(self, widget=None):
+        if widget is not None:
+            self.tabs.setCurrentWidget(widget)
+        if self.split.sizes()[1] == 0:
+            available = max(1, self.split.height())
+            detail = min(self.details_height, max(80, available - 100))
+            self.split.setSizes([max(100, available - detail), detail])
+
+    def _remember_details_height(self, *_):
+        if self.split.sizes()[1] > 0:
+            self.details_height = self.split.sizes()[1]
+
+    def restore_details_height(self, height):
+        self.details_height = height
+        self.split.setSizes([max(1, self.split.height()), 0])
 
     # -- source switching --------------------------------------------------------
 
@@ -482,9 +528,8 @@ class SpectrumDock(QWidget):
         mz = np.array([int(m) for m, _ in comp.spectrum], dtype=int)
         ab = np.array([float(v) for _, v in comp.spectrum], dtype=float)
         self.spec = Spectrum(mz, ab, float(comp.rt), "deconvoluted", [int(comp.apex_scan)], [],
-                             f"deconvoluted component: model m/z {comp.model_mz}, quality {comp.quality:.0f}, "
-                             f"purity {comp.purity:.2f}" + (", found under a larger peak" if comp.hidden else ""))
-        what = f"Component {comp.rt:.3f} min (MS)  ·  model m/z {comp.model_mz}  ·  quality {comp.quality:.0f}"
+                             f"deconvoluted component: model m/z {comp.model_mz}, purity {comp.purity:.2f}")
+        what = f"Component {comp.rt:.3f} min (MS)  ·  model m/z {comp.model_mz}"
         self.plot.show_spectrum(mz, ab, title=what, marks=self._marks())
         self.info.setText(self.spec.note)
         self._fill_table()
@@ -495,15 +540,15 @@ class SpectrumDock(QWidget):
     def _update_source_bar(self, text: str = ""):
         scan = self.source in ("scan", "component")
         self.source_bar.setVisible(scan or self.bg_range is not None)
-        theme.set_chip(self.source_chip, {"scan": "Scan spectrum", "component": "Deconvoluted component"}
-                       .get(self.source, ""), "info")
         for w in (self.b_prev, self.b_next):
-            w.setVisible(self.source == "scan")
-        self.b_back.setVisible(scan)
+            self.source_bar.set_available(w, self.source == "scan")
+        self.source_bar.set_available(self.b_back, scan)
         self.source_text.setText(text if scan else "")
         bg = self.bg_range
         theme.set_chip(self.bg_chip, f"BG {bg[0]:.3f}-{bg[1]:.3f} min" if bg else "", "bad")
-        self.b_clear_bg.setVisible(bg is not None)
+        self.source_bar.set_available(self.b_clear_bg, bg is not None)
+        self.source_bar.set_available(self.bg_chip, bg is not None)
+        self.source_bar.reposition()
 
     def _show_scan_trace(self, st, spec):
         ms = st.run.ms
@@ -529,11 +574,12 @@ class SpectrumDock(QWidget):
         st = self.ws.active
         has = bool(st is not None and st.run.ms is not None and self.ws.blank_ids(st))
         self.minus_blank.blockSignals(True)
-        self.minus_blank.setVisible(has)
+        self.blank_action.setEnabled(has)
         if self.ws.signal_key != self._last_key:          # a blank trace brings blank spectra with it
             self.minus_blank.setChecked(is_derived(self.ws.signal_key))
             self._last_key = self.ws.signal_key
         self.minus_blank.blockSignals(False)
+        self._sync_actions()
 
     def _minus_blank(self, st, spec):
         """The spectrum minus the blank's spectrum at the same scans, when asked for."""
@@ -601,9 +647,11 @@ class SpectrumDock(QWidget):
 
     def _spectrum_changed(self):
         """The spectrum on display changed: refresh the interpretation tab."""
+        self._sync_actions()
+        self.plot.caption_overlay.reposition()
         if self.spec is None or self.spec.ab.size == 0:
             self.interp = None
-        label = self.plot.getPlotItem().titleLabel.text if self.spec is not None else ""
+        label = self.plot.caption.text() if self.spec is not None else ""
         import re
         self.interp_view.show_result(self.interp, re.sub(r"<[^>]+>", "", label or ""))
         if self.hits.rowCount() == 0 and self.interp is not None and self.tabs.currentWidget() is self.hits:

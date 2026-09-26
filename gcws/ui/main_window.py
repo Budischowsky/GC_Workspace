@@ -1,4 +1,4 @@
-"""Main window: dock panels, run tabs, menus and workflows."""
+"""Main window: dock panels, loaded samples, menus and workflows."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -26,7 +26,7 @@ from gcws.ui.layout import presets
 from gcws.ui.layout.drop_overlay import DropOverlay
 from gcws.ui.plot.chrom import ChromPanel, ViewLink
 from gcws.ui.plot.tools import TOOLS, ToolController
-from gcws.ui.run_tabs import RunTabBar
+from gcws.ui.run_tabs import LoadedSamples
 from gcws.ui.undo import IdentCommand, ManualEventsCommand, ValueCommand, add_event
 from gcws.ui.workspace import Workspace
 
@@ -63,6 +63,18 @@ class MainWindow(QMainWindow):
 
         # panels
         self.tree = FolderTree()
+        self.loaded_samples = LoadedSamples(self.ws)
+        from PySide6.QtWidgets import QVBoxLayout, QSplitter
+        loaded = QWidget()
+        loaded_layout = QVBoxLayout(loaded)
+        loaded_layout.setContentsMargins(2, 2, 2, 2)
+        loaded_layout.addWidget(QLabel("Loaded samples"))
+        loaded_layout.addWidget(self.loaded_samples)
+        self.folder_split = QSplitter(Qt.Vertical)
+        self.folder_split.addWidget(self.tree)
+        self.folder_split.addWidget(loaded)
+        self.folder_split.setSizes([400, 220])
+        self.folder_split.setChildrenCollapsible(False)
         self._restore_panels()
         self.chrom = ChromPanel(self.ws, self.tools, 0)
         self.chrom2 = ChromPanel(self.ws, self.tools, 1)
@@ -76,13 +88,15 @@ class MainWindow(QMainWindow):
         self.audit = AuditDock(self.ws)
         self.quant = QuantDock(self.ws)
         self.replicates = ReplicatesDock(self.ws)
-        widgets = {"tree": self.tree, "chrom": self.chrom, "zoom": self.chrom2, "table": self.table,
+        widgets = {"tree": self.folder_split, "chrom": self.chrom, "zoom": self.chrom2, "table": self.table,
                    "spectrum": self.spectrum, "events": self.events, "props": self.props, "audit": self.audit,
                    "quant": self.quant, "replicates": self.replicates}
         self.overlay = DropOverlay(self)
         for key, title in DOCKS:
             self._add_dock(key, title, widgets[key])
 
+        from gcws.ui.layout.sidebar import SidebarController
+        self.sidebar = SidebarController(self)
         self._build_actions()
         self._build_toolbars()
         self._build_menus()
@@ -95,14 +109,18 @@ class MainWindow(QMainWindow):
         presets.apply_preset(self, "Chromatogram top")
         if not self._restore_session_state():
             # dock sizes only take effect once the window has its real size
-            QTimer.singleShot(0, lambda: presets.apply_preset(self, "Chromatogram top"))
+            QTimer.singleShot(0, lambda: (presets.apply_preset(self, "Chromatogram top"),
+                                         self.restore_view_preferences("window")))
+        else:
+            self.restore_view_preferences("window")
 
     # -- construction ----------------------------------------------------------
 
     def _add_dock(self, key, title, widget):
-        d = QDockWidget(title, self)
+        from gcws.ui.layout.title_bar import RightTitleDock
+        d = RightTitleDock(title, self) if key in ("chrom", "zoom", "spectrum") else QDockWidget(title, self)
         d.setObjectName("dock." + key)
-        if key in ("tree", "events"):
+        if key == "events":
             # form-heavy panels scroll instead of forcing a wide minimum on the whole dock column
             from PySide6.QtWidgets import QScrollArea
             area = QScrollArea()
@@ -110,11 +128,14 @@ class MainWindow(QMainWindow):
             area.setFrameShape(QScrollArea.NoFrame)
             area.setWidget(widget)
             widget = area
-        d.setWidget(widget)
         d.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable
                       | QDockWidget.DockWidgetFloatable)
         from gcws.ui.layout.title_bar import DockTitleBar
-        d.setTitleBarWidget(DockTitleBar(d, self.toggle_maximize))
+        if isinstance(d, RightTitleDock):
+            d.set_panel(widget, self.toggle_maximize)
+        else:
+            d.setWidget(widget)
+            d.setTitleBarWidget(DockTitleBar(d, self.toggle_maximize))
         self.overlay.watch(d)
         self.docks[key] = d
         return d
@@ -195,14 +216,6 @@ class MainWindow(QMainWindow):
             tools.addAction(a)
         self.addToolBar(Qt.TopToolBarArea, tools)
 
-        self.addToolBarBreak(Qt.TopToolBarArea)
-        runs = QToolBar("Chromatograms")
-        runs.setObjectName("tb.runs")
-        runs.setMovable(False)
-        self.run_tabs = RunTabBar(self.ws)
-        runs.addWidget(self.run_tabs)
-        self.addToolBar(Qt.TopToolBarArea, runs)
-
     def _build_menus(self):
         mb = self.menuBar()
         m = mb.addMenu("&File")
@@ -245,6 +258,12 @@ class MainWindow(QMainWindow):
         from gcws.ui import theme as _theme
         self.a_dark.setChecked(_theme.is_dark())
         self.a_dark.toggled.connect(self.set_dark_mode)
+
+        from gcws.ui.layout.plot_menus import ChromatogramMenu
+        self.chrom_menu = ChromatogramMenu(self)
+        mb.addMenu(self.chrom_menu)
+        self.ms_menu = mb.addMenu("Mass Spectrum")
+        self.spectrum.populate_menu(self.ms_menu)
 
         m = mb.addMenu("&Integration")
         m.addAction(self.a_integrate)
@@ -356,14 +375,14 @@ class MainWindow(QMainWindow):
         self.ws.peakFocusRequested.connect(lambda *_: self.chrom.zoom_to_selected())
         for sig in (self.ws.activeRunChanged, self.ws.runChanged, self.ws.runRemoved):
             sig.connect(lambda *_: self._refresh_run_chips())
-        self.run_tabs.closeRequested.connect(self.close_run)
-        self.run_tabs.roleRequested.connect(self.set_role)
-        self.run_tabs.blanksRequested.connect(self.assign_blanks)
-        self.run_tabs.revealRequested.connect(lambda rid: (self._show_dock("tree"),
+        self.loaded_samples.closeRequested.connect(self.close_run)
+        self.loaded_samples.roleRequested.connect(self.set_role)
+        self.loaded_samples.blanksRequested.connect(self.assign_blanks)
+        self.loaded_samples.revealRequested.connect(lambda rid: (self._show_dock("tree"),
                                                            self.tree.reveal(self.ws.runs[rid].run.path)))
-        self.run_tabs.eicRequested.connect(self.ask_eic)
-        self.run_tabs.replicateRequested.connect(self.open_double_determination)
-        self.run_tabs.pairRequested.connect(self.open_double_determination)
+        self.loaded_samples.eicRequested.connect(self.ask_eic)
+        self.loaded_samples.replicateRequested.connect(self.open_double_determination)
+        self.loaded_samples.pairRequested.connect(self.open_double_determination)
         self.props.assignBlanksRequested.connect(self.assign_blanks)
         self.props.roleRequested.connect(self.set_role)
         self.table.set_context_actions([self.spectrumSearchNistAction, self.spectrumSearchAtlasAction,
@@ -394,6 +413,8 @@ class MainWindow(QMainWindow):
 
     def _show_dock(self, key):
         d = self.docks[key]
+        if self.sidebar.contains(d):
+            self.sidebar.expand()
         d.show()
         d.raise_()
 
@@ -541,6 +562,8 @@ class MainWindow(QMainWindow):
                 self.ws.integrate(st.id, key, emit=False)
             self.ws.runChanged.emit(st.id)
         self.ws.log("Chromatogram loaded", st.name, str(run.path))
+        # Finish the initial fit before reporting the load complete; later gestures win.
+        self.view_link.reset()
         self._loading(-1)
         self.statusBar().showMessage(f"Loaded {st.name}", 4000)
         if self.loading == 0 and self._pending_project is not None:
@@ -731,7 +754,7 @@ class MainWindow(QMainWindow):
         self.spectrum.refresh()
         self.replicates.duplicate._reapply()
         self._refresh_run_chips()
-        self.run_tabs.update()
+        self.loaded_samples.sync()
         if self.a_dark.isChecked() != on:
             self.a_dark.setChecked(on)
 
@@ -1284,6 +1307,7 @@ class MainWindow(QMainWindow):
             self.delete_layouts_menu.addAction(n, lambda n=n: presets.delete_layout(n))
 
     def apply_preset(self, name):
+        self.sidebar.expand()
         self.restore_maximized()
         presets.apply_preset(self, name)
 
@@ -1304,7 +1328,8 @@ class MainWindow(QMainWindow):
                     d.hide()
             dock.show()
             dock.raise_()
-        bar = dock.titleBarWidget()
+        from gcws.ui.layout.title_bar import title_bar
+        bar = title_bar(dock)
         if hasattr(bar, "set_maximized"):
             bar.set_maximized(True)
         self.statusBar().showMessage(f"{dock.windowTitle()} maximized - double-click its title to restore", 4000)
@@ -1318,7 +1343,8 @@ class MainWindow(QMainWindow):
             self.restoreState(saved, presets.LAYOUT_VERSION)
         else:
             dock.setGeometry(saved)
-        bar = dock.titleBarWidget()
+        from gcws.ui.layout.title_bar import title_bar
+        bar = title_bar(dock)
         if hasattr(bar, "set_maximized"):
             bar.set_maximized(False)
 
@@ -1328,6 +1354,20 @@ class MainWindow(QMainWindow):
             if not locked:
                 f |= QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable
             d.setFeatures(f)
+
+    def save_view_preferences(self, prefix):
+        settings = QSettings()
+        settings.setValue(prefix + "/folders_split", self.folder_split.saveState())
+        settings.setValue(prefix + "/ms_details_height", self.spectrum.details_height)
+        self.sidebar.save(prefix)
+
+    def restore_view_preferences(self, prefix):
+        settings = QSettings()
+        state = settings.value(prefix + "/folders_split")
+        if isinstance(state, QByteArray):
+            self.folder_split.restoreState(state)
+        self.spectrum.restore_details_height(settings.value(prefix + "/ms_details_height", 200, type=int))
+        self.sidebar.restore(prefix)
 
     def _restore_session_state(self):
         s = QSettings()
@@ -1355,6 +1395,7 @@ class MainWindow(QMainWindow):
         s = QSettings()
         s.setValue("window/geometry", self.saveGeometry())
         s.setValue("window/state", self.saveState(presets.LAYOUT_VERSION))
+        self.save_view_preferences("window")
         self.table.save_columns()
         super().closeEvent(ev)
 
@@ -1382,8 +1423,8 @@ class MainWindow(QMainWindow):
                   "  manual intensity stays on later time zooms; double-click fits it again",
                   "  Shift disables snapping of integration tools",
                   "  Delete in Peaks / substances   delete marked peaks (one undo step)",
-                  "  Cut solvent in either panel    exclude the solvent in both panels",
-                  "  Integration > Solvent cut...   edit the shared NIAS solvent end (5.5 min FID by default)",
+                  "  Chromatogramm > Solvent cut    exclude the solvent in both panels",
+                  "  Chromatogramm > Solvent end RT   edit the shared NIAS solvent end (FID time)",
                   "  a peak picked in the table zooms both chromatograms to it",
                   "",
                   "Panels: double-click a title to maximize the panel, again to restore the layout.",

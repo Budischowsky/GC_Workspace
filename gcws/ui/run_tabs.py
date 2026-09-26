@@ -1,16 +1,16 @@
-"""Tab bar with one colour-coded tab per loaded chromatogram."""
+"""Colour-coded loaded samples and their workspace actions."""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal as QtSignal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QColorDialog, QInputDialog, QMenu, QTabBar
+from PySide6.QtWidgets import QColorDialog, QInputDialog, QMenu, QListWidget, QListWidgetItem, QAbstractItemView
 
 from gcws.io.sequence import ROLE_LABELS
 from gcws.ui import theme
 from gcws.ui.icons import color_chip
 
 
-class RunTabBar(QTabBar):
+class LoadedSamples(QListWidget):
     roleRequested = QtSignal(str, str)          # run id, role
     blanksRequested = QtSignal(str)
     replicateRequested = QtSignal(str)
@@ -22,76 +22,63 @@ class RunTabBar(QTabBar):
     def __init__(self, ws, parent=None):
         super().__init__(parent)
         self.ws = ws
-        self.setTabsClosable(True)
-        self.setMovable(True)
-        self.setExpanding(False)
-        self.setElideMode(Qt.ElideMiddle)
-        self.setDocumentMode(True)
-        self.setUsesScrollButtons(True)
+        self.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.setDragDropMode(QAbstractItemView.InternalMove)
+        self.setDefaultDropAction(Qt.MoveAction)
+        self.setTextElideMode(Qt.ElideMiddle)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._menu)
-        self.tabCloseRequested.connect(lambda i: self.closeRequested.emit(self.tabData(i)))
-        self.currentChanged.connect(self._current)
-        self.tabMoved.connect(lambda *_: ws.reorder([self.tabData(i) for i in range(self.count())]))
+        self.currentRowChanged.connect(self._current)
         self._updating = False
-        ws.runAdded.connect(self._added)
-        ws.runRemoved.connect(self._removed)
-        ws.runChanged.connect(self._changed)
+        for signal in (ws.runAdded, ws.runRemoved, ws.runChanged, ws.orderChanged):
+            signal.connect(self.sync)
         ws.activeRunChanged.connect(self._active)
-        self.setObjectName("runTabs")
+        theme.notifier().changed.connect(self.sync)
+        self.setObjectName("loadedSamples")
+        self.sync()
 
     def _index(self, run_id):
         for i in range(self.count()):
-            if self.tabData(i) == run_id:
+            if self.item(i).data(Qt.UserRole) == run_id:
                 return i
         return -1
+
+    def sync(self, *_):
+        self._updating = True
+        self.clear()
+        for st in self.ws.states():
+            item = QListWidgetItem(color_chip(st.color), self._label(st))
+            item.setData(Qt.UserRole, st.id)
+            item.setToolTip(f"{st.name}\n{st.run.path}")
+            item.setForeground(QColor(theme.TEXT if st.visible else theme.FAINT))
+            self.addItem(item)
+        self.setCurrentRow(self._index(self.ws.active_id))
+        self._updating = False
+
+    def dropEvent(self, event):
+        self._updating = True
+        super().dropEvent(event)
+        self._updating = False
+        self.ws.reorder([self.item(i).data(Qt.UserRole) for i in range(self.count())])
 
     def _label(self, st) -> str:
         role = "" if st.role == "sample" else f"  [{ROLE_LABELS.get(st.role, st.role)}]"
         return st.name + role
 
-    def _added(self, run_id):
-        st = self.ws.runs[run_id]
+    def _active(self, run_id):
         self._updating = True
-        pos = self.ws.index_of(run_id)
-        i = self.insertTab(pos if 0 <= pos <= self.count() else self.count(), color_chip(st.color), self._label(st))
-        self.setTabData(i, run_id)
-        self.setTabToolTip(i, f"{st.name}\n{st.run.path}")
-        self.setTabTextColor(i, QColor(theme.TEXT))
+        self.setCurrentRow(self._index(run_id))
         self._updating = False
 
-    def _removed(self, run_id):
-        i = self._index(run_id)
-        if i >= 0:
-            self._updating = True
-            self.removeTab(i)
-            self._updating = False
-
-    def _changed(self, run_id):
-        i = self._index(run_id)
-        st = self.ws.runs.get(run_id)
-        if i >= 0 and st is not None:
-            self.setTabIcon(i, color_chip(st.color))
-            self.setTabText(i, self._label(st))
-            self.setTabTextColor(i, QColor(theme.TEXT) if st.visible else QColor(theme.FAINT))
-
-    def _active(self, run_id):
-        i = self._index(run_id)
-        if i >= 0 and i != self.currentIndex():
-            self._updating = True
-            self.setCurrentIndex(i)
-            self._updating = False
-
     def _current(self, i):
-        if self._updating or i < 0:
-            return
-        self.ws.set_active(self.tabData(i))
+        if not self._updating and i >= 0:
+            self.ws.set_active(self.item(i).data(Qt.UserRole))
 
     def _menu(self, pos):
-        i = self.tabAt(pos)
-        if i < 0:
+        item = self.itemAt(pos)
+        if item is None:
             return
-        rid = self.tabData(i)
+        rid = item.data(Qt.UserRole)
         st = self.ws.runs[rid]
         m = QMenu(self)
         roles = m.addMenu("Role")
@@ -128,14 +115,14 @@ class RunTabBar(QTabBar):
         vis.setChecked(st.visible)
         vis.toggled.connect(lambda on: self._visible(rid, on))
         m.addAction("Colour...").triggered.connect(lambda: self._color(rid))
-        m.addAction("Rename tab...").triggered.connect(lambda: self._rename(rid))
+        m.addAction("Rename sample...").triggered.connect(lambda: self._rename(rid))
         m.addSeparator()
         m.addAction("Show in folder tree").triggered.connect(lambda: self.revealRequested.emit(rid))
         m.addAction("Close").triggered.connect(lambda: self.closeRequested.emit(rid))
         others = [r for r in self.ws.order if r != rid]
         if others:
             m.addAction("Close others").triggered.connect(lambda: [self.closeRequested.emit(r) for r in others])
-        m.exec(self.mapToGlobal(pos))
+        m.exec(self.viewport().mapToGlobal(pos))
 
     def _visible(self, rid, on):
         self.ws.runs[rid].visible = on
@@ -150,7 +137,7 @@ class RunTabBar(QTabBar):
 
     def _rename(self, rid):
         st = self.ws.runs[rid]
-        text, ok = QInputDialog.getText(self, "Rename", "Tab name:", text=st.name)
+        text, ok = QInputDialog.getText(self, "Rename", "Sample name:", text=st.name)
         if ok and text.strip():
             st.run.meta.sample_name = text.strip()
             self.ws.runChanged.emit(rid)

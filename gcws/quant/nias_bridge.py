@@ -187,7 +187,8 @@ def merge_references(dets: list, settings) -> list:
 
 def _origin(p) -> str:
     import gc_model as M
-    return {"auto": M.ORIGIN_CHEMSTATION, "split": M.ORIGIN_SPLIT, "merged": M.ORIGIN_MERGED}.get(
+    return {"auto": M.ORIGIN_CHEMSTATION, "split": M.ORIGIN_SPLIT, "merged": M.ORIGIN_MERGED,
+            "deconvoluted": M.ORIGIN_DECONV}.get(
         p.origin, M.ORIGIN_MANUAL if "M" in p.flags else M.ORIGIN_CHEMSTATION)
 
 
@@ -247,6 +248,10 @@ def build_sample(st, det: Determination, result: dict, settings, *, label: str =
             "gcws_index": det.index[n],
             "id_source": ident.source if ident is not None else "",
         }
+        if ours.extra.get("deconv_component"):
+            row.derived["deconv_component"] = dict(ours.extra["deconv_component"])
+            note = ours.extra.get("area_note", "Area allocated from MS deconvolution")
+            row.derived["review"] = "; ".join(filter(None, [row.derived["review"], note]))
         rows.append(row)
     for number, row in enumerate(rows, 1):
         row.peak_no = number

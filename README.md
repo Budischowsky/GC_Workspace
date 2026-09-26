@@ -26,18 +26,22 @@ libraries are no longer copied from `..\NIAS Working`. The unknown register is k
 |---|---|
 | FID | `*.ch` (ChemStation v179), otherwise `AcqData/FID*.cg` + `.cd` (MassHunter) |
 | MS | `data.ms`, otherwise `AcqData/MSScan.bin` + `MSPeak.bin` (MassHunter centroid) |
-| Metadata | `AcqData/sample_info.xml` (sample name = tab name), `Contents.xml`, `Sequence Log .TSV` (injection order) |
+| Metadata | `AcqData/sample_info.xml` (sample name = loaded-sample label), `Contents.xml`, `Sequence Log .TSV` (injection order) |
 
 Both formats are verified to be bit-identical on the reference batch (`tests/test_io.py`).
 
 ## Workflow
 
 1. **Folders** panel: browse to the analysis folder. Double-click a `.D` run, or right-click it and choose
-   *Load*, *Load as Blank...*, or *Load all runs in folder*. Every run gets a coloured tab; the active tab is the
-   one you work on, and the other runs are overlaid thin.
+   *Load*, *Load as Blank...*, or *Load all runs in folder*. Loaded runs appear in the coloured
+   **Loaded samples** list below the folder browser. Select a sample
+   there to work on it; other visible runs are overlaid thin. Drag list entries to reorder them. Collapse
+   **Folders** with **◀** and restore it with the narrow **Folders** strip. Other panels stay open.
 2. **Chromatogram 1 and 2**: two chromatogram panels, one above the other.
-   - Each panel has its own signal (FID, TIC, BPC or an EIC via *EIC ...*), its own **− Blank** switch, and
-     Overlay, Normalize, Stack, labels and *Export...*. The default is FID in Chromatogram 1 (quantification)
+   - Each panel has its own signal (FID, TIC, BPC or an EIC via *EIC ...*), its own **subtract blank** switch
+     under *Chromatogramm > Chromatogram 1/2*, and
+     embedded Overlay, Normalize, Stack, labels and *Export...* controls (the **⋯** menu holds controls
+     that do not fit in a narrow panel). The default is FID in Chromatogram 1 (quantification)
      and TIC in Chromatogram 2 (identification).
    - Both panels share one time axis, set by the detector of Chromatogram 1. The other detector is shifted by
      each run's FID–MS delay, so a compound sits at the same x in both. The cursor readout shows the panel's own
@@ -55,8 +59,10 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
      - picking a peak in the table zooms both panels to it and fits their intensities again;
      - signal, Normalize and Stack changes refit that panel to its new units.
    - Tight plot margins and headroom based on visible peak labels give the traces more space.
-   - **Cut solvent** in either panel switches the same setting in both. *Integration > Solvent cut...* sets
-     the end time (default **5.5 min in FID time**); this is also the NIAS **Solvent end** setting. MS traces
+   - **Solvent cut** in the *Chromatogramm* menu switches the same setting in both panels. Edit
+     **Solvent end RT** directly in that menu and press Enter or leave the field to apply it
+     (default **5.5 min in FID time**; either a decimal point or comma is accepted). This is also the NIAS
+     **Solvent end** setting. MS traces
      use that time minus each run's FID–MS delay. Earlier data are excluded from the curves, integration,
      scaling and whole-run deconvolution, and therefore from peak-based library searches and exports.
      Exported chromatogram pictures show the cut curves. Changes are audited and undoable; the project and
@@ -111,13 +117,15 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
      of peaks, so filtering (e.g. Conc. > 0.01) shortens it accordingly. A filter on quantities (FID) selects
      the TIC peaks at the same time for a TIC search.
    - You can also search the FID peaks directly; each one's spectrum then comes from the MS at the FID peak's time.
-   - For a single peak the spectrum panel has *Library hits* (default search method), **Own library**
-     (the button searches one chosen library; its arrow picks the library and opens the options: algorithm,
+   - For the displayed spectrum, the *Mass Spectrum* menu and the spectrum right-click menu provide
+     *Library hits* (default search method), **Own library** (search one chosen library), and
+     **Own library selection and options** (library, algorithm,
      minimum score, hits, m/z range, threshold), *Investigate* (EI Atlas window, optional), *NIST*, MSP
      copy/save and *Register unknown*. The own-library options are also in *Identify > Own library search
      options...*.
-   - **Interpretation** tab of the spectrum panel: clues about the unknown from interpretation rules, not an
-     identification. It shows:
+   - The Interpretation, Library hits, m/z table and Scans tabs stay visible below the spectrum.
+     Their height can be adjusted with the splitter and is remembered. The **Interpretation**
+     tab provides clues about the unknown from interpretation rules, not an identification. It shows:
      - the molecular-ion candidate (isotope peaks, illogical losses and the nitrogen rule are checked);
      - Cl / Br / S / Si from the isotope pattern and the carbon number from M+1;
      - ion series and neutral losses;
@@ -130,9 +138,13 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
      Laboratory rules and substances can be added in `data/interpret_rules.json` (same format as
      `gcws/ms/knowledge.py`). The optional peak-table column *Class hint* shows the class for every peak.
    - **Deconvolution** (Identify menu): around the selected peak, over the visible range, or for the whole run.
-     - Noise model, scan-skew correction, background fit and residual search are built in; each component
-       gets a quality score.
+     - Uses the original conservative NIAS engine: five-point smoothing, one-scan minimum separation,
+       and the original noise estimation, grouping and spectrum purification. There is no residual search.
+     - Settings saved by the superseded engine start at NIAS defaults (shape correlation 0.90,
+       apex tolerance 0.5 scans). NIAS settings saved subsequently are retained.
      - Components can split a peak, be added as peaks, or have their spectrum pinned to the peak.
+       FID splits allocate the original peak area in proportion to the MS component areas, preserving
+       its total. These modeled areas are labelled in the area tooltip and report review notes.
      - *Save as default* makes the settings apply to the "deconvoluted" spectrum mode and the library search.
      - After a whole-run deconvolution, components without an integrated peak are marked in the chromatogram.
 6. **Edit library** (*Identify > Edit library...*, or *Add to library...* in the spectrum panel, the hit list
@@ -156,10 +168,11 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
    - The next search reads the changed library.
    - Lib2NIST is found automatically in a NIST MS Search installation; otherwise set its path in
      *Edit > Preferences*.
-7. **Roles and blanks**: right-click a tab and set its role (Sample / Blank / Blank + ISTD / Standard /
+7. **Roles and blanks**: right-click a loaded sample and set its role (Sample / Blank / Blank + ISTD / Standard /
    Alkane ladder). Blanks are suggested from the injection order; blanks you assign yourself are never
    re-suggested.
-   - **Blank subtraction**: the **− Blank** switch of a chromatogram panel shows "FID − Blank" / "TIC − Blank"
+   - **Blank subtraction**: the **subtract blank** switch under *Chromatogramm > Chromatogram 1/2*
+     shows "FID − Blank" / "TIC − Blank"
      there. You decide per panel which trace is blank-subtracted.
      - This is the sample minus its aligned blank, integrated like any trace.
      - FID default: only the blank's peaks, so the baseline is kept. MS default: the whole trace, including
@@ -194,7 +207,7 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
    Zelle groß, 0.34 dm² = Zelle klein, 0.44 dm² = Glaszelle) and the coverage factor (1 = einfach,
    2 = doppelt). The numbers start from the NIAS parameter table, and the report always uses the current
    parameters.
-9. **Double determination**: right-click a tab and choose *Double determination with ▸* (the partner is
+9. **Double determination**: right-click a loaded sample and choose *Double determination with ▸* (the partner is
    suggested), or use *Quantify > Double determination*.
    - Summary cards count confirmed substances, differences above the limit, artefacts found in only one
      determination, and differing identifications.
@@ -239,13 +252,15 @@ integration, blank assignments) are not part of a method. The status bar shows t
 
 ## Layout
 
-Every panel can be docked, tabbed or detached, for example onto a second screen. Its title bar has buttons to
+Every panel can be docked, tabbed or detached, for example onto a second screen. Both chromatograms and
+the mass spectrum use narrow title strips on the right, leaving their full height for plotting. Scan
+navigation, source information and background controls are embedded in the spectrum. Title bars have buttons to
 maximize, detach / dock back and close it. **Double-click a panel's title** to let it fill the window (a detached
 panel fills its screen); double-click again to restore the layout. Choose and order the columns of
 the peak table in *Columns...* (Available ↔ Shown). The layout is stored by column, so new versions do not
 reshuffle it.
 - When a detached panel is dragged near an edge of the window, a band suggests where it will dock; release to
-  dock it there.
+  dock it there. Drag a plot title over the centre of another panel to tab the panels together.
 - *Layout* menu: presets (Chromatogram top, Table left (classic), Integration, Review, Dual monitor), saved
   named layouts, and a switch to lock the panels.
 - **Dark mode**: *View > Dark mode* (Ctrl+Shift+D) switches between the light and the dark look at once and is

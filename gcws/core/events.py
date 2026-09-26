@@ -58,6 +58,9 @@ class ManualEvent:
     def describe(self) -> str:
         k = self.kind
         if k in (ManualKind.SPLIT,):
+            if self.option.startswith("deconvolution:"):
+                end = f"-{self.t1:.3f}" if self.t1 is not None else ""
+                return f"Deconvolution area split {self.t0:.3f}{end} min"
             return f"{k.value} at {self.t0:.3f} min"
         if k in (ManualKind.MOVE_START, ManualKind.MOVE_END):
             return f"{k.value} of peak {self.ref_rt:.3f} to {self.t0:.3f} min"

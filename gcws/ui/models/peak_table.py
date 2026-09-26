@@ -200,6 +200,8 @@ class PeakTableModel(QAbstractTableModel):
             f = QFont()
             f.setBold(True)
             return f
+        if role == Qt.ToolTipRole and col.key in ("area", "area_pct", "type", "origin"):
+            return row.peak.extra.get("area_note")
         if role == Qt.ToolTipRole and col.key == "class_hint":
             cache = getattr(self.ws, "hints", None)
             v = cache.get(self.ws.active, self.ws.signal_key, row.peak) if cache is not None else None
