@@ -214,6 +214,7 @@ class MainWindow(QMainWindow):
         m.addAction("Recover autosave...", self.recover_autosave)
         m.addSeparator()
         m.addAction("Export peak table...", self.table.export)
+        m.addAction("Export chromatogram...", lambda: self.export_chromatogram(0))
         m.addSeparator()
         m.addAction(self.a_close_all)
         m.addAction(self.a_quit)
@@ -348,6 +349,7 @@ class MainWindow(QMainWindow):
             plot.spectrumRequested.connect(self._scan_spectrum)
             plot.componentClicked.connect(self._show_component)
             plot.resetRequested.connect(self.reset_views)
+            plot.exportRequested.connect(self.export_chromatogram)
             for other in self.chroms:
                 if other is not plot:
                     plot.cursorMoved.connect(other.set_cursor)
@@ -419,6 +421,13 @@ class MainWindow(QMainWindow):
         """The chromatogram showing an MS trace (for an EIC), else Chromatogram 2."""
         from gcws.core.keys import is_fid
         return next((p for p in reversed(self.chroms) if not is_fid(p.key)), self.chrom2)
+
+    def export_chromatogram(self, which: int = 0):
+        from gcws.ui.dialogs.export_chrom import ExportChromatogramDialog
+        if not self.ws.states():
+            QMessageBox.information(self, "Export chromatogram", "Load a chromatogram first.")
+            return
+        ExportChromatogramDialog(self, which).exec()
 
     def reset_views(self):
         """Double-click in a chromatogram: the whole run in both, intensity fitted in each."""

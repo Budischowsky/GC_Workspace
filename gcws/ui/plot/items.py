@@ -35,6 +35,7 @@ class PeaksItem(pg.GraphicsObject):
         self.drops = QPainterPath()
         self.color = QColor("#1f77b4")
         self._rect = QRectF()
+        self.pen_scale = 1.0              # line widths x this (picture export at a higher resolution)
         self.setZValue(5)
 
     def set_data(self, rt, y, peaks, color: str, selected: int = -1, transform=None, dx: float = 0.0,
@@ -91,13 +92,13 @@ class PeaksItem(pg.GraphicsObject):
         p.drawPath(self.fill_sel)
         pen = QPen(QColor(theme.PLOT["baseline"]))
         pen.setCosmetic(True)
-        pen.setWidthF(1.3)
+        pen.setWidthF(1.3 * self.pen_scale)
         p.setBrush(Qt.NoBrush)
         p.setPen(pen)
         p.drawPath(self.base)
         pen2 = QPen(theme.qcolor(theme.PLOT["drop"]))
         pen2.setCosmetic(True)
-        pen2.setWidthF(1.0)
+        pen2.setWidthF(1.0 * self.pen_scale)
         p.setPen(pen2)
         p.drawPath(self.drops)
 

@@ -571,8 +571,9 @@ class ChromPanel(QWidget):
             hi = b if hi is None else max(hi, b)
         if lo is None:
             return
-        pad = 0.06 * (hi - lo or 1.0)
-        self.vb.setYRange(lo - pad, hi + pad, padding=0)
+        span = hi - lo or 1.0
+        top = 0.16 if self.label_mode.currentIndex() != 3 else 0.06     # room for the peak labels
+        self.vb.setYRange(lo - 0.06 * span, hi + top * span, padding=0)
 
     def linked_x_changed(self):
         """The other panel moved the shared time axis: fit this panel's intensity to it."""

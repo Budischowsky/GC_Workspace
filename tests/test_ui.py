@@ -534,3 +534,32 @@ def test_agilent_style_zoom(qtbot, win, samples):
     before = c1.vb.viewRange()[0]
     win.tools.click(c1.vb, res.peaks[k + 1].apex_rt, 0.0, Qt.NoModifier, (1.0, 0.0), c1.tool_key())
     assert win.ws.selected == k + 1 and c1.vb.viewRange()[0] == pytest.approx(before)
+
+
+def test_export_chromatogram(qtbot, win, samples, tmp_path):
+    from PySide6.QtGui import QImage
+    from gcws.ui.dialogs import export_chrom as E
+    _load(qtbot, win, samples, ["07_"])
+    c1, c2 = win.chrom, win.chrom2
+    c1.vb.setXRange(12.0, 16.0, padding=0)
+    ranges = (c1.vb.viewRange(), c2.vb.viewRange())
+    size = c1.plot.getPlotItem().size()
+    for ext in (".png", ".jpg", ".tif", ".bmp", ".svg", ".pdf"):
+        out = E.export([c1, c2], tmp_path / f"c{ext}", 1000, 300, 2.0, title="07 FID / TIC")
+        assert out.is_file() and out.stat().st_size > 1000, ext
+    img = QImage(str(tmp_path / "c.png"))
+    assert (img.width(), img.height()) == (2000, 2 * (2 * 300 + E.TITLE_H))
+    assert (tmp_path / "c.svg").read_text(encoding="utf-8").lstrip().startswith("<?xml")
+    assert (tmp_path / "c.pdf").read_bytes()[:4] == b"%PDF"
+    # the view and the items are as before, and the cursor is back
+    assert (c1.vb.viewRange(), c2.vb.viewRange()) == ranges
+    assert c1.plot.getPlotItem().size() == size and c1.cursor.isVisible()
+    assert c1.peaks.pen_scale == 1.0
+    # the dialog: default name, save, clipboard
+    dlg = E.ExportChromatogramDialog(win, 1)
+    qtbot.addWidget(dlg)
+    assert "TIC" in dlg.default_name() and dlg.default_name().endswith(".png")
+    dlg.what.setCurrentIndex(2)
+    assert len(dlg.panels()) == 2
+    p = dlg.save(str(tmp_path / "dlg.png"))
+    assert p is not None and p.is_file()
