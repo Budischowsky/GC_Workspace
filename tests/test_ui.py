@@ -404,3 +404,36 @@ def test_quant_panel_istd_concentration_mode(qtbot, win, samples):
     assert ws.quant["istd_defs"][0]["concentration"] == 0.5
     win.a_undo.trigger()
     assert not ws.quant.get("istd_defs") or ws.quant["istd_defs"][0]["concentration"] != 0.5
+
+
+def test_peak_table_value_filter(qtbot, win, samples):
+    from gcws.ui.docks.peak_table import parse_number, value_test
+    assert parse_number("0,05") == 0.05 and parse_number("1,234,567") == 1234567 and parse_number("x") is None
+    assert value_test("=", 0.0123, decimals=4)(0.01234) and not value_test("=", 0.0123, decimals=4)(0.0124)
+    assert value_test("between", 5, 1)(1) and value_test("outside", 1, 5)(6) and not value_test("outside", 1, 5)(3)
+    _load(qtbot, win, samples, ["07_"])
+    t = win.table
+    n = t.model.rowCount()
+    areas = sorted(r.peak.area for r in t.model.rows)
+    median = areas[len(areas) // 2]
+    t.set_value_filter("area", ">", median)
+    assert t.proxy.rowCount() == sum(1 for a in areas if a > median)
+    assert f"of {n} peaks shown" in t.info.text()
+    t.set_value_filter("area", "≤", median)
+    assert t.proxy.rowCount() == sum(1 for a in areas if a <= median)
+    lo, hi = areas[5], areas[-5]
+    t.set_value_filter("area", "between", lo, hi)
+    inside = t.proxy.rowCount()
+    t.set_value_filter("area", "outside", lo, hi)
+    assert t.proxy.rowCount() + inside == n
+    # between needs both limits: one limit only means no filter yet
+    t.set_value_filter("area", "between", lo, None)
+    assert t.proxy.rowCount() == n
+    # concentration: peaks without a value are hidden while the filter is on
+    win.ws.recompute_quant()
+    t.reload()
+    t.set_value_filter("conc", ">", 0)
+    with_conc = sum(1 for r in t.model.rows if r.quant.get("conc") is not None and r.quant["conc"] > 0)
+    assert t.proxy.rowCount() == with_conc
+    t.clear_value_filter()
+    assert t.proxy.rowCount() == n and t.proxy.value_filter is None

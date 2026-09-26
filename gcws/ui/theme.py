@@ -202,6 +202,7 @@ QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QDateEdit, QPlainTextEdit, QText
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit:focus, QTextEdit:focus {{
     border-color: {ACCENT};
 }}
+QLineEdit[invalid="true"] {{ border-color: {BAD}; background: {BAD_SOFT}; }}
 QComboBox {{ padding-right: 22px; }}
 QComboBox::drop-down {{ border: none; width: 20px; }}
 QComboBox::down-arrow {{ image: url("{down}"); width: 10px; height: 10px; }}

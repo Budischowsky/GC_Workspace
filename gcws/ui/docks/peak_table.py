@@ -15,6 +15,46 @@ from gcws.ui.models.peak_table import COLUMN_KEYS, COLUMNS, PeakTableModel
 from gcws.ui.undo import IdentCommand
 
 
+#: columns the value filter can use, and its operators
+FILTER_COLUMNS = [("conc", "Conc."), ("corr_area", "Corr. area"), ("area", "Area"), ("area_pct", "Area %"),
+                  ("height", "Height"), ("mg_dm2", "mg/dm²"), ("score", "Score"), ("rt", "RT")]
+FILTER_OPS = ["<", "≤", "=", "≥", ">", "between", "outside"]
+
+
+def _decimals(fmt: str) -> int:
+    """Decimals a column shows (``".4f"`` -> 4), for "=" comparisons at display precision."""
+    import re
+    m = re.search(r"\.(\d+)f", fmt or "")
+    return int(m.group(1)) if m else 6
+
+
+def value_test(op: str, a: float, b: float | None = None, decimals: int = 6):
+    """``f(v) -> bool`` for one operator; "=" compares at the shown precision."""
+    tol = 0.5 * 10 ** -decimals
+    lo, hi = (min(a, b), max(a, b)) if b is not None else (a, a)
+    return {
+        "<": lambda v: v < a,
+        "≤": lambda v: v <= a + tol,
+        "=": lambda v: abs(v - a) <= tol + 1e-12 * abs(a),
+        "≥": lambda v: v >= a - tol,
+        ">": lambda v: v > a,
+        "between": lambda v: lo - tol <= v <= hi + tol,
+        "outside": lambda v: v < lo or v > hi,
+    }[op]
+
+
+def parse_number(text: str):
+    t = (text or "").strip().replace(" ", "").replace("'", "")
+    if t.count(",") == 1 and "." not in t:
+        t = t.replace(",", ".")                   # decimal comma
+    else:
+        t = t.replace(",", "")                    # thousands separators
+    try:
+        return float(t)
+    except ValueError:
+        return None
+
+
 class SortProxy(QSortFilterProxyModel):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -22,9 +62,12 @@ class SortProxy(QSortFilterProxyModel):
         self.setFilterCaseSensitivity(Qt.CaseInsensitive)
         self.setFilterKeyColumn(-1)
         self.hide_predicate = None            # callable(source_row) -> True hides the row
+        self.value_filter = None              # callable(source_row) -> False hides the row
 
     def filterAcceptsRow(self, row, parent):
         if self.hide_predicate is not None and self.hide_predicate(row):
+            return False
+        if self.value_filter is not None and not self.value_filter(row):
             return False
         return super().filterAcceptsRow(row, parent)
 
@@ -109,6 +152,7 @@ class PeakTable(QWidget):
         lay.setContentsMargins(2, 2, 2, 2)
         lay.setSpacing(2)
         lay.addLayout(top)
+        lay.addLayout(self._build_value_filter())
         lay.addWidget(self.banner)
         lay.addWidget(self.view, 1)
 
@@ -152,10 +196,107 @@ class PeakTable(QWidget):
         idn = sum(1 for r in self.model.rows if r.ident and r.ident.name and
                   not r.ident.name.lower().startswith("unknown"))
         extra = f"  •  {len(self.model.orphans)} orphaned IDs" if self.model.orphans else ""
-        hidden = n - self.proxy.rowCount() if self.proxy.hide_predicate is not None else 0
-        if hidden:
-            extra += f"  •  {hidden} blank peaks hidden"
-        self.info.setText(f"{n} peaks  •  {idn} identified{extra}")
+        hide = self.proxy.hide_predicate
+        blank_hidden = sum(1 for r in range(n) if hide(r)) if hide is not None else 0
+        if blank_hidden:
+            extra += f"  •  {blank_hidden} blank peaks hidden"
+        shown = self.proxy.rowCount()
+        head = f"{shown} of {n} peaks shown" if shown != n else f"{n} peaks"
+        self.info.setText(f"{head}  •  {idn} identified{extra}")
+
+    # -- value filter ------------------------------------------------------------
+
+    def _build_value_filter(self):
+        from PySide6.QtWidgets import QComboBox, QToolButton
+        row = QHBoxLayout()
+        row.setContentsMargins(4, 0, 0, 0)
+        row.setSpacing(4)
+        lab = QLabel("Show only peaks with")
+        lab.setObjectName("hint")
+        self.vf_column = QComboBox()
+        for key, label in FILTER_COLUMNS:
+            self.vf_column.addItem(label, key)
+        self.vf_op = QComboBox()
+        self.vf_op.addItems(FILTER_OPS)
+        self.vf_op.setToolTip("between: both limits included; outside: below the lower or above the upper")
+        self.vf_a = QLineEdit()
+        self.vf_a.setPlaceholderText("value")
+        self.vf_a.setMaximumWidth(110)
+        self.vf_and = QLabel("and")
+        self.vf_b = QLineEdit()
+        self.vf_b.setPlaceholderText("value")
+        self.vf_b.setMaximumWidth(110)
+        self.vf_clear = QToolButton()
+        self.vf_clear.setText("Clear")
+        self.vf_clear.setToolTip("Show all peaks again")
+        self.vf_clear.clicked.connect(self.clear_value_filter)
+        self.vf_state = QLabel()
+        self.vf_state.setObjectName("hint")
+        for w in (lab, self.vf_column, self.vf_op, self.vf_a, self.vf_and, self.vf_b, self.vf_clear, self.vf_state):
+            row.addWidget(w)
+        row.addStretch(1)
+        import json
+        try:
+            saved = json.loads(QSettings().value("table/value_filter", "") or "{}")
+        except (TypeError, ValueError):
+            saved = {}
+        self.vf_column.setCurrentIndex(max(0, self.vf_column.findData(saved.get("column", "conc"))))
+        self.vf_op.setCurrentText(saved.get("op", ">"))
+        self.vf_a.setText(saved.get("a", ""))
+        self.vf_b.setText(saved.get("b", ""))
+        for sig in (self.vf_column.currentIndexChanged, self.vf_op.currentIndexChanged,
+                    self.vf_a.textChanged, self.vf_b.textChanged):
+            sig.connect(lambda *_: self._apply_value_filter())
+        self._apply_value_filter(save=False)
+        return row
+
+    def clear_value_filter(self):
+        self.vf_a.clear()
+        self.vf_b.clear()
+
+    def set_value_filter(self, column: str, op: str, a, b=None) -> None:
+        """Programmatic filter, e.g. ``set_value_filter("conc", ">", 0.05)``."""
+        self.vf_column.setCurrentIndex(max(0, self.vf_column.findData(column)))
+        self.vf_op.setCurrentText(op)
+        self.vf_a.setText("" if a is None else str(a))
+        self.vf_b.setText("" if b is None else str(b))
+        self._apply_value_filter()
+
+    def _apply_value_filter(self, save: bool = True):
+        import json
+        key, op = self.vf_column.currentData(), self.vf_op.currentText()
+        two = op in ("between", "outside")
+        self.vf_and.setVisible(two)
+        self.vf_b.setVisible(two)
+        a, b = parse_number(self.vf_a.text()), parse_number(self.vf_b.text())
+        active = a is not None and (b is not None or not two)
+        for e, v in ((self.vf_a, a), (self.vf_b, b)):
+            e.setProperty("invalid", bool(e.text().strip()) and v is None)
+            e.setToolTip("not a number" if e.property("invalid") else "")
+            e.style().unpolish(e)
+            e.style().polish(e)
+        if active:
+            col = COLUMNS[COLUMN_KEYS.index(key)]
+            test = value_test(op, a, b if two else None, _decimals(col.fmt))
+
+            def keep(row, col=col, test=test):
+                v = col.get(self.model.rows[row], self.ws)
+                if v is None or v == "":
+                    return False                  # no value: cannot satisfy the condition
+                try:
+                    return test(float(v))
+                except (TypeError, ValueError):
+                    return False
+            self.proxy.value_filter = keep
+        else:
+            self.proxy.value_filter = None
+        self.vf_clear.setEnabled(active)
+        self.vf_state.setText("(peaks without a value are hidden)" if active else "")
+        self.proxy.invalidateFilter()
+        self._update_info()
+        if save:
+            QSettings().setValue("table/value_filter", json.dumps(
+                {"column": key, "op": op, "a": self.vf_a.text(), "b": self.vf_b.text()}))
 
     def _row_changed(self, current, previous):
         if self._syncing or not current.isValid():
