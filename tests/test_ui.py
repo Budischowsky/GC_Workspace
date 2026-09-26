@@ -797,3 +797,32 @@ def test_double_determination_cells_editable(qtbot, win, samples):
     assert page.rows[k]["report"] is True
     page.reset_all()
     assert not page.group().get("edits")
+
+
+def test_double_determination_mirror_scales_to_view(qtbot, win, samples):
+    import numpy as np
+    from PySide6.QtCore import Qt
+    _load(qtbot, win, samples, ["07_", "11_"])
+    ws = win.ws
+    a = next(s.id for s in ws.states() if s.name.startswith("07_"))
+    b = next(s.id for s in ws.states() if s.name.startswith("11_"))
+    win.run_tabs.pairRequested.emit(a, b)
+    page = win.replicates.duplicate
+    assert len(page._traces) == 2
+    # the solvent front is not drawn and B is drawn downwards in its own units
+    (rt_a, y_a), (rt_b, y_b) = page._traces
+    assert rt_a[0] > float(ws.runs[a].run.signal("FID").rt[0]) and y_b.max() <= 1e-9 < y_a.max()
+    # a substance picked in the table: the intensity fits the peaks in the ±0.4 min window
+    k = min((i for i, r in enumerate(page.rows) if r.get("source1") and r.get("source2")),
+            key=lambda i: page.rows[i].get("mean") or 1e9)
+    r = next(i for i in range(page.table.rowCount()) if page.table.item(i, 0).data(Qt.UserRole) == k)
+    page.table.selectRow(r)
+    qtbot.wait(20)
+    (x0, x1), (lo, hi) = page.mirror.getViewBox().viewRange()
+    rt = page.rows[k]["rt"]
+    assert x0 < rt < x1 and x1 - x0 < 1.0
+    local = max(float(np.abs(y[(t >= x0) & (t <= x1)]).max()) for t, y in page._traces)
+    assert hi == pytest.approx(1.12 * local, rel=1e-6) and lo == pytest.approx(-hi)
+    assert hi < 0.5 * max(float(y_a.max()), float(-y_b.min()))     # zoomed in, not the whole run
+    page.full_view()
+    assert page.mirror.getViewBox().viewRange()[0][0] <= rt_a[0] + 0.05

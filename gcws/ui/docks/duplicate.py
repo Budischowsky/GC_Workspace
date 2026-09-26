@@ -20,7 +20,7 @@ import uuid
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, Signal as QtSignal
+from PySide6.QtCore import QTimer, Qt, Signal as QtSignal
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame,
                                QHBoxLayout, QHeaderView, QLabel, QPushButton, QSplitter, QTableWidget,
@@ -31,11 +31,23 @@ from gcws.quant import duplicate_view as DV
 from gcws.ui import theme
 from gcws.ui.icons import color_chip
 
+#: SNIP window (min) of the baseline removed from the mirror plot's traces: wider than any peak
+BASELINE_WINDOW = 1.0
+#: wider views (min) of the mirror plot scale to the substances without the internal standards
+WIDE_VIEW = 3.0
+WIDE_PERCENTILE = 90
 ICON = {"ok": "✔", "warn": "⚠", "bad": "✖", "info": "ℹ", "neutral": "·"}
 #: table column -> edited field
 C_ICON, C_REPORT, C_RT, C_NAME, C_CAS, C_A1, C_A2, C_C1, C_C2, C_MEAN, C_DIFF, C_VERDICT, C_NOTES, C_COMMENT = range(14)
 FIELD_OF = {C_REPORT: "report", C_NAME: "name", C_CAS: "cas", C_A1: "a1", C_A2: "a2", C_C1: "c1", C_C2: "c2",
             C_MEAN: "mean", C_COMMENT: "comment"}
+
+
+class _AbsAxis(pg.AxisItem):
+    """Intensity axis of the mirror plot: B is drawn downwards but has positive values too."""
+
+    def tickStrings(self, values, scale, spacing):
+        return super().tickStrings([abs(v) for v in values], scale, spacing)
 
 
 class _Card(QFrame):
@@ -141,12 +153,24 @@ class DuplicatePage(QWidget):
         self.table.itemSelectionChanged.connect(self._row_selected)
         self.table.cellDoubleClicked.connect(self._open_row)
 
-        self.mirror = pg.PlotWidget()
+        self.mirror = pg.PlotWidget(axisItems={"left": _AbsAxis("left")})
         self.mirror.setMenuEnabled(False)
         self.mirror.showGrid(x=True, y=True, alpha=theme.PLOT["grid_alpha"])
         self.mirror.setLabel("bottom", "RT (FID)", units="min")
-        self.mirror.setLabel("left", "A  ↑   normalised   ↓  B")
-        self.mirror.getAxis("left").setWidth(52)
+        self.mirror.setLabel("left", "A  ↑   FID   ↓  B")
+        self.mirror.getAxis("left").setWidth(62)
+        self.mirror.getAxis("bottom").enableAutoSIPrefix(False)
+        self._traces, self._marks = [], []
+        vb = self.mirror.getViewBox()
+        vb.setMouseEnabled(x=True, y=False)          # wheel / drag: time only, the intensity follows
+        self._fit_timer = QTimer(self)
+        self._fit_timer.setSingleShot(True)
+        self._fit_timer.setInterval(0)
+        self._fit_timer.timeout.connect(self._fit_y)
+        vb.sigXRangeChanged.connect(lambda *_: self._fit_timer.start())
+        self.mirror.scene().sigMouseClicked.connect(lambda ev: self.full_view() if ev.double() else None)
+        self.mirror.setToolTip("A up, B down, in FID signal units. Wheel or drag: time; double-click: "
+                               "whole chromatogram")
         self.cursor = pg.InfiniteLine(angle=90, movable=False,
                                       pen=pg.mkPen(theme.ACCENT, width=1, style=Qt.DashLine))
         split = QSplitter(Qt.Vertical)
@@ -572,22 +596,35 @@ class DuplicatePage(QWidget):
 
     # -- mirror plot -----------------------------------------------------------------------
 
+    def _t0(self, st, sig) -> float:
+        """Where the mirror plot starts: the integration start, else the solvent end."""
+        from gcws.integration.autoparams import _integration_start
+        t = _integration_start(sig.rt, self.ws.method_for(st, FID))
+        if t is None:
+            from gcws.quant.nias_bridge import make_settings
+            t = float(getattr(make_settings(self.ws.quant.get("settings")), "solvent_end", 0.0) or 0.0)
+        return min(max(t, float(sig.rt[0])), float(sig.rt[-1]))
+
     def _trace(self, rid):
+        """``(rt, signal above baseline, colour)`` of the FID from the integration start on.
+
+        Both determinations keep their own signal units (no normalisation), so a peak that is
+        twice as large in A also looks twice as large. The solvent front is left out and the
+        slow baseline (solvent tail, column bleed) is removed, so peaks stand on zero."""
         st = self.ws.runs.get(rid)
         sig = st.run.signal(FID) if st is not None else None
-        if sig is None:
+        if sig is None or len(sig.rt) < 2:
             return None
-        from gcws.integration.autoparams import _integration_start
-        t0 = _integration_start(sig.rt, self.ws.method_for(st, FID)) or float(sig.rt[0])
-        sel = sig.y[sig.rt >= t0]
-        if sel.size == 0:
+        keep = sig.rt >= self._t0(st, sig)
+        if keep.sum() < 2:
             return None
-        base = float(np.percentile(sel, 1))
-        top = float(sel.max()) - base or 1.0
-        return sig.rt, (sig.y - base) / top * 100.0, st.color
+        from gcws.signal.envelope import envelope
+        rt, y = sig.rt[keep], np.asarray(sig.y[keep], float)
+        return rt, np.maximum(y - envelope(rt, y, BASELINE_WINDOW), 0.0), st.color
 
     def _draw_mirror(self):
         self.mirror.clear()
+        self._traces, self._marks = [], []
         self.mirror.addItem(self.cursor, ignoreBounds=True)
         traces = [self._trace(m) for m in self.members[:2]]
         for sign, tr in zip((1, -1), traces):
@@ -595,24 +632,70 @@ class DuplicatePage(QWidget):
                 continue
             rt, y, color = tr
             self.mirror.plot(rt, sign * y, pen=pg.mkPen(color, width=1.2))
+            self._traces.append((rt, sign * y))
         self.mirror.addItem(pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen(theme.BORDER_STRONG)), ignoreBounds=True)
-        spots = []
+        spots, self._marks = [], []
+        istd = self._istd_times()
         for row, v in zip(self.rows, self.verdicts):
             color = theme.status_color(v.level)
-            pts = []
-            for sign, key, tr in ((1, "source1", traces[0]), (-1, "source2", traces[1] if len(traces) > 1 else None)):
+            for sign, key, tr in ((1, "source1", traces[0] if traces else None),
+                                  (-1, "source2", traces[1] if len(traces) > 1 else None)):
                 src = row.get(key)
-                if src is None or tr is None:
+                if src is None or tr is None or not tr[0][0] <= src["rt"] <= tr[0][-1]:
                     continue
-                y = float(np.interp(src["rt"], tr[0], tr[1])) + 4.0
-                pts.append((src["rt"], sign * min(y, 104.0)))
-            for x, y in pts:
-                spots.append({"pos": (x, y), "brush": pg.mkBrush(color), "pen": pg.mkPen(None), "size": 7})
-            if len(pts) == 2:
-                self.mirror.plot([p[0] for p in pts], [p[1] for p in pts], pen=pg.mkPen(color, width=0.8))
+                y = float(np.interp(src["rt"], tr[0], tr[1]))       # on the apex of the peak
+                is_istd = any(abs(src["rt"] - t) < 0.02 for t in istd)
+                self._marks.append((src["rt"], abs(y), is_istd))
+                spots.append({"pos": (src["rt"], sign * y), "brush": pg.mkBrush(color),
+                              "pen": pg.mkPen(theme.SURFACE, width=0.8), "size": 8,
+                              "data": row.get("name") or ""})
         if spots:
-            self.mirror.addItem(pg.ScatterPlotItem(spots=spots))
-        self.mirror.setYRange(-110, 110, padding=0)
+            dots = pg.ScatterPlotItem(spots=spots, hoverable=True, tip=lambda x, y, data: f"{data}  RT {x:.3f}")
+            self.mirror.addItem(dots, ignoreBounds=True)
+        self.full_view()
+
+    def full_view(self):
+        """The whole integrated part of both determinations."""
+        if not self._traces:
+            return
+        x0 = min(float(rt[0]) for rt, _ in self._traces)
+        x1 = max(float(rt[-1]) for rt, _ in self._traces)
+        self.mirror.setXRange(x0, x1, padding=0.01)
+        self._fit_y()
+
+    def _istd_times(self) -> list[float]:
+        """FID apexes of the internal standards (from the quantification) in A and B."""
+        out = []
+        for rid in self.members[:2]:
+            res = self.ws.result(rid, FID)
+            if res is None:
+                continue
+            for i, q in self.ws.quant_rows(rid, FID).items():
+                if q.get("istd") and 0 <= i < len(res.peaks):
+                    out.append(res.peaks[i].apex_rt)
+        return out
+
+    def _fit_y(self):
+        """Symmetric intensity range from the largest peak inside the visible time window.
+
+        Over a wide window (more than ``WIDE_VIEW`` min) a few very large peaks (internal
+        standards, main components) would flatten everything else: the range then follows the
+        ``WIDE_PERCENTILE`` of the substance peaks without the internal standards, and the
+        largest peaks are clipped. Zooming in (a picked row) always shows the full peak."""
+        if not self._traces:
+            return
+        (x0, x1), _ = self.mirror.getViewBox().viewRange()
+        top = 0.0
+        if x1 - x0 > WIDE_VIEW:
+            heights = [h for t, h, is_istd in self._marks if x0 <= t <= x1 and not is_istd]
+            top = float(np.percentile(heights, WIDE_PERCENTILE)) if len(heights) >= 5 else 0.0
+        if not top:
+            for rt, y in self._traces:
+                m = (rt >= x0) & (rt <= x1)
+                if m.any():
+                    top = max(top, float(np.max(np.abs(y[m]))))
+        top = top or 1.0
+        self.mirror.setYRange(-1.12 * top, 1.12 * top, padding=0)
 
     # -- navigation ----------------------------------------------------------------------------
 
