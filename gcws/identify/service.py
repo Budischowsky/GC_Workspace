@@ -65,6 +65,57 @@ def build_items(ws, run_ids: list[str], key: str, spectrum_mode: str,
     return items, protected
 
 
+#: largest distance (min) between a TIC apex + FID-MS delay and the FID apex that takes its name
+TRANSFER_TOL = 0.03
+
+
+def transfer_names(ws, run_id: str, changes: list, fid_key: str = "FID", tol: float = TRANSFER_TOL):
+    """Names found on TIC peaks for the FID peak at the same time.
+
+    ``changes`` are ``(TIC apex, Identification)``; each goes to the FID peak whose apex lies
+    within ``tol`` of TIC apex + the run's FID-MS delay. FID peaks named by hand or bound as
+    ISTD keep their identification; when two TIC peaks meet one FID peak, the better score
+    wins. Returns ``(FID changes, counts)`` with counts of copied / no FID peak / protected /
+    co-eluting names.
+    """
+    import copy
+    counts = {"copied": 0, "unmatched": 0, "protected": 0, "coeluting": 0}
+    st = ws.runs.get(run_id)
+    res = ws.result(run_id, fid_key) if st is not None else None
+    if st is None or res is None or not res.peaks:
+        return [], counts
+    idents, _ = st.ident_set(fid_key).bind(res.peaks)
+    apexes = [p.apex_rt for p in res.peaks]
+    best: dict[int, Identification] = {}
+    for t, ident in changes:
+        if ident is None or not ident.name:
+            continue
+        target = t + st.delay_value
+        j = min(range(len(apexes)), key=lambda k: abs(apexes[k] - target))
+        if abs(apexes[j] - target) > tol:
+            counts["unmatched"] += 1
+            continue
+        prev = idents.get(j)
+        if prev is not None and (prev.manual or prev.istd):
+            counts["protected"] += 1
+            continue
+        if j in best:
+            counts["coeluting"] += 1
+            if (ident.score or 0) <= (best[j].score or 0):
+                continue
+        best[j] = ident
+    out = []
+    for j, ident in sorted(best.items()):
+        new = copy.deepcopy(ident)
+        new.apex_rt = res.peaks[j].apex_rt
+        new.source = (ident.source + " via TIC").strip()
+        prev = idents.get(j)
+        new.istd = prev.istd if prev is not None else ""
+        out.append((new.apex_rt, new))
+    counts["copied"] = len(out)
+    return out, counts
+
+
 def identification_from_hits(item: SearchItem, hits: list[dict], chosen: Optional[int],
                              method, prev: Optional[Identification] = None) -> Identification:
     """AutoLib rules: accepted above the quality limit, otherwise class or unknown."""

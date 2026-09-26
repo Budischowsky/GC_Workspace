@@ -36,8 +36,25 @@ class SearchStartDialog(QDialog):
         self.rescan_limit.setValue(80)
         self.review = QCheckBox("Review hits before applying (compound table)")
         self.review.setChecked(True)
+        from PySide6.QtCore import QSettings
+        has_ms = any(s.run.ms is not None for s in ws.states())
+        has_fid = any(s.run.fid is not None for s in ws.states())
+        self.target_tic = QRadioButton("TIC peaks (the qualitative trace)")
+        self.target_fid = QRadioButton("FID peaks (each spectrum from the MS at the FID peak's delay-corrected time)")
+        self.target_tic.setEnabled(has_ms)
+        self.target_fid.setEnabled(has_fid and has_ms)
+        want = QSettings().value("search/target", "TIC")
+        (self.target_fid if (want == "FID" and has_fid) or not has_ms else self.target_tic).setChecked(True)
+        self.transfer = QCheckBox("Give the names also to the FID peaks at the same time (for the report)")
+        self.transfer.setChecked(QSettings().value("search/transfer", True, type=bool))
+        self.transfer.setEnabled(has_fid)
+        self.target_tic.toggled.connect(lambda on: self.transfer.setVisible(on))
+        self.transfer.setVisible(self.target_tic.isChecked())
         f = QFormLayout()
         f.addRow("Search method", self.method)
+        f.addRow("Peaks", self.target_tic)
+        f.addRow("", self.transfer)
+        f.addRow("", self.target_fid)
         f.addRow("Scope", self.active_only)
         f.addRow("", self.all_runs)
         f.addRow("Spectrum", self.mode)
@@ -62,7 +79,13 @@ class SearchStartDialog(QDialog):
         lay.addWidget(bb)
 
     def values(self) -> dict:
+        from PySide6.QtCore import QSettings
+        target = "TIC" if self.target_tic.isChecked() else "FID"
+        QSettings().setValue("search/target", target)
+        QSettings().setValue("search/transfer", self.transfer.isChecked())
         return {"method": self.store.get(self.method.currentText()),
+                "target": target,
+                "transfer": target == "TIC" and self.transfer.isChecked() and self.transfer.isEnabled(),
                 "all": self.all_runs.isChecked(),
                 "mode": self.mode.currentData(),
                 "skip": self.skip.isChecked(),

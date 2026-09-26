@@ -621,7 +621,8 @@ class MainWindow(QMainWindow):
             return
         v = dlg.values()
         ids = list(self.ws.order) if v["all"] else [self.ws.active_id]
-        items, protected = build_items(self.ws, ids, self.ws.signal_key, v["mode"], v["rescan"], v["skip"])
+        v["key"] = self.search_key(v.get("target", "TIC"))
+        items, protected = build_items(self.ws, ids, v["key"], v["mode"], v["rescan"], v["skip"])
         if not items:
             QMessageBox.information(self, "Library search", "No peaks with MS data to search.")
             return
@@ -637,6 +638,11 @@ class MainWindow(QMainWindow):
         self._search.failed.connect(lambda e: QMessageBox.warning(self, "EI Atlas", e))
         self._search.finished.connect(lambda cancelled: self._search_done(items, v, protected, cancelled))
         self._search.start()
+
+    def search_key(self, target: str) -> str:
+        """The TIC or FID key to search: the one a chromatogram shows (with its blank switch)."""
+        from gcws.core.keys import base_key
+        return next((self.ws.panel_key(i) for i in (0, 1) if base_key(self.ws.panel_key(i)) == target), target)
 
     def _search_done(self, items, v, protected, cancelled):
         from gcws.identify.service import identification_from_hits
@@ -666,14 +672,32 @@ class MainWindow(QMainWindow):
             prev = st.ident_set(it.key).for_peak(type("P", (), {"apex_rt": it.apex_rt, "width50": 0})())
             ident = identification_from_hits(it, it.job.hits, it.job.chosen, method, prev)
             by_run.setdefault((it.run_id, it.key), []).append((it.apex_rt, ident))
+        from gcws.core.keys import is_fid
+        from gcws.identify.service import transfer_names
+        copied = {"copied": 0, "unmatched": 0, "protected": 0, "coeluting": 0}
+        fid_key = self.search_key("FID")
         for (rid, key), changes in by_run.items():
             st = self.ws.runs[rid]
-            st.undo.push(IdentCommand(self.ws, rid, key, changes,
-                                      f"library search ({method.name}): {len(changes)} peaks"))
+            text = f"library search ({method.name}): {len(changes)} peaks"
+            fid_changes = []
+            if v.get("transfer") and not is_fid(key) and st.run.fid is not None:
+                fid_changes, counts = transfer_names(self.ws, rid, changes, fid_key)
+                for k in copied:
+                    copied[k] += counts[k]
+            st.undo.beginMacro(text + (f", {len(fid_changes)} names copied to FID" if fid_changes else ""))
+            st.undo.push(IdentCommand(self.ws, rid, key, changes, text))
+            if fid_changes:
+                st.undo.push(IdentCommand(self.ws, rid, fid_key, fid_changes,
+                                          f"{len(fid_changes)} names from the TIC search copied to FID peaks"))
+            st.undo.endMacro()
         n = sum(len(c) for c in by_run.values())
-        self.statusBar().showMessage(f"Library search: {n} peaks identified"
-                                     + (f", {protected} protected" if protected else "")
-                                     + (" (cancelled)" if cancelled else ""), 10000)
+        msg = f"Library search: {n} peaks identified" + (f", {protected} protected" if protected else "")
+        if v.get("transfer"):
+            msg += f"; {copied['copied']} names copied to FID peaks"
+            if copied["unmatched"]:
+                msg += f" ({copied['unmatched']} TIC peaks without an FID peak"
+                msg += f", {copied['protected']} FID names kept)" if copied["protected"] else ")"
+        self.statusBar().showMessage(msg + (" (cancelled)" if cancelled else ""), 12000)
 
     def edit_search_methods(self):
         from gcws.ui.dialogs.search_method import SearchMethodDialog

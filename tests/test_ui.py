@@ -563,3 +563,49 @@ def test_export_chromatogram(qtbot, win, samples, tmp_path):
     assert len(dlg.panels()) == 2
     p = dlg.save(str(tmp_path / "dlg.png"))
     assert p is not None and p.is_file()
+
+
+def test_library_search_on_tic_copies_names_to_fid(qtbot, win, samples):
+    from types import SimpleNamespace
+    from gcws.core.ident import Identification
+    from gcws.identify.service import build_items, transfer_names
+    _load(qtbot, win, samples, ["07_"])
+    ws = win.ws
+    st = ws.active
+    # the start dialog offers TIC (default) or FID peaks
+    from gcws.ui.dialogs.identify import SearchStartDialog
+    dlg = SearchStartDialog(ws, win)
+    qtbot.addWidget(dlg)
+    assert dlg.target_tic.isChecked() and dlg.transfer.isChecked()
+    v = dlg.values()
+    assert v["target"] == "TIC" and v["transfer"] and win.search_key("TIC") == "TIC"
+    # a TIC search (EI Atlas replaced by fixed hits on the five largest TIC peaks)
+    items, _ = build_items(ws, [st.id], "TIC", "average_bg")
+    items = sorted(items, key=lambda it: -ws.result(st.id, "TIC").peaks[it.peak_index].area)[:5]
+    for n, it in enumerate(items):
+        it.job.done, it.job.hits, it.job.chosen = True, [{"name": f"Substance {n}", "cas": "", "score": 95}], 0
+    fid = ws.result(st.id, "FID")
+    # the analyst named one FID peak by hand: it keeps its name
+    t0 = items[0].apex_rt + st.delay_value
+    j0 = min(range(len(fid.peaks)), key=lambda k: abs(fid.peaks[k].apex_rt - t0))
+    st.ident_set("FID").set(Identification(apex_rt=fid.peaks[j0].apex_rt, name="Hand made", manual=True))
+    method = SimpleNamespace(name="test", min_score=70, hydrocarbons=False)
+    win._search_done(items, {"method": method, "review": False, "transfer": True, "target": "TIC"}, 0, False)
+    tic_names = {i.name for i in st.ident_set("TIC").items}
+    assert {f"Substance {n}" for n in range(5)} <= tic_names
+    fid_idents, _ = st.ident_set("FID").bind(fid.peaks)
+    assert fid_idents[j0].name == "Hand made"
+    copied = [i for i in st.ident_set("FID").items if i.name.startswith("Substance")]
+    assert len(copied) >= 3 and all("via TIC" in i.source for i in copied)
+    for i in copied:                              # each sits on an FID peak at TIC apex + delay
+        tic_rt = next(t.apex_rt for t in st.ident_set("TIC").items if t.name == i.name)
+        assert abs(i.apex_rt - (tic_rt + st.delay_value)) < 0.03
+    # one undo step takes back both
+    win.a_undo.trigger()
+    assert not any(i.name.startswith("Substance") for i in st.ident_set("FID").items + st.ident_set("TIC").items)
+    # co-elution: two TIC names on one FID peak -> the better score wins
+    p = fid.peaks[j0 + 1]
+    t = p.apex_rt - st.delay_value
+    out, counts = transfer_names(ws, st.id, [(t, Identification(apex_rt=t, name="A", score=80)),
+                                             (t + 0.001, Identification(apex_rt=t + 0.001, name="B", score=90))])
+    assert [i.name for _rt, i in out] == ["B"] and counts["coeluting"] == 1
