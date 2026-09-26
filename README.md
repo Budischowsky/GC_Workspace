@@ -44,11 +44,23 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
      time.
    - Zoom and pan are synced (as in Agilent Enhanced Data Analysis):
      - left-drag draws a box and zooms into it (time and intensity);
-     - **left-drag on the RT axis or the intensity axis moves the chromatogram left / right**, whatever tool is
-       selected;
-     - double-click shows the whole run in both panels;
-     - the wheel zooms the time around the cursor, and on an axis it scales that axis;
-     - picking a peak in the peak table zooms both panels to it.
+     - **left-drag on the RT axis pans time; left-drag on the intensity axis pans vertically**, in every tool;
+     - right-drag or wheel on the intensity axis scales both panels by the same relative amount, with the
+       bottom fixed. Drag up or wheel up makes the peaks taller;
+     - intensity set by a box zoom, pan or intensity-axis gesture stays exactly as set on later time zooms,
+       run selection and overlay changes;
+     - double-click in the plot shows the whole run and fits both intensities; double-click on the intensity
+       axis fits both intensities while keeping the time window;
+     - the wheel over the plot zooms time around the cursor; the RT axis scales time;
+     - picking a peak in the table zooms both panels to it and fits their intensities again;
+     - signal, Normalize and Stack changes refit that panel to its new units.
+   - Tight plot margins and headroom based on visible peak labels give the traces more space.
+   - **Cut solvent** in either panel switches the same setting in both. *Integration > Solvent cut...* sets
+     the end time (default **5.5 min in FID time**); this is also the NIAS **Solvent end** setting. MS traces
+     use that time minus each run's FID–MS delay. Earlier data are excluded from the curves, integration,
+     scaling and whole-run deconvolution, and therefore from peak-based library searches and exports.
+     Exported chromatogram pictures show the cut curves. Changes are audited and undoable; the project and
+     processing method save the setting, and a new session remembers the last on/off choice.
    - Integration runs automatically on load, with the method of each signal. The *Integration method* panel
      holds the parameters (auto or fixed), the timed events and the list of manual events. F5 re-integrates the
      signals of both panels.
@@ -58,6 +70,10 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
      The operators are <, ≤, =, ≥, >, *between* and *outside*. Copy and export follow the filter.
    - If a run cannot be blank-subtracted (the blank itself, or no Blank assigned), the table shows its plain
      trace, and a note says why.
+   - Mark rows with Ctrl/Shift and press **Delete**, or choose **Delete peak(s)** in the toolbar or row menu.
+     All marked peaks are deleted in one audited undo step (**Ctrl+Z** restores them), and the deletion
+     survives re-integration. A reason is requested only when enabled in Preferences. Delete while editing
+     a cell edits its text; it does not delete peaks.
 4. **Manual tools** in the toolbar work in both chromatograms, each on the signal of the panel you use them in:
    - select/zoom (Z), pan (H)
    - draw baseline (B), split with a drop line (S), delete (D), add peak (A)
@@ -75,6 +91,11 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
      - size per chromatogram, resolution 1×–3×, an optional title line, a preview, and copy to the clipboard.
 5. **Library search** (Ctrl+F) searches the integrated peaks in your libraries and fills Name, CAS and Score.
    You can review the hits first.
+   - **Search methods...**: tick libraries and drag them into order, or use **Up / Down / To top / To bottom**.
+     In **Sequential** mode, only ticked libraries count; the numbered order is searched top to bottom until
+     a hit reaches the stop score (0–99). **Combined** mode searches all ticked libraries for the best hits
+     overall. Saving shows a confirmation. The search start dialog shows the order and has **Edit...** to
+     change it before searching. Processing methods retain the order and mode.
    - **Libraries** (*Identify > Libraries...*): *Add library file...* (an `.msp` or Wiley/Shimadzu `.lib`) or
      *Add folder...* (an Agilent `.L` folder, a NIST library folder such as mainlib, replib or a user library, or
      a folder holding several libraries: all of them are added). Libraries can be switched off or removed; the
@@ -209,7 +230,7 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
 
 *Method > Save current settings as Method...* stores all processing settings under a name
 (`data/processing_methods`): integration methods (FID and MS), quantification (mode, unit, ISTD table, NIAS
-parameters), blank subtraction, deconvolution, retention index, migration conditions, library search method
+parameters and solvent cut), blank subtraction, deconvolution, retention index, migration conditions, library search method
 and peak type, own-library options, report options and the peak table's columns and value filter.
 *Method > Load Method...* lists the saved methods with a summary; tick which parts to apply. Loading is one
 undo step; the integration methods also become the default for runs loaded later. Methods can be exported

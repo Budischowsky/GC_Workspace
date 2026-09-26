@@ -1382,6 +1382,8 @@ class MainWindow(QMainWindow):
                   "  manual intensity stays on later time zooms; double-click fits it again",
                   "  Shift disables snapping of integration tools",
                   "  Delete in Peaks / substances   delete marked peaks (one undo step)",
+                  "  Cut solvent in either panel    exclude the solvent in both panels",
+                  "  Integration > Solvent cut...   edit the shared NIAS solvent end (5.5 min FID by default)",
                   "  a peak picked in the table zooms both chromatograms to it",
                   "",
                   "Panels: double-click a title to maximize the panel, again to restore the layout.",
