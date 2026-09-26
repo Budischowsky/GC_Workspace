@@ -122,3 +122,40 @@ def test_library_manager_dialog(qtbot, data):
     dlg.table.selectRow(0)
     dlg.remove()
     assert store.load() == []
+
+
+@pytest.fixture
+def settings(tmp_path):
+    from PySide6.QtCore import QCoreApplication, QSettings
+    QCoreApplication.setOrganizationName("GCWorkspaceTest")
+    QCoreApplication.setApplicationName("pytest-libsearch")
+    QSettings.setDefaultFormat(QSettings.IniFormat)
+    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path / "ini"))
+    QSettings().clear()
+    yield
+    QSettings().clear()
+
+
+def test_own_library_search(qtbot, data, settings):
+    from gcws.libsearch import store
+    from gcws.ui.dialogs import own_search as OS
+    from gcws.ui.dialogs.identify import AtlasHitsDialog
+    libs = store.add([], store.discover(_msp(data / "Own.msp")))
+    libs = store.add(libs, store.discover(_msp(data / "Other.msp", [("Toluene-d8", [(98, 999), (100, 600)])])))
+    store.save(libs)
+    assert OS.libraries() == ["Own", "Other"]
+    dlg = OS.OwnSearchOptionsDialog()
+    qtbot.addWidget(dlg)
+    dlg.library.setCurrentText("Own")
+    dlg.top_n.setValue(2)
+    dlg.min_score.setValue(30)
+    dlg._ok()
+    opts = OS.load_options()
+    assert opts["library"] == "Own" and opts["top_n"] == 2 and opts["min_score"] == 30 and opts["dedupe"] is True
+    m = OS.method_from_options(opts)
+    assert m.enabled_libraries() == ["Own"] and m.algorithm == "similarity"
+    hits = AtlasHitsDialog([(91, 1000), (92, 590), (65, 115)], "q", m)
+    qtbot.addWidget(hits)
+    qtbot.waitUntil(lambda: hits.table.rowCount() > 0, timeout=20000)
+    assert hits.hits_data[0]["name"] == "Toluene" and all(h["library"] == "Own" for h in hits.hits_data)
+    assert len(hits.hits_data) <= 2

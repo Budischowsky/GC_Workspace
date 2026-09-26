@@ -245,6 +245,7 @@ class MainWindow(QMainWindow):
         m.addAction(self.a_search)
         m.addAction(self.a_search_method)
         m.addAction(self.a_libraries)
+        m.addAction("Own library search options...", self.own_search_options)
         m.addSeparator()
         m.addAction(self.spectrumSearchAtlasAction)
         m.addAction(self.spectrumSearchNistAction)
@@ -359,6 +360,7 @@ class MainWindow(QMainWindow):
                     plot.cursorMoved.connect(other.set_cursor)
         self.spectrum.nistRequested.connect(self.nist_search)
         self.spectrum.atlasRequested.connect(self.atlas_hits)
+        self.spectrum.ownSearchRequested.connect(self.own_library_search)
         self.spectrum.registerRequested.connect(self.register_unknown)
         self.spectrum.investigateRequested.connect(self.atlas_research)
         self.spectrum.ionClicked.connect(self.show_ion_eic)
@@ -782,12 +784,28 @@ class MainWindow(QMainWindow):
             d.show()
         d.raise_()
 
-    def atlas_hits(self, points, name):
+    def own_library_search(self, points, name):
+        """The spectrum on display, searched in the one library chosen for "Own library"."""
+        from gcws.ui.dialogs import own_search as OS
+        opts = OS.load_options()
+        if opts["library"] not in OS.libraries():
+            dlg = OS.OwnSearchOptionsDialog(self)
+            if dlg.exec() != dlg.Accepted or not dlg.values()["library"]:
+                return
+            opts = OS.load_options()
+        self.atlas_hits(points, name, OS.method_from_options(opts))
+
+    def own_search_options(self):
+        from gcws.ui.dialogs.own_search import OwnSearchOptionsDialog
+        OwnSearchOptionsDialog(self).exec()
+
+    def atlas_hits(self, points, name, method=None):
         from gcws.identify.service import search_methods
         from gcws.ui.dialogs.identify import AtlasHitsDialog
         st, peak = self.spectrum.target_peak()
-        store = search_methods()
-        method = store.for_gc_method(st.run.meta.method if st and st.run.meta else "")
+        if method is None:
+            store = search_methods()
+            method = store.for_gc_method(st.run.meta.method if st and st.run.meta else "")
 
         def assign(hits, index, st=st, peak=peak):
             from gcws.identify.service import SearchItem, identification_from_hits

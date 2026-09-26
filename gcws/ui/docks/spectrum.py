@@ -17,7 +17,7 @@ import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal as QtSignal
 from PySide6.QtGui import QColor, QGuiApplication
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
-                               QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QToolBar,
+                               QMenu, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QToolBar,
                                QToolButton, QVBoxLayout, QWidget)
 
 from gcws.core.keys import is_fid
@@ -106,6 +106,7 @@ class SpectrumDock(QWidget):
     regionsChanged = QtSignal(list)           # [(t0, t1, colour)] on the MS time axis
     nistRequested = QtSignal(list, str)
     atlasRequested = QtSignal(list, str)
+    ownSearchRequested = QtSignal(list, str)     # search in the one library chosen on the Own library button
     registerRequested = QtSignal()
     investigateRequested = QtSignal()
     libraryRequested = QtSignal()                # add this spectrum to a library (Edit library)
@@ -129,6 +130,15 @@ class SpectrumDock(QWidget):
         b_atlas.setText("Library hits")
         b_atlas.setToolTip("Hit list of this spectrum in your libraries (default search method)")
         b_atlas.clicked.connect(lambda: self._emit(self.atlasRequested))
+        self.b_own = QToolButton()
+        self.b_own.setText("Own library")
+        self.b_own.setToolTip("Search this spectrum in one of your libraries; the arrow chooses the library and "
+                              "the search options")
+        self.b_own.setPopupMode(QToolButton.MenuButtonPopup)
+        self.own_menu = QMenu(self.b_own)
+        self.own_menu.aboutToShow.connect(self._fill_own_menu)
+        self.b_own.setMenu(self.own_menu)
+        self.b_own.clicked.connect(lambda: self._emit(self.ownSearchRequested))
         b_nist = QToolButton()
         b_nist.setText("NIST")
         b_nist.setToolTip("Send this spectrum to NIST MS Search")
@@ -154,7 +164,7 @@ class SpectrumDock(QWidget):
         self.mode.setMinimumContentsLength(12)
         actions = QToolBar()                    # overflows into a » menu when the panel is narrow
         actions.setIconSize(actions.iconSize() * 0.8)
-        for b in (b_atlas, b_res, b_nist, b_copy, b_save, b_reg, b_lib):
+        for b in (b_atlas, self.b_own, b_res, b_nist, b_copy, b_save, b_reg, b_lib):
             actions.addWidget(b)
         self.minus_blank = QCheckBox("− blank")
         self.minus_blank.setToolTip("Subtract the assigned blank's spectrum at the same (aligned) time; "
@@ -691,6 +701,21 @@ class SpectrumDock(QWidget):
         if st is None or p is None:
             return "GC unknown"
         return f"{st.name} RT {p.apex_rt:.3f}"
+
+    def _fill_own_menu(self):
+        from gcws.ui.dialogs import own_search as OS
+        self.own_menu.clear()
+        chosen = OS.load_options()["library"]
+        names = OS.libraries()
+        for name in names:
+            a = self.own_menu.addAction(name)
+            a.setCheckable(True)
+            a.setChecked(name == chosen)
+            a.triggered.connect(lambda _=False, n=name: OS.save_options({"library": n}))
+        if not names:
+            self.own_menu.addAction("(no library - add one under Identify > Libraries...)").setEnabled(False)
+        self.own_menu.addSeparator()
+        self.own_menu.addAction("Options...", lambda: OS.OwnSearchOptionsDialog(self).exec())
 
     def _emit(self, signal):
         pts = self.points()
