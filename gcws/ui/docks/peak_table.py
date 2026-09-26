@@ -142,15 +142,20 @@ class PeakTable(QWidget):
         from gcws.ui import theme
         self.banner = theme.chip("", "warn")          # the working signal is not available for this run
         self.banner.setWordWrap(True)
+        source = QHBoxLayout()
+        source.setContentsMargins(0, 0, 0, 0)
+        source.addLayout(self._build_source_switch())
+        source.addStretch(1)
+        source.addWidget(self.info)
+        source.addWidget(self.filter)
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
         top.addWidget(tb)
         top.addStretch(1)
-        top.addWidget(self.info)
-        top.addWidget(self.filter)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(2, 2, 2, 2)
         lay.setSpacing(2)
+        lay.addLayout(source)
         lay.addLayout(top)
         lay.addLayout(self._build_value_filter())
         lay.addWidget(self.banner)
@@ -203,6 +208,33 @@ class PeakTable(QWidget):
         shown = self.proxy.rowCount()
         head = f"{shown} of {n} peaks shown" if shown != n else f"{n} peaks"
         self.info.setText(f"{head}  •  {idn} identified{extra}")
+
+    # -- which chromatogram the table lists ------------------------------------------
+
+    def _build_source_switch(self):
+        from PySide6.QtWidgets import QButtonGroup, QToolButton
+        row = QHBoxLayout()
+        row.setSpacing(0)
+        self.source_group = QButtonGroup(self)
+        self.source_group.setExclusive(True)
+        self.source_buttons = []
+        for i in (0, 1):
+            b = QToolButton()
+            b.setCheckable(True)
+            b.setObjectName("segment")
+            b.setToolTip(f"List the peaks of Chromatogram {i + 1}")
+            self.source_group.addButton(b, i)
+            self.source_buttons.append(b)
+            row.addWidget(b)
+        self.source_group.idClicked.connect(lambda i: self.ws.set_table_panel(i))
+        self.ws.panelsChanged.connect(self._sync_source)
+        self._sync_source()
+        return row
+
+    def _sync_source(self):
+        for i, b in enumerate(self.source_buttons):
+            b.setText(f"Chromatogram {i + 1} · {self.ws.panel_key(i).replace(' - Blank', ' − Blank')}")
+            b.setChecked(self.ws.table_panel == i)
 
     # -- value filter ------------------------------------------------------------
 

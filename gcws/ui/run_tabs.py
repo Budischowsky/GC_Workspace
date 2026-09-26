@@ -115,12 +115,12 @@ class RunTabBar(QTabBar):
             m.addAction("Double determination / replicates...").triggered.connect(
                 lambda: self.replicateRequested.emit(rid))
         m.addSeparator()
-        sig = m.addMenu("Signal")
+        sig = m.addMenu("Signal in Chromatogram 1")
         for key in st.run.available_signals():
             a = sig.addAction(key)
             a.setCheckable(True)
-            a.setChecked(self.ws.signal_key == key)
-            a.triggered.connect(lambda _=False, k=key: self.ws.set_signal_key(k))
+            a.setChecked(self.ws.panel_keys[0] == key)
+            a.triggered.connect(lambda _=False, k=key: self.ws.set_panel(0, key=k))
         if st.run.ms is not None:
             sig.addAction("Extracted ion (EIC)...").triggered.connect(self.eicRequested.emit)
         vis = m.addAction("Show in overlay")

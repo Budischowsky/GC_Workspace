@@ -24,14 +24,15 @@ from gcws.ui.docks.spectrum import SpectrumDock
 from gcws.ui.icons import icon
 from gcws.ui.layout import presets
 from gcws.ui.layout.drop_overlay import DropOverlay
-from gcws.ui.plot.chrom import ChromPlot
+from gcws.ui.plot.chrom import ChromPanel, sync_x
 from gcws.ui.plot.tools import TOOLS, ToolController
 from gcws.ui.run_tabs import RunTabBar
 from gcws.ui.undo import IdentCommand, ValueCommand, add_event
 from gcws.ui.workspace import Workspace
 
 DOCKS = [  # key, title
-    ("tree", "Folders"), ("chrom", "Chromatogram"), ("zoom", "Peak zoom / integration"),
+    # dock keys "chrom" / "zoom" are kept so saved layouts still restore
+    ("tree", "Folders"), ("chrom", "Chromatogram 1"), ("zoom", "Chromatogram 2"),
     ("table", "Peaks / substances"), ("spectrum", "Mass spectrum"), ("events", "Integration method"),
     ("props", "Properties"), ("audit", "Audit trail"), ("quant", "Quantification"),
     ("replicates", "Replicates / results"),
@@ -62,8 +63,11 @@ class MainWindow(QMainWindow):
 
         # panels
         self.tree = FolderTree()
-        self.chrom = ChromPlot(self.ws, self.tools)
-        self.zoom = ChromPlot(self.ws, self.tools, detail=True)
+        self._restore_panels()
+        self.chrom = ChromPanel(self.ws, self.tools, 0)
+        self.chrom2 = ChromPanel(self.ws, self.tools, 1)
+        self.chroms = [self.chrom, self.chrom2]
+        sync_x(self.chroms)
         self.table = PeakTable(self.ws)
         self.spectrum = SpectrumDock(self.ws)
         self.events = EventsDock(self.ws)
@@ -71,7 +75,7 @@ class MainWindow(QMainWindow):
         self.audit = AuditDock(self.ws)
         self.quant = QuantDock(self.ws)
         self.replicates = ReplicatesDock(self.ws)
-        widgets = {"tree": self.tree, "chrom": self.chrom, "zoom": self.zoom, "table": self.table,
+        widgets = {"tree": self.tree, "chrom": self.chrom, "zoom": self.chrom2, "table": self.table,
                    "spectrum": self.spectrum, "events": self.events, "props": self.props, "audit": self.audit,
                    "quant": self.quant, "replicates": self.replicates}
         self.overlay = DropOverlay(self)
@@ -174,18 +178,6 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
         tb.addAction(self.a_undo)
         tb.addAction(self.a_redo)
-        tb.addSeparator()
-        tb.addWidget(QLabel(" Signal: "))
-        self.signal_box = QComboBox()
-        self.signal_box.setMinimumWidth(110)
-        self.signal_box.activated.connect(self._signal_picked)
-        tb.addWidget(self.signal_box)
-        self.a_blank = QAction("− Blank", self)
-        self.a_blank.setCheckable(True)
-        self.a_blank.setToolTip("Show and integrate the chromatogram minus its assigned blank "
-                                "(settings: Quantify > Blank subtraction settings)")
-        self.a_blank.toggled.connect(self._blank_toggled)
-        tb.addAction(self.a_blank)
         tb.addSeparator()
         tb.addAction(self.a_integrate)
         tb.addAction(self.a_search)
@@ -333,11 +325,7 @@ class MainWindow(QMainWindow):
         self.tools.eventCreated.connect(self._manual_event)
         self.tools.toolChanged.connect(self._tool_changed)
         self.ws.message.connect(lambda t: self.statusBar().showMessage(t, 8000))
-        self.ws.runAdded.connect(lambda *_: self._refresh_signals())
-        self.ws.runRemoved.connect(lambda *_: self._refresh_signals())
-        self.ws.activeRunChanged.connect(lambda *_: self._refresh_signals())
-        self.ws.signalKeyChanged.connect(lambda *_: self._refresh_signals())
-        self.ws.runChanged.connect(lambda *_: self._refresh_signals())
+        self.ws.panelsChanged.connect(self._save_panels)
         for sig in (self.ws.activeRunChanged, self.ws.runChanged, self.ws.runRemoved):
             sig.connect(lambda *_: self._refresh_run_chips())
         self.run_tabs.closeRequested.connect(self.close_run)
@@ -354,10 +342,14 @@ class MainWindow(QMainWindow):
                                         self.registerUnknownAction, self.setIstdAction])
         self.table.searchRequested.connect(self.library_search)
         self.table.integrateRequested.connect(self.integrate)
-        for plot in (self.chrom, self.zoom):
+        for plot in self.chroms:
             self.spectrum.regionsChanged.connect(plot.set_ms_regions)
             plot.spectrumRequested.connect(self._scan_spectrum)
             plot.componentClicked.connect(self._show_component)
+            plot.resetRequested.connect(self.reset_views)
+            for other in self.chroms:
+                if other is not plot:
+                    plot.cursorMoved.connect(other.set_cursor)
         self.spectrum.nistRequested.connect(self.nist_search)
         self.spectrum.atlasRequested.connect(self.atlas_hits)
         self.spectrum.registerRequested.connect(self.register_unknown)
@@ -380,9 +372,8 @@ class MainWindow(QMainWindow):
             self.tool_actions[name].setChecked(True)
         mode = {"pan": "PanMode"}.get(name, "RectMode")
         import pyqtgraph as pg
-        for plot in (self.chrom, self.zoom):
+        for plot in self.chroms:
             plot.vb.setMouseMode(getattr(pg.ViewBox, mode))
-            plot.companion.vb.setMouseMode(getattr(pg.ViewBox, mode))
 
     def _refresh_run_chips(self):
         """Status bar: role, blank(s) and FID-MS delay of the active chromatogram."""
@@ -406,40 +397,36 @@ class MainWindow(QMainWindow):
         else:
             theme.set_chip(delay_chip, "", "neutral")
 
-    def _refresh_signals(self):
-        self.signal_box.blockSignals(True)
-        self.signal_box.clear()
-        keys = []
-        for st in self.ws.states():
-            for k in self.ws.signals_for(st):
-                if k not in keys:
-                    keys.append(k)
-        if self.ws.signal_key not in keys and keys:
-            keys.append(self.ws.signal_key)
-        self.signal_box.addItems(keys)
-        if any(st.run.ms is not None for st in self.ws.states()):
-            self.signal_box.addItem("EIC ...")
-        self.signal_box.setCurrentText(self.ws.signal_key)
-        self.signal_box.blockSignals(False)
-        from gcws.core.keys import is_derived
-        st = self.ws.active
-        self.a_blank.blockSignals(True)
-        self.a_blank.setChecked(is_derived(self.ws.signal_key))
-        self.a_blank.setEnabled(bool(st is not None and self.ws.blank_ids(st)) or is_derived(self.ws.signal_key))
-        self.a_blank.blockSignals(False)
+    # -- Chromatogram 1 / 2 ---------------------------------------------------------------
 
-    def _blank_toggled(self, on):
-        from gcws.core.keys import base_key, derived_key
-        key = derived_key(self.ws.signal_key) if on else base_key(self.ws.signal_key)
-        if key != self.ws.signal_key:
-            if on and self.ws.active is not None and self.ws.active.run.signal(key) is None:
-                self.a_blank.blockSignals(True)
-                self.a_blank.setChecked(False)
-                self.a_blank.blockSignals(False)
-                self.statusBar().showMessage("No blank assigned to this chromatogram (Quantify > Assign blanks)",
-                                             6000)
-                return
-            self.ws.set_signal_key(key)
+    def _restore_panels(self):
+        s = QSettings()
+        keys = s.value("panels/keys")
+        if isinstance(keys, (list, tuple)) and len(keys) == 2:
+            blanks = s.value("panels/blank") or [False, False]
+            blanks = [str(b).lower() in ("true", "1") for b in (blanks if isinstance(blanks, (list, tuple))
+                                                                 else [blanks])]
+            self.ws.set_panels(list(keys), blanks, s.value("panels/table", 0, type=int))
+
+    def _save_panels(self):
+        s = QSettings()
+        s.setValue("panels/keys", list(self.ws.panel_keys))
+        s.setValue("panels/blank", [bool(b) for b in self.ws.panel_blank])
+        s.setValue("panels/table", self.ws.table_panel)
+
+    def ms_panel(self):
+        """The chromatogram showing an MS trace (for an EIC), else Chromatogram 2."""
+        from gcws.core.keys import is_fid
+        return next((p for p in reversed(self.chroms) if not is_fid(p.key)), self.chrom2)
+
+    def reset_views(self):
+        """Double-click in a chromatogram: the whole run in both, intensity fitted in each."""
+        ranges = [r for r in (p.data_x_range() for p in self.chroms) if r is not None]
+        if not ranges:
+            return
+        self.chrom.vb.setXRange(min(r[0] for r in ranges), max(r[1] for r in ranges), padding=0)
+        for p in self.chroms:
+            p.fit_y()
 
     def edit_blank_options(self):
         import copy
@@ -452,24 +439,13 @@ class MainWindow(QMainWindow):
         if q.get("blank_sub") != self.ws.quant.get("blank_sub"):
             self.ws.push_quant("blank subtraction settings", q, "blank subtraction")
 
-    def _signal_picked(self, i):
-        text = self.signal_box.itemText(i)
-        if text == "EIC ...":
-            self.ask_eic()
-        else:
-            self.ws.set_signal_key(text)
-
     def ask_eic(self):
-        text, ok = QInputDialog.getText(self, "Extracted ion chromatogram",
-                                        "m/z (several: summed, e.g. 149, 57):")
-        if not ok:
-            self._refresh_signals()
-            return
-        import re
-        masses = [float(v) for v in re.findall(r"\d+(?:\.\d+)?", text)]
-        if masses:
-            self.ws.set_signal_key(eic_key(masses))
-        self._refresh_signals()
+        """Ctrl+I: an extracted ion chromatogram in the MS chromatogram panel."""
+        panel = self.ms_panel()
+        key = panel.ask_eic()
+        if key:
+            panel.set_signal(key)
+            self._show_dock("zoom" if panel is self.chrom2 else "chrom")
 
     # -- loading -----------------------------------------------------------------
 
@@ -552,12 +528,15 @@ class MainWindow(QMainWindow):
     # -- integration -------------------------------------------------------------
 
     def integrate(self, all_runs=False):
+        """Re-integrate the signals of both chromatograms (active run, or all runs)."""
         ids = list(self.ws.order) if all_runs else ([self.ws.active_id] if self.ws.active_id else [])
         for rid in ids:
-            self.ws.integrate(rid)
+            st = self.ws.runs[rid]
+            for key in dict.fromkeys(self.ws.effective_key(st, self.ws.panel_key(i)) for i in (0, 1)):
+                self.ws.integrate(rid, key)
         self.statusBar().showMessage(f"Integrated {len(ids)} chromatogram(s)", 3000)
 
-    def _manual_event(self, event):
+    def _manual_event(self, event, key=None):
         st = self.ws.active
         if st is None:
             return
@@ -566,7 +545,8 @@ class MainWindow(QMainWindow):
             reason, ok = QInputDialog.getText(self, "Reason", f"Reason for: {event.describe()}")
             if not ok:
                 return
-        st.undo.push(add_event(self.ws, st.id, self.ws.active_key, event, reason))
+        key = self.ws.effective_key(st, key or self.ws.signal_key)
+        st.undo.push(add_event(self.ws, st.id, key, event, reason))
         if self.tools.tool not in ("select", "pan") and not QSettings().value("prefs/sticky_tools", True, type=bool):
             self.tools.set_tool("select")
 
@@ -696,19 +676,15 @@ class MainWindow(QMainWindow):
         self.spectrum._emit(self.spectrum.nistRequested)
 
     def show_ion_eic(self, mz: int):
-        """Click on an ion in the spectrum: its EIC below the FID, or as the working signal."""
-        from gcws.core.keys import is_fid
+        """Click on an ion in the spectrum: its EIC in the MS chromatogram panel."""
         key = eic_key([mz])
         st = self.ws.active
         if st is None or st.run.ms is None:
             return
         st.run.signal(key)
-        if self.chrom.dual_on() and is_fid(self.ws.signal_key):
-            self.chrom.companion.set_key(key)
-            self.statusBar().showMessage(f"EIC m/z {mz} shown below the FID", 5000)
-        else:
-            self.ws.set_signal_key(key)
-        self._refresh_signals()
+        panel = self.ms_panel()
+        panel.set_signal(key)
+        self.statusBar().showMessage(f"EIC m/z {mz} shown in Chromatogram {panel.index + 1}", 5000)
 
     def _show_component(self, run_id, comp):
         self.spectrum.show_component(run_id, comp)
@@ -1010,7 +986,12 @@ class MainWindow(QMainWindow):
         self.audit.reload()
         self.ws.replicate_groups = data.get("replicate_groups", [])
         self.ws.quant = data.get("quant", {})
-        self.ws.signal_key = data.get("signal_key", FID)
+        panels = data.get("panels") or {}
+        if panels.get("keys"):
+            self.ws.set_panels(panels["keys"], panels.get("blank") or [False, False], panels.get("table", 0))
+        else:                                      # older projects: one working signal
+            self.ws.set_panels([data.get("signal_key", FID), self.ws.panel_keys[1]], [False, False], 0)
+            self.ws.set_signal_key(data.get("signal_key", FID))
         self._pending_project = (path, data)
         entries = {}
         missing = []

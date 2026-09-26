@@ -39,8 +39,8 @@ class PeaksItem(pg.GraphicsObject):
 
     def set_data(self, rt, y, peaks, color: str, selected: int = -1, transform=None, dx: float = 0.0,
                  muted: set | None = None):
-        """Draw ``peaks`` of the trace (rt, y). ``dx`` shifts the drawing in time (a companion
-        trace aligned to another detector); ``muted`` peak indices are drawn grey (blank peaks)."""
+        """Draw ``peaks`` of the trace (rt, y). ``dx`` shifts the drawing in time (a trace aligned
+        to the other detector's time axis); ``muted`` peak indices are drawn grey (blank peaks)."""
         self.prepareGeometryChange()
         muted = muted or set()
         self.color = QColor(color)

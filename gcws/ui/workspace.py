@@ -85,6 +85,8 @@ class Workspace(QObject):
     replicatesChanged = QtSignal()
     quantChanged = QtSignal()
     deconvChanged = QtSignal(str)              # run id: whole-run deconvolution available / dropped
+    panelsChanged = QtSignal()                 # signal / blank choice of Chromatogram 1 or 2, table source
+    peakFocusRequested = QtSignal(int)         # the analyst picked a peak in a list: zoom the chromatograms to it
     message = QtSignal(str)
 
     def __init__(self, parent=None):
@@ -93,6 +95,11 @@ class Workspace(QObject):
         self.order: list[str] = []
         self.active_id: Optional[str] = None
         self.signal_key: str = FID
+        # Chromatogram 1 and 2: base signal and "- Blank" switch of each; the peak table lists the
+        # peaks of one of them, and ``signal_key`` is always that panel's key
+        self.panel_keys: list[str] = [FID, TIC]
+        self.panel_blank: list[bool] = [False, False]
+        self.table_panel: int = 0
         self.selected: int = -1
         self.methods = MethodStore()
         self.audit = AuditLog()
@@ -145,10 +152,8 @@ class Workspace(QObject):
         self.runs[run.id] = st
         self.order.append(run.id)
         self._sort_order()
-        if base_key(self.signal_key) not in run.available_signals() and not self.runs_with(self.signal_key):
-            avail = run.available_signals()
-            if avail:
-                self.signal_key = avail[0]
+        if len(self.runs) == 1:                       # the first run: panels on signals it has
+            self._fit_panels(run)
         self.dirty = True
         self.runAdded.emit(run.id)
         if self.active_id is None:
@@ -240,9 +245,66 @@ class Workspace(QObject):
             reason = f"its blank has no {base} trace"
         return f"{key} not available for {st.name}: {reason}. Showing {base}."
 
+    # -- Chromatogram 1 / 2 ------------------------------------------------------
+
+    def panel_key(self, i: int) -> str:
+        """Signal key of chromatogram panel ``i`` (with " - Blank" when its blank switch is on)."""
+        return derived_key(self.panel_keys[i]) if self.panel_blank[i] else self.panel_keys[i]
+
+    def _fit_panels(self, run: Run) -> None:
+        avail = run.available_signals()
+        if not avail:
+            return
+        for i in (0, 1):
+            if base_key(self.panel_keys[i]) not in avail and not self.runs_with(self.panel_keys[i]):
+                self.panel_keys[i] = avail[0] if i == 0 else (TIC if TIC in avail else avail[0])
+        self.signal_key = self.panel_key(self.table_panel)
+
+    def set_panel(self, i: int, key: Optional[str] = None, blank: Optional[bool] = None) -> None:
+        """Choose the signal (``key`` may carry " - Blank") and/or the blank switch of panel ``i``."""
+        if key is not None:
+            base, suffix = split_key(key)
+            self.panel_keys[i] = base
+            if suffix is not None:
+                blank = True
+        if blank is not None:
+            self.panel_blank[i] = bool(blank)
+        k = self.panel_key(i)
+        for st in self.states():
+            if st.run.signal(k) is not None and k not in st.results:
+                self.integrate(st.id, k, emit=False)
+        self.panelsChanged.emit()
+        if i == self.table_panel:
+            self._set_table_key(k)
+
+    def set_table_panel(self, i: int) -> None:
+        """The peak table (and everything that works on "the" peaks) follows panel ``i``."""
+        self.table_panel = i
+        self.panelsChanged.emit()
+        self._set_table_key(self.panel_key(i))
+
+    def set_panels(self, keys, blanks, table: int = 0) -> None:
+        """Restore the panel state (project, settings) in one step."""
+        self.panel_keys = [base_key(k) for k in keys][:2] + [TIC] * max(0, 2 - len(keys))
+        self.panel_blank = [bool(b) for b in blanks][:2] + [False] * max(0, 2 - len(blanks))
+        self.table_panel = 1 if table == 1 else 0
+        self.signal_key = self.panel_key(self.table_panel)
+        self.panelsChanged.emit()
+
     def set_signal_key(self, key: str) -> None:
+        """The table's signal; the panel that feeds the table shows it too."""
         key = key.strip()
-        if not key or key == self.signal_key:
+        if not key:
+            return
+        base, suffix = split_key(key)
+        i = self.table_panel
+        if (self.panel_keys[i], self.panel_blank[i]) != (base, suffix is not None):
+            self.panel_keys[i], self.panel_blank[i] = base, suffix is not None
+            self.panelsChanged.emit()
+        self._set_table_key(key)
+
+    def _set_table_key(self, key: str) -> None:
+        if key == self.signal_key:
             return
         self.signal_key = key
         self.selected = -1

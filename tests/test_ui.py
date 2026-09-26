@@ -46,7 +46,7 @@ def test_manual_integration_undo_redo(qtbot, win, samples):
     _load(qtbot, win, samples, ["07_"])
     st = win.ws.active
     n0 = len(win.ws.active_result().peaks)
-    win.tools.eventCreated.emit(ManualEvent(K.ADD_PEAK, 30.0, 30.2))
+    win.tools.eventCreated.emit(ManualEvent(K.ADD_PEAK, 30.0, 30.2), "")
     assert len(win.ws.active_result().peaks) == n0 + 1
     assert win.table.model.rowCount() == n0 + 1
     win.a_undo.trigger()
@@ -107,7 +107,7 @@ def test_project_roundtrip(qtbot, win, samples, tmp_path):
     _load(qtbot, win, samples, ["07_", "08_"])
     st = next(s for s in win.ws.states() if s.name.startswith("07_"))
     win.ws.set_active(st.id)
-    win.tools.eventCreated.emit(ManualEvent(K.SPLIT, 13.42))
+    win.tools.eventCreated.emit(ManualEvent(K.SPLIT, 13.42), "")
     p = win.ws.active_result().peaks[5]
     st.ident_set("FID").set(Identification(apex_rt=p.apex_rt, name="Test compound", cas="50-00-0", manual=True))
     digest = win.ws.active_result().digest
@@ -190,32 +190,59 @@ def test_right_drag_does_not_scale(qtbot, win, samples):
     assert win.spectrum.source == "scan" and len(win.spectrum.spec.apex_scans) > 1
 
 
-def test_dual_fid_ms_view(qtbot, win, samples):
+def test_two_chromatograms(qtbot, win, samples):
+    from PySide6.QtCore import Qt
     _load(qtbot, win, samples, ["07_", "08_"])
-    chrom = win.chrom
-    chrom.dual.setChecked(True)
-    assert chrom.dual_on() and chrom.companion.isVisible()
-    comp = chrom.companion
-    assert comp.key == "TIC" and len(comp.curves) == 2 and len(chrom.curves) == 2
-    st = win.ws.active
-    xs = comp.curves[st.id].xData
+    ws = win.ws
+    c1, c2 = win.chrom, win.chrom2
+    assert win.docks["chrom"].windowTitle() == "Chromatogram 1" and win.docks["zoom"].windowTitle() == "Chromatogram 2"
+    assert c1.key == "FID" and c2.key == "TIC"
+    assert len(c1.curves) == 2 and len(c2.curves) == 2
+    st = ws.active
+    xs = c2.curves[st.id].xData
     tic = st.run.signal("TIC")
     assert abs(xs[0] - (tic.rt[0] + st.delay_value)) < 1e-9       # MS shifted onto the FID axis
-    assert chrom.split.indexOf(chrom.plot) == 0                   # FID on top
-    chrom.vb.setXRange(13.2, 14.2, padding=0)
-    assert comp.vb.viewRange()[0] == pytest.approx(chrom.vb.viewRange()[0])
-    # a click in the companion selects the FID peak at that time
-    res = win.ws.active_result()
+    # zoom and pan stay in sync, whichever panel moves
+    c1.vb.setXRange(13.2, 14.2, padding=0)
+    assert c2.vb.viewRange()[0] == pytest.approx([13.2, 14.2])
+    c2.vb.setXRange(15.0, 16.0, padding=0)
+    assert c1.vb.viewRange()[0] == pytest.approx([15.0, 16.0])
+    # a click in Chromatogram 2 (TIC) selects the table's FID peak at that time
+    res = ws.active_result()
     p = max(res.peaks, key=lambda q: q.area if 13.2 < q.apex_rt < 14.2 else 0)
-    comp._clicked(p.apex_rt, 0.0)
-    assert win.ws.selected_peak() is p
-    # MS working signal: the FID moves to the top pane, shifted back
-    win.ws.set_signal_key("TIC")
-    assert comp.key == "FID" and chrom.split.indexOf(comp) == 0
-    xs = comp.curves[st.id].xData
+    win.tools.set_tool("select")
+    win.tools.click(c2.vb, p.apex_rt - st.delay_value, 0.0, Qt.NoModifier, (1.0, 0.0), c2.tool_key())
+    assert ws.selected_peak() is p
+    assert c2.selected_index() >= 0                                 # highlighted in the TIC too
+    # the table lists the peaks of the chromatogram chosen at its top
+    win.table.source_buttons[1].click()
+    assert ws.table_panel == 1 and ws.signal_key == "TIC"
+    assert win.table.model.rowCount() == len(ws.result(st.id, "TIC").peaks)
+    assert c2.table_chip.text() and not c1.table_chip.text()
+    win.table.source_buttons[0].click()
+    assert ws.signal_key == "FID"
+    # a manual event in Chromatogram 2 changes the TIC integration only
+    n_fid, n_tic = len(ws.result(st.id, "FID").peaks), len(ws.result(st.id, "TIC").peaks)
+    win.tools.set_tool("add")
+    win.tools.drag_finished(c2.vb, 30.0, 0.0, 30.2, 0.0, Qt.NoModifier, (1.0, 0.0), None, c2.tool_key())
+    assert len(ws.result(st.id, "TIC").peaks) == n_tic + 1
+    assert len(ws.result(st.id, "FID").peaks) == n_fid
+    assert st.events("TIC") and not st.events("FID")
+    win.tools.set_tool("select")
+    # each panel has its own blank switch
+    c1.blank.setChecked(True)
+    assert ws.panel_key(0) == "FID - Blank" and ws.signal_key == "FID - Blank" and c2.key == "TIC"
+    c1.blank.setChecked(False)
+    # Chromatogram 1 on TIC: the FID in Chromatogram 2 is shifted back onto the MS axis
+    c1.set_signal("TIC")
+    c2.set_signal("FID")
+    xs = c2.curves[st.id].xData
     assert abs(xs[0] - (st.run.fid.rt[0] - st.delay_value)) < 1e-9
-    chrom.dual.setChecked(False)
-    assert not comp.isVisible()
+    # double-click: the whole run in both
+    win.reset_views()
+    x0, x1 = c1.vb.viewRange()[0]
+    assert x0 <= st.run.fid.rt[0] + 0.1 and x1 >= tic.rt[-1] - 0.1
+    assert c2.vb.viewRange()[0] == pytest.approx([x0, x1])
 
 
 def test_interpretation_tab_and_class_hints(qtbot, win, samples):
@@ -236,11 +263,10 @@ def test_interpretation_tab_and_class_hints(qtbot, win, samples):
     qtbot.waitUntil(lambda: ws.hints.get(st, "TIC", peak) is not None, timeout=20000)
     text, tip = ws.hints.get(st, "TIC", peak)
     assert "phosphite" in text.lower() and tip
-    # clicking an ion shows its EIC below the FID
+    # clicking an ion shows its EIC in the MS chromatogram (Chromatogram 2 when 1 shows the FID)
     ws.set_signal_key("FID")
-    win.chrom.dual.setChecked(True)
     win.show_ion_eic(441)
-    assert win.chrom.companion.key == "EIC 441"
+    assert win.chrom2.key == "EIC 441" and win.chrom.key == "FID"
 
 
 def test_double_determination_from_tab_menu(qtbot, win, samples):
@@ -316,12 +342,11 @@ def test_blank_subtraction_toggle_and_project(qtbot, win, samples, tmp_path):
     ws = win.ws
     st = next(s for s in ws.states() if s.name.startswith("07_"))
     ws.set_active(st.id)
-    win._refresh_signals()
-    assert win.a_blank.isEnabled()
-    win.a_blank.setChecked(True)
+    assert win.chrom.blank.isEnabled()
+    win.chrom.blank.setChecked(True)
     assert ws.signal_key == "FID - Blank"
     assert win.table.model.rowCount() > 0
-    assert "FID - Blank" in [win.signal_box.itemText(i) for i in range(win.signal_box.count())]
+    assert "FID − Blank" in win.table.source_buttons[0].text()
     # peak-level check: hiding blank peaks reduces the visible rows
     ws.set_signal_key("FID")
     n = win.table.proxy.rowCount()
@@ -340,6 +365,7 @@ def test_blank_subtraction_toggle_and_project(qtbot, win, samples, tmp_path):
     win.open_project(target)
     qtbot.waitUntil(lambda: win.loading == 0 and len(ws.runs) == 2 and win._pending_project is None, timeout=60000)
     assert ws.signal_key == "FID - Blank" and ws.quant["blank_sub"]["scale"] == 1.1
+    assert ws.panel_blank == [True, False] and win.chrom.blank.isChecked()
     st2 = ws.runs[st.id]
     assert ws.result(st2.id, "FID - Blank") is not None
 

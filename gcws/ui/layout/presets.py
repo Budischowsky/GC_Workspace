@@ -9,10 +9,10 @@ H, V = Qt.Horizontal, Qt.Vertical
 LAYOUT_VERSION = 3
 
 PRESETS = {
-    "Chromatogram top": "Wide chromatogram on top, peak table with peak zoom and spectrum below",
-    "Table left (classic)": "Peak table on the left, chromatogram, peak zoom and spectrum stacked on the right",
-    "Integration": "Chromatogram, peak zoom and integration events for working on the integration",
-    "Review": "Chromatogram, table, spectrum and replicates for reviewing results; tree hidden",
+    "Chromatogram top": "Chromatogram 1 and 2 wide on top, peak table and spectrum below",
+    "Table left (classic)": "Peak table on the left, Chromatogram 1 and 2 and the spectrum stacked on the right",
+    "Integration": "Chromatogram 1 and 2 with the integration events for working on the integration",
+    "Review": "Chromatogram 1 and 2, table, spectrum and replicates for reviewing results; tree hidden",
     "Dual monitor - table detached": "Chromatogram here; peak table and spectrum on the second screen",
 }
 
@@ -55,8 +55,8 @@ def apply_preset(win, name: str) -> None:
         win.addDockWidget(L, tree)
         win.addDockWidget(R, chrom)
         win.splitDockWidget(chrom, zoom, V)
-        win.splitDockWidget(zoom, events, H)
-        win.splitDockWidget(chrom, table, V)
+        win.splitDockWidget(zoom, table, V)
+        win.splitDockWidget(chrom, events, H)
         win.tabifyDockWidget(tree, props)
         win.tabifyDockWidget(table, spec)
         win.tabifyDockWidget(spec, audit)
@@ -66,16 +66,16 @@ def apply_preset(win, name: str) -> None:
         tree.hide()
         props.hide()
         table.raise_()
-        win.resizeDocks([chrom, zoom, table], [int(h * 0.4), int(h * 0.35), int(h * 0.25)], V)
-        win.resizeDocks([zoom, events], [int(w * 0.6), int(w * 0.4)], H)
+        win.resizeDocks([chrom, zoom, table], [int(h * 0.35), int(h * 0.35), int(h * 0.3)], V)
+        win.resizeDocks([chrom, events], [int(w * 0.68), int(w * 0.32)], H)
     elif name == "Review":
         win.addDockWidget(R, chrom)
-        win.splitDockWidget(chrom, table, V)
+        win.splitDockWidget(chrom, zoom, V)
+        win.splitDockWidget(zoom, table, V)
         win.splitDockWidget(table, spec, H)
         win.addDockWidget(L, tree)
-        win.tabifyDockWidget(spec, zoom)
         for x in [events, props, audit] + extra:
-            win.tabifyDockWidget(zoom, x)
+            win.tabifyDockWidget(spec, x)
         _show(chrom, table, spec, zoom, events, props, audit, *extra)
         tree.hide()
         events.hide()
@@ -84,7 +84,7 @@ def apply_preset(win, name: str) -> None:
         rep = d.get("replicates")
         if rep is not None:
             rep.raise_()
-        win.resizeDocks([chrom, table], [int(h * 0.4), int(h * 0.6)], V)
+        win.resizeDocks([chrom, zoom, table], [int(h * 0.3), int(h * 0.25), int(h * 0.45)], V)
         win.resizeDocks([table, spec], [int(w * 0.62), int(w * 0.38)], H)
     elif name == "Dual monitor - table detached":
         apply_preset(win, "Chromatogram top")
@@ -101,9 +101,9 @@ def apply_preset(win, name: str) -> None:
     else:  # "Chromatogram top" (default)
         win.addDockWidget(L, tree)
         win.addDockWidget(R, chrom)
-        win.splitDockWidget(chrom, table, V)
-        win.splitDockWidget(table, zoom, H)
-        win.splitDockWidget(zoom, spec, H)
+        win.splitDockWidget(chrom, zoom, V)
+        win.splitDockWidget(zoom, table, V)
+        win.splitDockWidget(table, spec, H)
         win.tabifyDockWidget(tree, events)
         win.tabifyDockWidget(events, props)
         win.tabifyDockWidget(props, audit)
@@ -112,8 +112,8 @@ def apply_preset(win, name: str) -> None:
         _show(tree, chrom, table, zoom, spec, events, props, audit, *extra)
         tree.raise_()
         win.resizeDocks([tree, chrom], [int(w * 0.15), int(w * 0.85)], H)
-        win.resizeDocks([chrom, table], [int(h * 0.5), int(h * 0.5)], V)       # room for FID + MS
-        win.resizeDocks([table, zoom, spec], [int(w * 0.36), int(w * 0.22), int(w * 0.27)], H)
+        win.resizeDocks([chrom, zoom, table], [int(h * 0.3), int(h * 0.26), int(h * 0.44)], V)
+        win.resizeDocks([table, spec], [int(w * 0.5), int(w * 0.35)], H)
 
 
 # -- named user layouts ---------------------------------------------------------

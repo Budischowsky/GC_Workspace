@@ -69,6 +69,8 @@ def to_dict(ws, project_path: Path) -> dict:
         "integrator_version": gcws.INTEGRATOR_VERSION,
         "saved": datetime.now().isoformat(timespec="seconds"), "user": current_user(),
         "active": ws.active_id, "signal_key": ws.signal_key,
+        "panels": {"keys": list(getattr(ws, "panel_keys", [])), "blank": list(getattr(ws, "panel_blank", [])),
+                   "table": getattr(ws, "table_panel", 0)},
         "runs": runs,
         "replicate_groups": ws.replicate_groups,
         "quant": ws.quant,

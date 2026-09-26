@@ -1,18 +1,26 @@
-"""Chromatogram overlay and peak-zoom plots.
+"""Chromatogram 1 and 2.
 
-Each plot shows the working signal (``ws.signal_key``) of the loaded runs and,
-with "FID + MS" switched on, a companion pane with the other detector aligned
-in time (FID always on top, MS below; the x axes are linked).
+Each panel shows one signal of the loaded runs -- FID, TIC, BPC or an EIC,
+optionally minus the assigned blank -- with the active run drawn bold with its
+peaks. The two panels share one time axis: Chromatogram 1's detector sets it,
+and a panel showing the other detector draws every run shifted by that run's
+FID-MS delay, so a compound sits at the same x in both. Zoom and pan are kept
+in sync on that axis (:func:`sync_x`); each panel fits its own intensity axis.
+
+Integration tools work on the signal of the panel they are used in. The peak
+table lists the peaks of one of the panels (``ws.table_panel``); a click in
+the other panel selects the table's peak at that time.
 """
 from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QSettings, Qt, Signal as QtSignal
+from PySide6.QtCore import QSettings, Qt, QTimer, Signal as QtSignal
 from PySide6.QtGui import QColor, QPen
-from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QSplitter, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QHBoxLayout, QInputDialog, QLabel, QToolButton, QVBoxLayout,
+                               QWidget)
 
-from gcws.core.keys import is_fid
+from gcws.core.keys import base_key, is_derived, is_fid
 from gcws.integration.method import EventKind
 from gcws.ms.spectra import ScanRequest, from_ms, to_ms
 from gcws.ui import theme
@@ -21,8 +29,9 @@ from gcws.ui.plot.tools import ToolViewBox
 
 theme.configure_plots()
 
-#: fixed width of the y axes so stacked panes share the same x pixels
+#: fixed width of the y axes so stacked panels share the same x pixels
 AXIS_WIDTH = 62
+EIC_ITEM = "EIC ..."
 
 
 def _pen(color, width=1.0, alpha=255, style=Qt.SolidLine):
@@ -51,21 +60,59 @@ def nearest_curve(vb, curves: dict, x: float, y: float, default):
     return default
 
 
-class ChromPlot(QWidget):
-    """Overlay of all visible runs; the active run is drawn bold with its peaks."""
+def frame_offset(frame_key: str, key: str, delay: float) -> float:
+    """x offset that puts a ``key`` trace onto the time axis of ``frame_key``'s detector
+    (FID time = MS time + delay)."""
+    if is_fid(frame_key) == is_fid(key):
+        return 0.0
+    return delay if is_fid(frame_key) else -delay
+
+
+def sync_x(panels) -> None:
+    """Keep the time ranges of ``panels`` equal (in data units, whatever their widths)."""
+    busy = {"on": False}
+
+    def follow(src):
+        def changed(_vb, rng):
+            if busy["on"]:
+                return
+            busy["on"] = True
+            try:
+                for p in panels:
+                    if p is not src:
+                        p.vb.setXRange(float(rng[0]), float(rng[1]), padding=0)
+                        p.linked_x_changed()
+            finally:
+                busy["on"] = False
+        return changed
+
+    for p in panels:
+        p.vb.sigXRangeChanged.connect(follow(p))
+
+
+class ChromPanel(QWidget):
+    """One chromatogram panel (``index`` 0 = Chromatogram 1, 1 = Chromatogram 2)."""
     spectrumRequested = QtSignal(object)        # ScanRequest (MS time axis)
     componentClicked = QtSignal(str, object)    # run id, deconvoluted Component
+    cursorMoved = QtSignal(float)               # x on the shared axis
+    resetRequested = QtSignal()                 # double-click: full view in every panel
+    exportRequested = QtSignal(int)             # panel index
 
-    def __init__(self, ws, tools, detail: bool = False, parent=None):
+    def __init__(self, ws, tools, index: int, parent=None):
         super().__init__(parent)
         self.ws = ws
-        self.detail = detail
-        self._prefix = "zoom" if detail else "chrom"
+        self.tools = tools
+        self.index = index
+        self._prefix = f"chrom{index + 1}"
+        self._loading = False
+        s = QSettings()
         self.vb = ToolViewBox(tools)
+        self.vb.panel = self
         self.vb.spectrumRequested.connect(self._spectrum_request)
-        self._ms_regions_ms: list = []
+        self.vb.on_reset = self.resetRequested.emit
         self.plot = pg.PlotWidget(viewBox=self.vb)
         self.plot.setLabel("bottom", "RT", units="min")
+        self.plot.getAxis("bottom").enableAutoSIPrefix(False)
         self.plot.getAxis("left").enableAutoSIPrefix(True)
         self.plot.getAxis("left").setWidth(AXIS_WIDTH)
         self.plot.showGrid(x=True, y=True, alpha=theme.PLOT["grid_alpha"])
@@ -78,114 +125,193 @@ class ChromPlot(QWidget):
         self.event_lines: list = []
         self.regions: list = []
         self.ms_regions: list = []
+        self._ms_regions_ms: list = []
         self.cursor = pg.InfiniteLine(angle=90, movable=False, pen=_pen(theme.PLOT["cursor"], 1, 140, Qt.DotLine))
         self.vb.addItem(self.cursor, ignoreBounds=True)
         self.cursor_label = pg.TextItem("", color=theme.PLOT["cursor_text"], anchor=(0, 1))
         self.vb.addItem(self.cursor_label, ignoreBounds=True)
         self.plot.scene().sigMouseMoved.connect(self._mouse_moved)
-        self.vb.on_reset = self.default_view
+        self._markers = None
+        self._fit = QTimer(self)
+        self._fit.setSingleShot(True)
+        self._fit.setInterval(0)
+        self._fit.timeout.connect(self.fit_y)
 
-        from gcws.ui.plot.companion import CompanionPane
-        self.companion = CompanionPane(ws, tools, self)
-        self.companion.plot.getAxis("left").setWidth(AXIS_WIDTH)
-        self.companion.spectrumRequested.connect(self.spectrumRequested.emit)
-        s = QSettings()
-        self.companion.key = s.value(f"{self._prefix}/companion_key", "TIC") or "TIC"
-        self.companion.keyChanged.connect(lambda k: QSettings().setValue(f"{self._prefix}/companion_key", k))
-        self.split = QSplitter(Qt.Vertical)
-        self.split.setChildrenCollapsible(False)
-        self.split.addWidget(self.plot)
-        self.split.addWidget(self.companion)
-        self.split.setStretchFactor(0, 3)
-        self.split.setStretchFactor(1, 2)
-        self.split.splitterMoved.connect(
-            lambda *_: QSettings().setValue(f"{self._prefix}/split", self.split.sizes()))
-
+        # -- header: signal, blank switch, display options ------------------------------
+        bar = QHBoxLayout()
+        bar.setSpacing(6)
+        self.signal = QComboBox()
+        self.signal.setToolTip("Signal shown in this chromatogram")
+        self.signal.setMinimumWidth(96)
+        self.signal.activated.connect(self._signal_picked)
+        self.blank = QCheckBox("− Blank")
+        self.blank.setToolTip("Show and integrate this signal minus the assigned blank "
+                              "(settings: Quantify > Blank subtraction settings)")
+        self.blank.toggled.connect(self._blank_toggled)
+        self.table_chip = theme.chip("", "accent")
+        self.table_chip.setToolTip("The peak table lists the peaks of this chromatogram")
+        self.title = QLabel()
+        self.title.setObjectName("hint")
+        self.others = QCheckBox("Overlay")
+        self.others.setToolTip("Show the other loaded chromatograms")
+        self.others.setChecked(s.value(f"{self._prefix}/overlay", True, type=bool))
+        self.norm = QCheckBox("Normalize")
+        self.norm.setToolTip("Scale every trace to its own maximum (after the integration start)")
+        self.norm.setChecked(s.value(f"{self._prefix}/normalize", False, type=bool))
+        self.stack = QCheckBox("Stack")
+        self.stack.setToolTip("Offset the traces vertically")
+        self.stack.setChecked(s.value(f"{self._prefix}/stack", False, type=bool))
+        for name, w in (("overlay", self.others), ("normalize", self.norm), ("stack", self.stack)):
+            w.toggled.connect(lambda on, n=name: (QSettings().setValue(f"{self._prefix}/{n}", on),
+                                                  self.refresh(fit=True)))
+        self.label_mode = QComboBox()
+        self.label_mode.addItems(["Labels: RT", "Labels: #", "Labels: name", "Labels: off"])
+        self.label_mode.setCurrentIndex(s.value(f"{self._prefix}/labels", 0, type=int))
+        self.label_mode.currentIndexChanged.connect(
+            lambda i: (QSettings().setValue(f"{self._prefix}/labels", i), self.refresh_labels()))
+        self.export_btn = QToolButton()
+        self.export_btn.setText("Export...")
+        self.export_btn.setToolTip("Save this chromatogram as a picture (PNG, SVG, PDF ...)")
+        self.export_btn.clicked.connect(lambda: self.exportRequested.emit(self.index))
+        for w in (self.signal, self.blank, self.table_chip):
+            bar.addWidget(w)
+        bar.addWidget(self.title, 1)
+        for w in (self.others, self.norm, self.stack, self.label_mode, self.export_btn):
+            bar.addWidget(w)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(2, 2, 2, 2)
         lay.setSpacing(2)
-        bar = QHBoxLayout()
-        bar.setSpacing(8)
-        self.title = QLabel()
-        self.title.setObjectName("hint")
-        bar.addWidget(self.title, 1)
-        self.dual = QCheckBox("FID + MS")
-        self.dual.setToolTip("Show the other detector below / above, aligned by the FID-MS delay")
-        self.dual.setChecked(s.value(f"{self._prefix}/dual", True, type=bool))
-        self.dual.toggled.connect(self._dual_toggled)
-        bar.addWidget(self.dual)
-        if not detail:
-            self.norm = QCheckBox("Normalize")
-            self.norm.setToolTip("Scale every trace to its own maximum (after the integration start)")
-            self.stack = QCheckBox("Stack")
-            self.stack.setToolTip("Offset the traces vertically")
-            self.others = QCheckBox("Overlay")
-            self.others.setChecked(True)
-            self.others.setToolTip("Show the other loaded chromatograms")
-            for w in (self.others, self.norm, self.stack):
-                w.toggled.connect(self.refresh)
-                bar.addWidget(w)
-        self.label_mode = QComboBox()
-        self.label_mode.addItems(["Labels: RT", "Labels: #", "Labels: name", "Labels: off"])
-        self.label_mode.currentIndexChanged.connect(self.refresh_labels)
-        bar.addWidget(self.label_mode)
         lay.addLayout(bar)
-        lay.addWidget(self.split, 1)
-        sizes = s.value(f"{self._prefix}/split")
-        if sizes:
-            try:
-                self.split.setSizes([int(v) for v in sizes])
-            except (TypeError, ValueError):
-                pass
+        lay.addWidget(self.plot, 1)
 
-        ws.runAdded.connect(lambda *_: self.refresh(autorange=True))
-        ws.runRemoved.connect(lambda *_: self.refresh())
-        ws.runChanged.connect(lambda *_: self.refresh())
-        ws.activeRunChanged.connect(lambda *_: self.refresh(autorange=detail))
-        ws.signalKeyChanged.connect(lambda *_: self.refresh(autorange=True))
+        ws.runAdded.connect(lambda *_: (self.sync_header(), self.refresh(autorange=True)))
+        ws.runRemoved.connect(lambda *_: (self.sync_header(), self.refresh()))
+        ws.runChanged.connect(lambda *_: (self.sync_header(), self.refresh()))
+        ws.activeRunChanged.connect(lambda *_: (self.sync_header(), self.refresh(fit=True)))
+        ws.panelsChanged.connect(self._panels_changed)
+        ws.signalKeyChanged.connect(lambda *_: (self.sync_header(), self.refresh_active()))
         ws.resultChanged.connect(self._on_result)
         ws.identsChanged.connect(lambda *_: self.refresh_labels())
-        ws.selectionChanged.connect(self._on_selection)
+        ws.selectionChanged.connect(lambda *_: self.refresh_active())
         ws.methodChanged.connect(lambda *_: self.refresh_events())
         ws.deconvChanged.connect(lambda *_: self.refresh_markers())
-        self._markers = None
-        self._update_dual()
+        self._key_shown = self.key
+        self.sync_header()
 
-    # -- dual view ---------------------------------------------------------------
+    # -- keys and time frames --------------------------------------------------------------
 
-    def dual_on(self) -> bool:
-        return self.dual.isChecked() and self.companion.available()
+    @property
+    def key(self) -> str:
+        return self.ws.panel_key(self.index)
 
-    def _dual_toggled(self, on):
-        QSettings().setValue(f"{self._prefix}/dual", on)
-        self._update_dual()
-        if on:
-            self.companion.refresh()
+    def run_key(self, st) -> str:
+        """The signal drawn for run ``st`` (the base trace when it cannot be blank-subtracted)."""
+        return self.ws.effective_key(st, self.key)
 
-    def _update_dual(self):
-        avail = self.companion.available()
-        self.dual.setVisible(avail)
-        on = avail and self.dual.isChecked()
-        self.companion.setVisible(on)
-        fid_primary = is_fid(self.ws.signal_key)
-        top, bottom = (self.plot, self.companion) if fid_primary else (self.companion, self.plot)
-        if self.split.indexOf(top) != 0:
-            self.split.insertWidget(0, top)
-        # only the lower pane carries the time axis
-        pi_top = top.getPlotItem() if top is self.plot else top.plot.getPlotItem()
-        pi_bottom = bottom.getPlotItem() if bottom is self.plot else bottom.plot.getPlotItem()
-        pi_bottom.showAxis("bottom")
-        if on:
-            pi_top.hideAxis("bottom")
-        else:
-            self.plot.getPlotItem().showAxis("bottom")
+    def frame_key(self) -> str:
+        """Chromatogram 1's signal sets the detector time of the shared axis."""
+        return self.ws.panel_key(0)
 
-    # -- transforms ---------------------------------------------------------
+    def shift(self, st) -> float:
+        """x offset of this panel's trace of run ``st`` on the shared axis."""
+        return frame_offset(self.frame_key(), self.key, st.delay_value) if st is not None else 0.0
 
-    def _transform(self, st, sig, rank: int, n: int, key: str | None = None) -> tuple[float, float]:
-        if self.detail:
-            return (1.0, 0.0)
-        key = key or self.ws.signal_key
+    def dx(self) -> float:
+        return self.shift(self.ws.active)
+
+    def tool_key(self) -> str:
+        return self.key
+
+    def is_table(self) -> bool:
+        return self.ws.table_panel == self.index
+
+    def selected_index(self) -> int:
+        """Index (in this panel's peaks of the active run) of the peak selected in the table."""
+        st = self.ws.active
+        p = self.ws.selected_peak()
+        if st is None or p is None:
+            return -1
+        if self.run_key(st) == self.ws.active_key:
+            return self.ws.selected
+        res = self.ws.result(st.id, self.key)
+        if res is None:
+            return -1
+        t = p.apex_rt + frame_offset(self.key, self.ws.active_key, st.delay_value)
+        hit = res.peak_at(t)
+        return res.peaks.index(hit) if hit is not None else -1
+
+    # -- header ------------------------------------------------------------------------------
+
+    def sync_header(self):
+        self._loading = True
+        keys = []
+        for st in self.ws.states():
+            for k in self.ws.signals_for(st):
+                if not is_derived(k) and k not in keys:
+                    keys.append(k)
+        cur = self.ws.panel_keys[self.index]
+        if cur not in keys:
+            keys.append(cur)
+        self.signal.clear()
+        self.signal.addItems(keys)
+        if any(st.run.ms is not None for st in self.ws.states()):
+            self.signal.addItem(EIC_ITEM)
+        self.signal.setCurrentText(cur)
+        self.blank.setChecked(self.ws.panel_blank[self.index])
+        self.blank.setEnabled(self.ws.panel_blank[self.index]
+                              or any(self.ws.blank_ids(st) for st in self.ws.states()))
+        theme.set_chip(self.table_chip, "▦ Peak table" if self.is_table() else "", "accent")
+        st = self.ws.active
+        note = ""
+        if st is not None and self.run_key(st) != self.key:
+            note = f"   (no blank for this run: {base_key(self.key)} shown)"
+        self.title.setText((st.name + note) if st is not None else "no chromatogram loaded")
+        self._loading = False
+
+    def _signal_picked(self, i):
+        if self._loading:
+            return
+        text = self.signal.itemText(i)
+        if text == EIC_ITEM:
+            text = self.ask_eic()
+            if not text:
+                self.sync_header()
+                return
+        self.set_signal(text)
+
+    def set_signal(self, key: str) -> None:
+        """Show ``key`` (base signal; the blank switch stays as it is)."""
+        self.ws.set_panel(self.index, key=base_key(key))
+
+    def ask_eic(self) -> str:
+        import re
+        val, ok = QInputDialog.getText(self, "Extracted ion chromatogram", "m/z (several: summed, e.g. 149, 57):")
+        masses = [float(v) for v in re.findall(r"\d+(?:\.\d+)?", val)] if ok else []
+        if not masses:
+            return ""
+        from gcws.core.model import eic_key
+        key = eic_key(masses)
+        for st in self.ws.states():
+            st.run.signal(key)                 # compute and cache so it is listed
+        return key
+
+    def _blank_toggled(self, on):
+        if self._loading:
+            return
+        self.ws.set_panel(self.index, blank=on)
+        if on and not any(self.run_key(st) == self.key for st in self.ws.states()):
+            self.ws.message.emit("No blank assigned to the loaded chromatograms (Quantify > Assign blanks)")
+
+    def _panels_changed(self):
+        self.sync_header()
+        changed = self.key != self._key_shown
+        self._key_shown = self.key
+        self.refresh(fit=changed)
+        self.set_ms_regions(self._ms_regions_ms)
+
+    # -- transforms -----------------------------------------------------------------------------
+
+    def _transform(self, st, sig, rank: int, n: int, key: str) -> tuple[float, float]:
         sc, off = 1.0, 0.0
         if self.norm.isChecked():
             m = self.ws.method_for(st, key)
@@ -197,35 +323,37 @@ class ChromPlot(QWidget):
             sc = 100.0 / max(top - base, 1e-12)
             off = -base * sc
         if self.stack.isChecked() and n > 1:
-            span = 100.0 if self.norm.isChecked() else self._span(key)
+            span = 100.0 if self.norm.isChecked() else self._span()
             off += rank * 0.12 * span
         return (sc, off)
 
-    def _span(self, key: str | None = None) -> float:
-        key = key or self.ws.signal_key
+    def _span(self) -> float:
         spans = []
         for st in self.ws.states():
-            s = st.run.signal(self.ws.effective_key(st, key))
+            s = st.run.signal(self.run_key(st))
             if s is not None and s.n:
                 spans.append(float(np.percentile(s.y, 99.5) - np.percentile(s.y, 1)))
         return max(spans) if spans else 1.0
 
-    # -- drawing -------------------------------------------------------------
+    # -- drawing -------------------------------------------------------------------------------
 
-    def refresh(self, *_, autorange: bool = False):
-        key = self.ws.signal_key
+    def visible_states(self):
         active = self.ws.active
-        states = [active] if (self.detail and active) else self.ws.states()
-        if not self.detail and not self.others.isChecked():
-            states = [active] if active else []
+        states = self.ws.states() if self.others.isChecked() else ([active] if active else [])
+        return [s for s in states if s is not None and (s.visible or s is active)]
+
+    def refresh(self, *_, autorange: bool = False, fit: bool = False):
+        active = self.ws.active
         shown = set()
-        visible_states = [s for s in states if s is not None and (s.visible or s is active)]
-        n = len(visible_states)
-        for rank, st in enumerate(visible_states):
-            sig = st.run.signal(self.ws.effective_key(st, key))
+        visible = self.visible_states()
+        n = len(visible)
+        self.vb.transform = (1.0, 0.0)
+        for rank, st in enumerate(visible):
+            k = self.run_key(st)
+            sig = st.run.signal(k)
             if sig is None:
                 continue
-            sc, off = self._transform(st, sig, rank, n)
+            sc, off = self._transform(st, sig, rank, n, k)
             is_active = active is not None and st.id == active.id
             curve = self.curves.get(st.id)
             if curve is None:
@@ -234,7 +362,7 @@ class ChromPlot(QWidget):
                 curve.setClipToView(True)
                 self.vb.addItem(curve)
                 self.curves[st.id] = curve
-            curve.setData(sig.rt, sig.y * sc + off)
+            curve.setData(sig.rt + self.shift(st), sig.y * sc + off)
             curve.setPen(_pen(st.color, 1.8 if is_active else 1.0, 255 if is_active else 150))
             curve.setZValue(10 if is_active else 1)
             if is_active:
@@ -245,90 +373,49 @@ class ChromPlot(QWidget):
                 self.vb.removeItem(self.curves.pop(rid))
         self.refresh_active()
         self.refresh_events()
-        self._update_dual()
-        if self.dual_on():
-            self.companion.refresh()
+        self.refresh_markers()
         if autorange:
             self.default_view()
-        self.refresh_markers()
-        name = active.name if active else "no chromatogram loaded"
-        self.title.setText(f"{key}  -  {name}" if active else name)
+        elif fit:
+            self.fit_y()
 
     def _on_result(self, run_id: str, key: str):
-        if self.ws.active_id != run_id:
+        st = self.ws.active
+        if st is None or run_id != st.id:
             return
-        if key == self.ws.signal_key:
+        if key in (self.key, self.run_key(st)):
             self.refresh_active()
             self.refresh_events()
-        if self.dual_on() and key == self.companion.key:
-            self.companion.refresh_peaks()
-
-    def refresh_markers(self):
-        """Triangles at deconvoluted components that have no integrated peak (whole-run deconvolution)."""
-        for vb in (self.vb, self.companion.vb):
-            if self._markers is not None and self._markers.getViewBox() is vb:
-                vb.removeItem(self._markers)
-        self._markers = None
-        st = self.ws.active
-        if st is None or st.run.ms is None or self.detail:
-            return
-        from gcws.ms import deconv_cache as DC
-        comps = DC.hidden_components(self.ws, st, self.ws.signal_key, DC.settings_of(self.ws))
-        if not comps:
-            return
-        on_companion = self.dual_on() and is_fid(self.ws.signal_key)
-        vb = self.companion.vb if on_companion else self.vb
-        curves = self.companion.curves if on_companion else self.curves
-        curve = curves.get(st.id)
-        if curve is None:
-            return
-        xs, ys = curve.xData, curve.yData
-        if xs is None or len(xs) < 2:
-            return
-        shift = st.delay_value if is_fid(self.ws.signal_key) else 0.0
-        spots = []
-        for c in comps:
-            x = c.rt + shift
-            y = float(np.interp(x, xs, ys))
-            spots.append({"pos": (x, y), "data": c, "symbol": "t", "size": 11,
-                          "brush": pg.mkBrush(theme.qcolor(theme.WARN, 200)), "pen": pg.mkPen("w", width=0.8)})
-        tip = (lambda x, y, data: f"Deconvoluted component without a peak\n{data.rt:.3f} min (MS), model m/z "
-               f"{data.model_mz}, quality {data.quality:.0f}\nclick: its spectrum")
-        self._markers = pg.ScatterPlotItem(spots=spots, hoverable=True, tip=tip)
-        self._markers.setZValue(30)
-        self._markers.sigClicked.connect(lambda _item, pts, _ev: pts and self.componentClicked.emit(
-            st.id, pts[0].data()))
-        vb.addItem(self._markers, ignoreBounds=True)
-
-    def _on_selection(self, run_id: str, index: int):
-        self.refresh_active()
-        if self.dual_on():
-            self.companion.refresh_peaks()
-        if self.detail:
-            self.zoom_to_selected()
+        elif key == self.ws.active_key:
+            self.refresh_active()            # the selection maps onto the table's peaks
 
     def refresh_active(self):
         st = self.ws.active
-        res = self.ws.active_result() if st else None
-        sig = st.run.signal(self.ws.effective_key(st)) if st else None
-        if st is None or sig is None or res is None:
+        k = self.run_key(st) if st is not None else self.key
+        res = self.ws.result(st.id, k) if st is not None else None
+        sig = st.run.signal(k) if st is not None else None
+        if st is None or sig is None or res is None or st.id not in self.curves:
             self.peaks.set_data(np.zeros(0), np.zeros(0), [], "#000")
             self.labels.set_labels([])
             return
-        muted = self.ws.blank_level_peaks(st.id) if hasattr(self.ws, "blank_level_peaks") else set()
-        self.peaks.set_data(sig.rt, sig.y, res.peaks, st.color, self.ws.selected, self.vb.transform, muted=muted)
+        muted = self.ws.blank_level_peaks(st.id, k)
+        self.peaks.set_data(sig.rt, sig.y, res.peaks, st.color, self.selected_index(), self.vb.transform,
+                            dx=self.shift(st), muted=muted)
         self.refresh_labels()
 
     def refresh_labels(self, *_):
         st = self.ws.active
-        res = self.ws.active_result() if st else None
+        k = self.run_key(st) if st is not None else self.key
+        res = self.ws.result(st.id, k) if st is not None else None
         mode = self.label_mode.currentIndex()
-        if st is None or res is None or mode == 3:
+        if st is None or res is None or mode == 3 or st.id not in self.curves:
             self.labels.set_labels([])
             return
-        sig = st.run.signal(self.ws.effective_key(st))
+        sig = st.run.signal(k)
         sc, off = self.vb.transform
-        idents, _ = st.ident_set(self.ws.signal_key).bind(res.peaks)
+        dx = self.shift(st)
+        idents, _ = st.ident_set(k).bind(res.peaks)
+        sel = self.selected_index()
         out = []
         for i, p in enumerate(res.peaks):
             y = float(np.interp(p.apex_rt, sig.rt, sig.y)) * sc + off
@@ -339,7 +426,7 @@ class ChromPlot(QWidget):
             else:
                 ident = idents.get(i)
                 text = ident.name[:28] if ident and ident.name else f"{p.apex_rt:.3f}"
-            out.append((p.apex_rt, y, text, i == self.ws.selected))
+            out.append((p.apex_rt + dx, y, text, i == sel))
         self.labels.set_labels(out)
 
     def refresh_events(self):
@@ -349,51 +436,84 @@ class ChromPlot(QWidget):
         st = self.ws.active
         if st is None:
             return
-        sig = st.run.signal(self.ws.effective_key(st))
+        k = self.run_key(st)
+        sig = st.run.signal(k)
         if sig is None:
             return
-        m = self.ws.method_for(st, self.ws.signal_key)
+        dx = self.shift(st)
+        m = self.ws.method_for(st, k)
         off_start = None
         for e in m.events():
             if e.kind == EventKind.INTEGRATOR_OFF:
                 off_start = e.time
                 continue
             if e.kind == EventKind.INTEGRATOR_ON and off_start is not None:
-                reg = pg.LinearRegionItem((off_start, e.time), movable=False,
+                reg = pg.LinearRegionItem((off_start + dx, e.time + dx), movable=False,
                                           brush=pg.mkBrush(*theme.PLOT["off_region"]), pen=pg.mkPen(None))
                 reg.setZValue(-10)
                 self.vb.addItem(reg, ignoreBounds=True)
                 self.regions.append(reg)
                 off_start = None
                 continue
-            line = pg.InfiniteLine(e.time, angle=90, movable=False,
+            line = pg.InfiniteLine(e.time + dx, angle=90, movable=False,
                                    pen=_pen(theme.PLOT["event"], 1, 140, Qt.DashLine),
                                    label=e.kind.value, labelOpts={"position": 0.95, "color": theme.PLOT["event"],
                                                                   "rotateAxis": (1, 0), "anchors": [(0, 0), (0, 0)]})
             self.vb.addItem(line, ignoreBounds=True)
             self.event_lines.append(line)
         if off_start is not None:
-            reg = pg.LinearRegionItem((off_start, float(sig.rt[-1])), movable=False,
+            reg = pg.LinearRegionItem((off_start + dx, float(sig.rt[-1]) + dx), movable=False,
                                       brush=pg.mkBrush(*theme.PLOT["off_region"]), pen=pg.mkPen(None))
             self.vb.addItem(reg, ignoreBounds=True)
             self.regions.append(reg)
 
-    # -- spectra --------------------------------------------------------------
+    def refresh_markers(self):
+        """Triangles at deconvoluted components that have no integrated peak in the table's
+        signal (after a whole-run deconvolution); drawn on the panel(s) showing an MS trace."""
+        if self._markers is not None:
+            self.vb.removeItem(self._markers)
+        self._markers = None
+        st = self.ws.active
+        if st is None or st.run.ms is None:
+            return
+        other = self.ws.panel_key(1 - self.index)
+        if is_fid(self.key) and not (self.index == 0 and is_fid(other)):
+            return
+        from gcws.ms import deconv_cache as DC
+        comps = DC.hidden_components(self.ws, st, self.ws.signal_key, DC.settings_of(self.ws))
+        curve = self.curves.get(st.id)
+        if not comps or curve is None:
+            return
+        xs, ys = curve.xData, curve.yData
+        if xs is None or len(xs) < 2:
+            return
+        shift = frame_offset(self.frame_key(), "TIC", st.delay_value)       # components are in MS time
+        spots = []
+        for c in comps:
+            x = c.rt + shift
+            spots.append({"pos": (x, float(np.interp(x, xs, ys))), "data": c, "symbol": "t", "size": 11,
+                          "brush": pg.mkBrush(theme.qcolor(theme.WARN, 200)), "pen": pg.mkPen("w", width=0.8)})
+        tip = (lambda x, y, data: f"Deconvoluted component without a peak\n{data.rt:.3f} min (MS), model m/z "
+               f"{data.model_mz}, quality {data.quality:.0f}\nclick: its spectrum")
+        self._markers = pg.ScatterPlotItem(spots=spots, hoverable=True, tip=tip)
+        self._markers.setZValue(30)
+        self._markers.sigClicked.connect(lambda _item, pts, _ev: pts and self.componentClicked.emit(
+            st.id, pts[0].data()))
+        self.vb.addItem(self._markers, ignoreBounds=True)
+
+    # -- spectra ---------------------------------------------------------------------------------
 
     def _spectrum_request(self, t0, t1, bg, xy):
-        """Right-click / right-drag in this plot -> spectrum request in MS time."""
+        """Right-click / right-drag in this panel -> spectrum request in MS time."""
         rid = nearest_curve(self.vb, self.curves, *xy, self.ws.active_id) if xy is not None else self.ws.active_id
         st = self.ws.runs.get(rid) if rid else None
         if st is None or st.run.ms is None:
             self.ws.message.emit("No MS data for a spectrum here")
             return
-        key, d = self.ws.signal_key, st.delay_value
-        conv = lambda t: None if t is None else to_ms(t, key, d)
+        frame, d = self.frame_key(), st.delay_value
+        conv = lambda t: None if t is None else to_ms(t, frame, d)
         bg_ms = (conv(bg[0]), conv(bg[1])) if bg is not None else None
         self.spectrumRequested.emit(ScanRequest(st.id, conv(t0), conv(t1), bg_ms))
-
-    def _run_at(self, x: float, y: float):
-        return nearest_curve(self.vb, self.curves, x, y, self.ws.active_id)
 
     def set_ms_regions(self, regions):
         """Shaded apex/background scan ranges: [(t0, t1, colour)] on the MS time axis."""
@@ -403,94 +523,106 @@ class ChromPlot(QWidget):
         self.ms_regions = []
         st = self.ws.active
         d = st.delay_value if st is not None else 0.0
-        key = self.ws.signal_key
-        mapped = []
+        frame = self.frame_key()
         for t0, t1, color in regions:
-            t0, t1 = from_ms(t0, key, d), from_ms(t1, key, d)
-            mapped.append((t0, t1, color))
             c = QColor(color)
-            reg = pg.LinearRegionItem((t0, t1), movable=False, brush=pg.mkBrush(c.red(), c.green(), c.blue(), 45),
-                                      pen=pg.mkPen(None))
+            reg = pg.LinearRegionItem((from_ms(t0, frame, d), from_ms(t1, frame, d)), movable=False,
+                                      brush=pg.mkBrush(c.red(), c.green(), c.blue(), 45), pen=pg.mkPen(None))
             reg.setZValue(-5)
             self.vb.addItem(reg, ignoreBounds=True)
             self.ms_regions.append(reg)
-        self.companion.set_regions(mapped)
 
-    # -- view --------------------------------------------------------------------
+    # -- view ------------------------------------------------------------------------------------
+
+    def data_x_range(self):
+        st = self.ws.active
+        sig = st.run.signal(self.run_key(st)) if st is not None else None
+        if sig is None or sig.n < 2:
+            return None
+        dx = self.shift(st)
+        return float(sig.rt[0]) + dx, float(sig.rt[-1]) + dx
+
+    def _t_from(self):
+        """Start of the integrated part on the shared axis (the solvent front is left out of the y fit)."""
+        st = self.ws.active
+        sig = st.run.signal(self.run_key(st)) if st is not None else None
+        if sig is None:
+            return None
+        from gcws.integration.autoparams import _integration_start
+        t = _integration_start(sig.rt, self.ws.method_for(st, self.run_key(st)))
+        return t + self.shift(st) if t is not None else None
+
+    def fit_y(self):
+        """y range from the visible part after the integration start."""
+        (x0, x1), _ = self.vb.viewRange()
+        t_from = self._t_from()
+        lo = hi = None
+        for curve in self.curves.values():
+            xs, ys = curve.getData()
+            if xs is None or len(xs) == 0:
+                continue
+            m = (xs >= x0) & (xs <= x1)
+            if t_from is not None and (xs[m] >= t_from).any():
+                m &= xs >= t_from
+            if not m.any():
+                continue
+            a, b = float(np.min(ys[m])), float(np.max(ys[m]))
+            lo = a if lo is None else min(lo, a)
+            hi = b if hi is None else max(hi, b)
+        if lo is None:
+            return
+        pad = 0.06 * (hi - lo or 1.0)
+        self.vb.setYRange(lo - pad, hi + pad, padding=0)
+
+    def linked_x_changed(self):
+        """The other panel moved the shared time axis: fit this panel's intensity to it."""
+        self._fit.start()
 
     def default_view(self):
-        """Whole run on x; y scaled to the integrated part (the solvent front is
-        usually far higher than everything the analyst works on)."""
-        if self.detail and self.ws.selected_peak() is not None:
-            self.zoom_to_selected()
-            return
-        st = self.ws.active
-        sig = st.run.signal(self.ws.effective_key(st)) if st else None
-        if sig is None or sig.n < 2:
+        """Whole run on x; y fitted to the integrated part."""
+        xr = self.data_x_range()
+        if xr is None:
             self.vb.enableAutoRange()
             return
-        from gcws.integration.autoparams import _integration_start
-        t_from = _integration_start(sig.rt, self.ws.method_for(st, self.ws.signal_key))
-        lo_y, hi_y = None, None
-        for rid, curve in self.curves.items():
-            x, y = curve.getData()
-            if x is None or len(x) == 0:
-                continue
-            sel = y[x >= (t_from or x[0])] if t_from else y
-            if sel.size == 0:
-                continue
-            a, b = float(np.min(sel)), float(np.max(sel))
-            lo_y = a if lo_y is None else min(lo_y, a)
-            hi_y = b if hi_y is None else max(hi_y, b)
-        if lo_y is None:
-            self.vb.enableAutoRange()
-            return
-        pad = 0.05 * (hi_y - lo_y or 1.0)
-        self.vb.setRange(xRange=(float(sig.rt[0]), float(sig.rt[-1])), yRange=(lo_y - pad, hi_y + pad),
-                         padding=0)
-        if self.dual_on():
-            self.companion.fit_y()
+        self.vb.setXRange(*xr, padding=0)
+        self.fit_y()
 
     def zoom_to_selected(self):
+        """Zoom the shared axis to the table's selected peak (with some room around it)."""
         p = self.ws.selected_peak()
         st = self.ws.active
         if p is None or st is None:
             return
-        sig = st.run.signal(self.ws.effective_key(st))
+        off = frame_offset(self.frame_key(), self.ws.active_key, st.delay_value)
         w = max(p.end - p.start, 0.02)
-        t0, t1 = p.start - 1.5 * w, p.end + 1.5 * w
-        sl = sig.window(t0, t1)
-        if sl.stop - sl.start < 2:
-            return
-        seg = sig.y[sl]
-        lo, hi = float(min(seg.min(), p.baseline.y0, p.baseline.y1)), float(seg.max())
-        pad = 0.08 * (hi - lo or 1.0)
-        self.vb.setRange(xRange=(t0, t1), yRange=(lo - pad, hi + pad), padding=0)
+        self.vb.setXRange(p.start - 1.5 * w + off, p.end + 1.5 * w + off, padding=0)
+        self.fit_y()
 
     def zoom_to(self, t0, t1):
         self.vb.setXRange(t0, t1, padding=0.02)
 
-    # -- cursor -------------------------------------------------------------------
+    # -- cursor ------------------------------------------------------------------------------------
 
     def _mouse_moved(self, pos):
         if not self.plot.sceneBoundingRect().contains(pos):
             return
-        self.set_cursor(self.vb.mapSceneToView(pos).x())
+        x = self.vb.mapSceneToView(pos).x()
+        self.set_cursor(x)
+        self.cursorMoved.emit(x)
 
     def set_cursor(self, x: float):
-        """Cursor line at time ``x`` (primary axis) in both panes, with a readout."""
+        """Cursor line at ``x`` (shared axis) with this trace's own time and value."""
         self.cursor.setPos(x)
-        self.companion.set_cursor(x)
         st = self.ws.active
-        key = self.ws.signal_key
-        txt = f"{x:.3f} min"
+        dx = self.dx()
+        t = x - dx
+        txt = f"{t:.3f} min"
+        if dx:
+            txt += f"  ({'FID' if is_fid(self.key) else 'MS'} time)"
         if st is not None:
-            if self.dual_on():
-                other = "MS" if is_fid(key) else "FID"
-                txt += f"  ({other} {x - self.companion.shift(st):.3f})"
-            sig = st.run.signal(self.ws.effective_key(st, key))
-            if sig is not None and sig.rt[0] <= x <= sig.rt[-1]:
-                txt += f"   {np.interp(x, sig.rt, sig.y):.4g}"
+            sig = st.run.signal(self.run_key(st))
+            if sig is not None and sig.rt[0] <= t <= sig.rt[-1]:
+                txt += f"   {np.interp(t, sig.rt, sig.y):.4g}"
         self.cursor_label.setText(txt)
         vr = self.vb.viewRange()
         self.cursor_label.setPos(x, vr[1][1])
