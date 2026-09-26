@@ -205,7 +205,7 @@ class ChromPlot(QWidget):
         key = key or self.ws.signal_key
         spans = []
         for st in self.ws.states():
-            s = st.run.signal(key)
+            s = st.run.signal(self.ws.effective_key(st, key))
             if s is not None and s.n:
                 spans.append(float(np.percentile(s.y, 99.5) - np.percentile(s.y, 1)))
         return max(spans) if spans else 1.0
@@ -222,7 +222,7 @@ class ChromPlot(QWidget):
         visible_states = [s for s in states if s is not None and (s.visible or s is active)]
         n = len(visible_states)
         for rank, st in enumerate(visible_states):
-            sig = st.run.signal(key)
+            sig = st.run.signal(self.ws.effective_key(st, key))
             if sig is None:
                 continue
             sc, off = self._transform(st, sig, rank, n)
@@ -310,7 +310,7 @@ class ChromPlot(QWidget):
     def refresh_active(self):
         st = self.ws.active
         res = self.ws.active_result() if st else None
-        sig = st.run.signal(self.ws.signal_key) if st else None
+        sig = st.run.signal(self.ws.effective_key(st)) if st else None
         if st is None or sig is None or res is None:
             self.peaks.set_data(np.zeros(0), np.zeros(0), [], "#000")
             self.labels.set_labels([])
@@ -326,7 +326,7 @@ class ChromPlot(QWidget):
         if st is None or res is None or mode == 3:
             self.labels.set_labels([])
             return
-        sig = st.run.signal(self.ws.signal_key)
+        sig = st.run.signal(self.ws.effective_key(st))
         sc, off = self.vb.transform
         idents, _ = st.ident_set(self.ws.signal_key).bind(res.peaks)
         out = []
@@ -349,7 +349,7 @@ class ChromPlot(QWidget):
         st = self.ws.active
         if st is None:
             return
-        sig = st.run.signal(self.ws.signal_key)
+        sig = st.run.signal(self.ws.effective_key(st))
         if sig is None:
             return
         m = self.ws.method_for(st, self.ws.signal_key)
@@ -425,7 +425,7 @@ class ChromPlot(QWidget):
             self.zoom_to_selected()
             return
         st = self.ws.active
-        sig = st.run.signal(self.ws.signal_key) if st else None
+        sig = st.run.signal(self.ws.effective_key(st)) if st else None
         if sig is None or sig.n < 2:
             self.vb.enableAutoRange()
             return
@@ -456,7 +456,7 @@ class ChromPlot(QWidget):
         st = self.ws.active
         if p is None or st is None:
             return
-        sig = st.run.signal(self.ws.signal_key)
+        sig = st.run.signal(self.ws.effective_key(st))
         w = max(p.end - p.start, 0.02)
         t0, t1 = p.start - 1.5 * w, p.end + 1.5 * w
         sl = sig.window(t0, t1)
@@ -488,7 +488,7 @@ class ChromPlot(QWidget):
             if self.dual_on():
                 other = "MS" if is_fid(key) else "FID"
                 txt += f"  ({other} {x - self.companion.shift(st):.3f})"
-            sig = st.run.signal(key)
+            sig = st.run.signal(self.ws.effective_key(st, key))
             if sig is not None and sig.rt[0] <= x <= sig.rt[-1]:
                 txt += f"   {np.interp(x, sig.rt, sig.y):.4g}"
         self.cursor_label.setText(txt)

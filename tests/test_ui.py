@@ -272,6 +272,45 @@ def test_double_determination_from_tab_menu(qtbot, win, samples):
     assert ws.active_id == a and ws.selected >= 0
 
 
+def test_blank_key_keeps_peak_list(qtbot, win, samples):
+    """'FID - Blank' on a run that has no plain Blank (the blank itself, a Blank+ISTD) must still list peaks."""
+    from gcws.core.keys import is_derived
+    _load(qtbot, win, samples, ["06_", "07_", "08_"])
+    ws = win.ws
+    sample = next(s for s in ws.states() if s.name.startswith("07_"))
+    ws.set_active(sample.id)
+    ws.set_signal_key("FID - Blank")
+    assert win.table.model.rowCount() > 0
+    # quantification columns are filled on the blank-subtracted trace (mapped to the FID peaks by RT)
+    ws.recompute_quant()
+    win.table.reload()
+    assert any(r.quant.get("corr_area") for r in win.table.model.rows)
+    # "In blank" on the subtracted trace comes from the matching FID peak
+    assert ws.blank_matches(sample.id)
+    for prefix in ("08_", "06_"):
+        other = next(s for s in ws.states() if s.name.startswith(prefix))
+        ws.set_active(other.id)
+        assert win.table.model.rowCount() > 0, prefix
+        assert not is_derived(ws.effective_key(other, "FID - Blank"))
+        assert "not available" in win.table.banner.text()
+    ws.set_active(sample.id)
+    assert win.table.banner.isHidden()
+
+
+def test_derived_trace_follows_base_reintegration(qtbot, win, samples):
+    from gcws.core.events import ManualEvent, ManualKind as K
+    _load(qtbot, win, samples, ["07_", "08_"])
+    ws = win.ws
+    sample = next(s for s in ws.states() if s.name.startswith("07_"))
+    ws.set_active(sample.id)
+    before = ws.result(sample.id, "FID - Blank")
+    assert before is not None
+    # a manual change of the plain FID integration re-derives the blank-subtracted trace
+    from gcws.ui.undo import add_event
+    sample.undo.push(add_event(ws, sample.id, "FID", ManualEvent(K.ADD_PEAK, 30.0, 30.2), ""))
+    assert ws.result(sample.id, "FID - Blank") is not before
+
+
 def test_blank_subtraction_toggle_and_project(qtbot, win, samples, tmp_path):
     _load(qtbot, win, samples, ["07_", "08_"])
     ws = win.ws

@@ -112,7 +112,7 @@ class PropertiesDock(QScrollArea):
             self.delay_est.setText("no MS or FID signal" if run.ms is None or run.fid is None else "-")
         self.delay_override.setChecked(st.delay_override is not None)
         self.delay_spin.setValue(st.delay_value)
-        res = st.results.get(self.ws.signal_key)
+        res = st.results.get(self.ws.effective_key(st))
         if res is not None:
             r = res.resolved
             self.noise.setText(f"σ {r.noise.sigma:.4g}, peak-to-peak {r.noise.pp:.4g} "

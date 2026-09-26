@@ -61,7 +61,7 @@ class SetMethodCommand(QUndoCommand):
             st = self.ws.runs.get(rid)
             if st is None:
                 continue
-            before = _summary(st.results.get(self.ws.signal_key))
+            before = _summary(st.results.get(self.ws.effective_key(st)))
             m = getter(rid)
             st.methods[self.kind] = m.copy() if m is not None else self.ws.methods.get(
                 self.ws.methods.default_name(self.kind))
@@ -70,7 +70,7 @@ class SetMethodCommand(QUndoCommand):
                     self.ws.integrate(rid, key)
             self.ws.methodChanged.emit(rid)
             self.ws.log(label, st.name, f"{self.kind}: {st.methods[self.kind].name}",
-                        before, _summary(st.results.get(self.ws.signal_key)))
+                        before, _summary(st.results.get(self.ws.effective_key(st))))
 
     def redo(self):
         self._apply(lambda rid: self.new, "Integration method applied")

@@ -566,7 +566,7 @@ class MainWindow(QMainWindow):
             reason, ok = QInputDialog.getText(self, "Reason", f"Reason for: {event.describe()}")
             if not ok:
                 return
-        st.undo.push(add_event(self.ws, st.id, self.ws.signal_key, event, reason))
+        st.undo.push(add_event(self.ws, st.id, self.ws.active_key, event, reason))
         if self.tools.tool not in ("select", "pan") and not QSettings().value("prefs/sticky_tools", True, type=bool):
             self.tools.set_tool("select")
 

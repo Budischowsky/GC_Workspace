@@ -96,6 +96,9 @@ class PeakTable(QWidget):
         self.filter.textChanged.connect(self.proxy.setFilterFixedString)
         self.info = QLabel()
         self.info.setObjectName("hint")
+        from gcws.ui import theme
+        self.banner = theme.chip("", "warn")          # the working signal is not available for this run
+        self.banner.setWordWrap(True)
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
         top.addWidget(tb)
@@ -106,6 +109,7 @@ class PeakTable(QWidget):
         lay.setContentsMargins(2, 2, 2, 2)
         lay.setSpacing(2)
         lay.addLayout(top)
+        lay.addWidget(self.banner)
         lay.addWidget(self.view, 1)
 
         copy = QAction("Copy", self.view)
@@ -130,13 +134,15 @@ class PeakTable(QWidget):
         st = self.ws.active
         if st is None:
             return
-        if (run_id == st.id and key == self.ws.signal_key) or run_id in st.blanks + st.blanks_istd:
+        if (run_id == st.id and key in (self.ws.signal_key, self.ws.active_key))                 or run_id in st.blanks + st.blanks_istd:
             self.reload()
 
     def reload(self):
         self._syncing = True
         self.model.reload()
         self._syncing = False
+        from gcws.ui import theme
+        theme.set_chip(self.banner, self.ws.derived_note(self.ws.active), "warn")
         self.proxy.invalidateFilter()
         self._update_info()
         self._on_selection(self.ws.active_id, self.ws.selected)

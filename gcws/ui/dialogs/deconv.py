@@ -50,7 +50,7 @@ class DeconvolutionDialog(QDialog):
         self.ws = win.ws
         self.st = self.ws.active
         self.peak = self.ws.selected_peak()
-        self.key = self.ws.signal_key
+        self.key = self.ws.active_key
         self.comps: list = []
         self._interps: list = []
         self.result = None

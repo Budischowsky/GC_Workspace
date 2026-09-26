@@ -57,7 +57,7 @@ class ToolController(QObject):
         st = self.ws.active
         if st is None:
             return None, None, None
-        sig = st.run.signal(self.ws.signal_key)
+        sig = st.run.signal(self.ws.active_key)
         res = self.ws.result(st.id)
         return st, sig, res
 

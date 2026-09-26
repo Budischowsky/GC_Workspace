@@ -206,6 +206,40 @@ class Workspace(QObject):
             self.undo_group.setActiveStack(st.undo)
         self.activeRunChanged.emit(run_id or "")
 
+    def effective_key(self, st: Optional[RunState], key: Optional[str] = None) -> str:
+        """``key`` for run ``st``, or its base key when ``st`` cannot build that derived trace
+        (e.g. "FID - Blank" on a blank run or on a sample without an assigned Blank)."""
+        key = key or self.signal_key
+        if st is None or not is_derived(key):
+            return key
+        return key if st.run.signal(key) is not None else base_key(key)
+
+    @property
+    def active_key(self) -> str:
+        """The working signal of the active run (see :meth:`effective_key`)."""
+        return self.effective_key(self.active, self.signal_key)
+
+    def derived_note(self, st: Optional[RunState], key: Optional[str] = None) -> str:
+        """Why ``st`` shows the base trace instead of ``key`` ("" when it does not)."""
+        key = key or self.signal_key
+        if st is None or not is_derived(key) or self.effective_key(st, key) == key:
+            return ""
+        base = base_key(key)
+        if st.role in (sequence.BLANK, sequence.BLANK_ISTD, sequence.LADDER):
+            reason = f"it is a {sequence.ROLE_LABELS.get(st.role, st.role)} run itself"
+        elif not self.blank_ids(st):
+            src = self.blank_options().source
+            if st.blanks_istd and src == "blank":
+                reason = ("only a Blank + ISTD is assigned, and it is not subtracted "
+                          "(Quantify > Blank subtraction settings: source)")
+            elif st.blanks and src == "blank_istd":
+                reason = "only a Blank is assigned, but the subtraction source is Blank + ISTD"
+            else:
+                reason = "no blank assigned (Quantify > Assign blanks)"
+        else:
+            reason = f"its blank has no {base} trace"
+        return f"{key} not available for {st.name}: {reason}. Showing {base}."
+
     def set_signal_key(self, key: str) -> None:
         key = key.strip()
         if not key or key == self.signal_key:
@@ -249,6 +283,7 @@ class Workspace(QObject):
         res = integrate(sig, self._derived_method(st, key, sig) if is_derived(key) else self.method_for(st, key),
                         st.events(key))
         st.results[key] = res
+        stale = [] if is_derived(key) else self._drop_derived_of(run_id, key)
         if key == FID and st.run.ms is not None and st.delay is not None and st.delay_override is None:
             tic = st.results.get(TIC)
             if tic is not None:
@@ -256,7 +291,26 @@ class Workspace(QObject):
                                              [p.apex_rt for p in tic.peaks])
         if emit:
             self.resultChanged.emit(run_id, key)
+            for rid, dk in stale:
+                self.resultChanged.emit(rid, dk)
         return res
+
+    def _drop_derived_of(self, run_id: str, base: str) -> list[tuple[str, str]]:
+        """A new integration of ``base`` in ``run_id`` changes the blank-subtracted traces built on
+        it: the run's own and those of the samples using it as blank. They are dropped and rebuilt
+        on the next access; returns ``[(run id, derived key)]`` that had a result."""
+        dk = derived_key(base)
+        out = []
+        for st in self.states():
+            if st.id != run_id and run_id not in self.blank_ids(st):
+                continue
+            st.run.drop_derived(dk)
+            st.blank_alignment.pop(base, None)
+            if st.results.pop(dk, None) is not None:
+                out.append((st.id, dk))
+            self._blank_matches = {k: v for k, v in self._blank_matches.items()
+                                   if not (k[0] == st.id and k[1] == dk)}
+        return out
 
     def _derived_method(self, st: RunState, key: str, sig) -> IntegrationMethod:
         """The method for a derived trace, with the automatic parameters that were determined on
@@ -278,10 +332,12 @@ class Workspace(QObject):
         return m
 
     def result(self, run_id: str, key: Optional[str] = None) -> Optional[IntegrationResult]:
+        """Integration of ``key`` (default: the working signal); a derived key the run cannot
+        build falls back to its base key (see :meth:`effective_key`)."""
         st = self.runs.get(run_id)
         if st is None:
             return None
-        key = key or self.signal_key
+        key = self.effective_key(st, key or self.signal_key)
         if key not in st.results and st.run.signal(key) is not None:
             self.integrate(run_id, key, emit=False)
         return st.results.get(key)
@@ -309,11 +365,42 @@ class Workspace(QObject):
         self.quant_result = compute(self)
         self.quantChanged.emit()
 
-    def quant_rows(self, run_id: str) -> dict:
-        # NIAS quantification is computed on the raw FID only (derived traces get none)
-        if self.signal_key != FID or self.quant_result is None:
+    def quant_rows(self, run_id: str, key: Optional[str] = None) -> dict:
+        """``{peak index: quantification values}`` of ``key``'s peaks (default: working signal).
+
+        The quantification is computed on the raw FID. A blank-subtracted FID trace shows the
+        values of the FID peak with the nearest apex (one-to-one, within the RT tolerance);
+        MS traces get none."""
+        st = self.runs.get(run_id)
+        key = self.effective_key(st, key or self.signal_key)
+        if self.quant_result is None or st is None or not is_fid(key):
             return {}
-        return self.quant_result.rows.get(run_id, {})
+        rows = self.quant_result.rows.get(run_id, {})
+        if key == FID or not rows:
+            return rows
+        res, base = self.result(run_id, key), self.result(run_id, FID)
+        if res is None or base is None:
+            return {}
+        from gcws.quant.nias_bridge import make_settings
+        tol = float(getattr(make_settings(self.quant.get("settings")), "rt_tolerance", 0.035) or 0.035)
+        pairs = sorted((abs(p.apex_rt - q.apex_rt), i, j) for i, p in enumerate(res.peaks)
+                       for j, q in enumerate(base.peaks) if abs(p.apex_rt - q.apex_rt) <= tol and j in rows)
+        out, used = {}, set()
+        for _d, i, j in pairs:
+            if i not in out and j not in used:
+                out[i] = rows[j]
+                used.add(j)
+        return out
+
+    def base_peak_index(self, run_id: str, key: str, index: int) -> int:
+        """Index of the base-trace peak holding the apex of peak ``index`` of the derived trace ``key``."""
+        res, base = self.result(run_id, key), self.result(run_id, base_key(key))
+        if res is None or base is None or not (0 <= index < len(res.peaks)) or not base.peaks:
+            return -1
+        p = res.peaks[index]
+        j = min(range(len(base.peaks)), key=lambda k: abs(base.peaks[k].apex_rt - p.apex_rt))
+        q = base.peaks[j]
+        return j if q.start <= p.apex_rt <= q.end else -1
 
     def push_quant(self, text: str, new_quant: dict, detail: str = "quantification") -> None:
         """Replace ``self.quant`` as one undoable, audited step.
@@ -451,11 +538,22 @@ class Workspace(QObject):
 
     def blank_matches(self, run_id: str, key: Optional[str] = None) -> dict:
         """``{peak index: BlankMatch}`` of ``run_id``'s peaks found in its blank(s) (cached)."""
-        key = key or self.signal_key
+        st = self.runs.get(run_id)
+        key = self.effective_key(st, key or self.signal_key)
         ck = (run_id, key)
         if ck in self._blank_matches:
             return self._blank_matches[ck]
-        st = self.runs.get(run_id)
+        if is_derived(key):
+            # the subtracted trace has lost its blank part: judge each peak by its base peak
+            base = self.blank_matches(run_id, base_key(key))
+            res = self.result(run_id, key)
+            out = {}
+            for i in range(len(res.peaks) if res is not None else 0):
+                j = self.base_peak_index(run_id, key, i)
+                if j in base:
+                    out[i] = base[j]
+            self._blank_matches[ck] = out
+            return out
         res = self.result(run_id, key) if st is not None else None
         out: dict = {}
         if st is None or res is None or not self.blank_ids(st):
@@ -554,11 +652,12 @@ class Workspace(QObject):
             acc[np.searchsorted(masses, mz)] += ab
         return masses, acc / len(parts) * self.blank_options().scale
 
-    def blank_level_peaks(self, run_id: str) -> set[int]:
+    def blank_level_peaks(self, run_id: str, key: Optional[str] = None) -> set[int]:
+        """Peaks at blank level (a derived trace: judged by the matching base peak)."""
         st = self.runs.get(run_id)
-        if st is None or not self.blank_ids(st) or is_derived(self.signal_key):
+        if st is None or not self.blank_ids(st):
             return set()
-        return {i for i, m in self.blank_matches(run_id).items() if m.status == "blank"}
+        return {i for i, m in self.blank_matches(run_id, key).items() if m.status == "blank"}
 
     def suggest_replicate_groups(self) -> list[list[str]]:
         names = {s.id: s.run.path.name for s in self.states()}

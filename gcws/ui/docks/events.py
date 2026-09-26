@@ -206,10 +206,10 @@ class EventsDock(QWidget):
         if st is None:
             self._loading = False
             return
-        m = self.ws.method_for(st, self.ws.signal_key)
+        m = self.ws.method_for(st, self.ws.active_key)
         self.method = m.copy()
         self.method_box.setCurrentText(m.name)
-        res = st.results.get(self.ws.signal_key)
+        res = st.results.get(self.ws.active_key)
         r = res.resolved if res else None
         self.pw.set(m.peak_width, r.peak_width if r else None)
         self.slope.set(m.slope_sensitivity, r.slope_mult if r else None)
@@ -236,7 +236,7 @@ class EventsDock(QWidget):
 
     def _on_result(self, rid, key):
         st = self.ws.active
-        if st is None or rid != st.id or key != self.ws.signal_key:
+        if st is None or rid != st.id or key != self.ws.active_key:
             return
         self._loading = True
         self._load_manual(st, st.results.get(key))
@@ -246,7 +246,7 @@ class EventsDock(QWidget):
         self.manual.blockSignals(True)
         self.manual.setRowCount(0)
         unresolved = dict(res.unresolved) if res else {}
-        for e in st.events(self.ws.signal_key):
+        for e in st.events(self.ws.active_key):
             r = self.manual.rowCount()
             self.manual.insertRow(r)
             on = QTableWidgetItem()
@@ -376,7 +376,7 @@ class EventsDock(QWidget):
         st = self.ws.active
         if st is None:
             return
-        key = self.ws.signal_key
+        key = self.ws.active_key
         uid = self.manual.item(item.row(), 0).data(Qt.UserRole)
         events = list(st.events(key))
         for i, e in enumerate(events):
@@ -398,15 +398,15 @@ class EventsDock(QWidget):
         uids = {self.manual.item(r, 0).data(Qt.UserRole) for r in rows}
         if not uids:
             return
-        key = self.ws.signal_key
+        key = self.ws.active_key
         events = [e for e in st.events(key) if e.uid not in uids]
         st.undo.push(ManualEventsCommand(self.ws, st.id, key, events, f"delete {len(uids)} manual event(s)"))
 
     def _clear_manual(self):
         st = self.ws.active
-        if st is None or not st.events(self.ws.signal_key):
+        if st is None or not st.events(self.ws.active_key):
             return
         if QMessageBox.question(self, "Manual events", "Remove all manual integration changes of this "
                                 "chromatogram? (Undo is possible.)") != QMessageBox.Yes:
             return
-        st.undo.push(ManualEventsCommand(self.ws, st.id, self.ws.signal_key, [], "remove all manual events"))
+        st.undo.push(ManualEventsCommand(self.ws, st.id, self.ws.active_key, [], "remove all manual events"))
