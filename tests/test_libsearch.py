@@ -159,3 +159,34 @@ def test_own_library_search(qtbot, data, settings):
     qtbot.waitUntil(lambda: hits.table.rowCount() > 0, timeout=20000)
     assert hits.hits_data[0]["name"] == "Toluene" and all(h["library"] == "Own" for h in hits.hits_data)
     assert len(hits.hits_data) <= 2
+
+
+def test_own_library_first_use_asks_for_the_library(qtbot, data, settings, monkeypatch):
+    """No own library chosen yet: the options dialog opens; OK searches, Cancel does nothing (no error)."""
+    from PySide6.QtWidgets import QDialog, QWidget
+    from gcws.libsearch import store
+    from gcws.ui.dialogs import own_search as OS
+    from gcws.ui.main_window import MainWindow
+    store.save(store.add([], store.discover(_msp(data / "Own.msp"))))
+
+    class Win(QWidget):
+        def __init__(self):
+            super().__init__()
+            self.methods = []
+
+        def atlas_hits(self, points, name, method=None):
+            self.methods.append(method)
+
+    win = Win()
+    qtbot.addWidget(win)
+    spectrum = [(91, 1000), (92, 590)]
+    with monkeypatch.context() as mp:
+        mp.setattr(OS.OwnSearchOptionsDialog, "exec", lambda self: QDialog.Rejected)
+        MainWindow.own_library_search(win, spectrum, "q")
+    assert win.methods == [] and OS.load_options()["library"] == ""
+    with monkeypatch.context() as mp:
+        mp.setattr(OS.OwnSearchOptionsDialog, "exec", lambda self: (self._ok(), QDialog.Accepted)[1])
+        MainWindow.own_library_search(win, spectrum, "q")
+    assert len(win.methods) == 1 and win.methods[0].enabled_libraries() == ["Own"]
+    MainWindow.own_library_search(win, spectrum, "q")          # chosen now: no dialog any more
+    assert len(win.methods) == 2

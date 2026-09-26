@@ -5,7 +5,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QSettings, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
-from PySide6.QtWidgets import (QApplication, QComboBox, QDockWidget, QFileDialog, QInputDialog, QLabel,
+from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QDockWidget, QFileDialog, QInputDialog, QLabel,
                                QMainWindow, QMessageBox, QProgressBar, QPushButton, QToolBar, QWidget)
 
 import gcws
@@ -853,7 +853,7 @@ class MainWindow(QMainWindow):
         opts = OS.load_options()
         if opts["library"] not in OS.libraries():
             dlg = OS.OwnSearchOptionsDialog(self)
-            if dlg.exec() != dlg.Accepted or not dlg.values()["library"]:
+            if dlg.exec() != QDialog.Accepted or not dlg.values()["library"]:
                 return
             opts = OS.load_options()
         self.atlas_hits(points, name, OS.method_from_options(opts))
