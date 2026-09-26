@@ -29,8 +29,12 @@ def search_methods():
 
 
 def build_items(ws, run_ids: list[str], key: str, spectrum_mode: str,
-                rescan_below: Optional[float] = None, skip_identified: bool = False) -> tuple[list[SearchItem], int]:
-    """One job per peak that has MS data; returns (items, protected count)."""
+                rescan_below: Optional[float] = None, skip_identified: bool = False,
+                only: Optional[dict] = None) -> tuple[list[SearchItem], int]:
+    """One job per peak that has MS data; returns (items, protected count).
+
+    ``only`` maps run id -> peak indices to search (e.g. the peaks the table filter shows);
+    runs missing from it are skipped. None searches every peak."""
     import gc_identify as GI
     items, protected = [], 0
     for rid in run_ids:
@@ -39,7 +43,10 @@ def build_items(ws, run_ids: list[str], key: str, spectrum_mode: str,
         if st is None or res is None or st.run.ms is None:
             continue
         idents, _ = st.ident_set(key).bind(res.peaks)
+        wanted = None if only is None else only.get(rid, set())
         for i, p in enumerate(res.peaks):
+            if wanted is not None and i not in wanted:
+                continue
             ident = idents.get(i)
             if ident is not None and (ident.manual or ident.istd):
                 protected += 1

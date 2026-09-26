@@ -13,7 +13,7 @@ from gcws.ui.docks.spectrum import StickPlot
 
 
 class SearchStartDialog(QDialog):
-    def __init__(self, ws, parent=None):
+    def __init__(self, ws, parent=None, filter_text: str = ""):
         super().__init__(parent)
         self.setWindowTitle("Automatic library search")
         self.ws = ws
@@ -26,6 +26,16 @@ class SearchStartDialog(QDialog):
         self.active_only = QRadioButton("Active chromatogram")
         self.all_runs = QRadioButton(f"All loaded chromatograms ({len(ws.states())})")
         self.active_only.setChecked(True)
+        from PySide6.QtWidgets import QButtonGroup
+        self.scope_group = QButtonGroup(self)          # scope and peak type are two separate choices
+        self.scope_group.addButton(self.active_only)
+        self.scope_group.addButton(self.all_runs)
+        self.only_shown = QCheckBox("Only peaks shown in the peak table" +
+                                    (f" ({filter_text})" if filter_text else " (no filter set)"))
+        self.only_shown.setToolTip("Search only the peaks the peak table's filters let through (value "
+                                   "filter, text filter, hidden blank peaks) - in every searched chromatogram. "
+                                   "Fewer peaks, faster search.")
+        self.only_shown.setEnabled(bool(filter_text))
         self.mode = QComboBox()
         for k, v in MODES.items():
             self.mode.addItem(v, k)
@@ -41,6 +51,9 @@ class SearchStartDialog(QDialog):
         has_fid = any(s.run.fid is not None for s in ws.states())
         self.target_tic = QRadioButton("TIC peaks (the qualitative trace)")
         self.target_fid = QRadioButton("FID peaks (each spectrum from the MS at the FID peak's delay-corrected time)")
+        self.target_group = QButtonGroup(self)
+        self.target_group.addButton(self.target_tic)
+        self.target_group.addButton(self.target_fid)
         self.target_tic.setEnabled(has_ms)
         self.target_fid.setEnabled(has_fid and has_ms)
         want = QSettings().value("search/target", "TIC")
@@ -57,6 +70,7 @@ class SearchStartDialog(QDialog):
         f.addRow("", self.target_fid)
         f.addRow("Scope", self.active_only)
         f.addRow("", self.all_runs)
+        f.addRow("", self.only_shown)
         f.addRow("Spectrum", self.mode)
         f.addRow("", self.skip)
         r = QHBoxLayout()
@@ -87,6 +101,7 @@ class SearchStartDialog(QDialog):
                 "target": target,
                 "transfer": target == "TIC" and self.transfer.isChecked() and self.transfer.isEnabled(),
                 "all": self.all_runs.isChecked(),
+                "only_shown": self.only_shown.isChecked() and self.only_shown.isEnabled(),
                 "mode": self.mode.currentData(),
                 "skip": self.skip.isChecked(),
                 "rescan": self.rescan_limit.value() if self.rescan.isChecked() else None,

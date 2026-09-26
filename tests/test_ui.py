@@ -612,6 +612,50 @@ def test_library_search_on_tic_copies_names_to_fid(qtbot, win, samples):
     assert [i.name for _rt, i in out] == ["B"] and counts["coeluting"] == 1
 
 
+def test_library_search_all_runs_and_only_shown_peaks(qtbot, win, samples):
+    from gcws.identify.service import build_items
+    from gcws.ui.dialogs.identify import SearchStartDialog
+    from gcws.ui.models.peak_filter import visible_indices
+    _load(qtbot, win, samples, ["07_", "08_"])
+    ws = win.ws
+    dlg = SearchStartDialog(ws, win)
+    qtbot.addWidget(dlg)
+    assert not dlg.only_shown.isEnabled()                 # no filter set
+    # scope and peak type are separate choices: "all" keeps TIC and the copy to FID
+    dlg.all_runs.setChecked(True)
+    assert dlg.target_tic.isChecked()
+    v = dlg.values()
+    assert v["all"] and v["target"] == "TIC" and v["transfer"]
+    dlg.target_fid.setChecked(True)
+    assert dlg.all_runs.isChecked() and dlg.values()["target"] == "FID"
+    # a value filter on the FID table: only the shown peaks are searched, in every run
+    ws.set_signal_key("FID")
+    t = win.table
+    areas = sorted(r.peak.area for r in t.model.rows)
+    t.set_value_filter("area", ">", areas[-8])
+    assert t.filter_state().active and len(t.shown_indices()) == 7
+    ids = list(ws.order)
+    only = win.shown_peaks(ids, "FID")
+    assert only[ws.active_id] == t.shown_indices()
+    other = next(i for i in ids if i != ws.active_id)
+    assert only[other] == visible_indices(ws, other, "FID", t.filter_state())
+    items, _ = build_items(ws, ids, "FID", "average_bg", only=only)
+    assert {(it.run_id, it.peak_index) for it in items} <= {(r, i) for r, s in only.items() for i in s}
+    # a TIC search takes the TIC peaks at the shown FID peaks' times
+    tic = win.shown_peaks([ws.active_id], "TIC")[ws.active_id]
+    assert 0 < len(tic) <= 7
+    st = ws.active
+    fid_rts = [ws.result(st.id, "FID").peaks[i].apex_rt for i in t.shown_indices()]
+    for j in tic:
+        rt = ws.result(st.id, "TIC").peaks[j].apex_rt + st.delay_value
+        assert min(abs(rt - f) for f in fid_rts) <= 0.03
+    dlg2 = SearchStartDialog(ws, win, filter_text="7 of 90 peaks shown")
+    qtbot.addWidget(dlg2)
+    assert dlg2.only_shown.isEnabled()
+    dlg2.only_shown.setChecked(True)
+    assert dlg2.values()["only_shown"]
+
+
 def test_edit_library_dialog_adds_current_spectrum(qtbot, win, samples, tmp_path, monkeypatch):
     from gcws.identify import library_edit as LE
     from gcws.ui.dialogs.library_edit import EditLibraryDialog, entry_from_spectrum

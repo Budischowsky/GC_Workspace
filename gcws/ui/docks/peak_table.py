@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QHBoxLayout, QHea
 
 from gcws.core.ident import Identification
 from gcws.ui.icons import icon
+from gcws.ui.models.peak_filter import FilterState, value_predicate, value_test  # noqa: F401 (re-export)
 from gcws.ui.models.peak_table import COLUMN_KEYS, COLUMNS, PeakTableModel
 from gcws.ui.undo import IdentCommand
 
@@ -19,28 +20,6 @@ from gcws.ui.undo import IdentCommand
 FILTER_COLUMNS = [("conc", "Conc."), ("corr_area", "Corr. area"), ("area", "Area"), ("area_pct", "Area %"),
                   ("height", "Height"), ("mg_dm2", "mg/dm²"), ("score", "Score"), ("rt", "RT")]
 FILTER_OPS = ["<", "≤", "=", "≥", ">", "between", "outside"]
-
-
-def _decimals(fmt: str) -> int:
-    """Decimals a column shows (``".4f"`` -> 4), for "=" comparisons at display precision."""
-    import re
-    m = re.search(r"\.(\d+)f", fmt or "")
-    return int(m.group(1)) if m else 6
-
-
-def value_test(op: str, a: float, b: float | None = None, decimals: int = 6):
-    """``f(v) -> bool`` for one operator; "=" compares at the shown precision."""
-    tol = 0.5 * 10 ** -decimals
-    lo, hi = (min(a, b), max(a, b)) if b is not None else (a, a)
-    return {
-        "<": lambda v: v < a,
-        "≤": lambda v: v <= a + tol,
-        "=": lambda v: abs(v - a) <= tol + 1e-12 * abs(a),
-        "≥": lambda v: v >= a - tol,
-        ">": lambda v: v > a,
-        "between": lambda v: lo - tol <= v <= hi + tol,
-        "outside": lambda v: v < lo or v > hi,
-    }[op]
 
 
 def parse_number(text: str):
@@ -286,6 +265,17 @@ class PeakTable(QWidget):
         self.vf_a.clear()
         self.vf_b.clear()
 
+    def filter_state(self) -> FilterState:
+        """The table's current filters (value condition, text, hidden blank peaks)."""
+        op = self.vf_op.currentText()
+        return FilterState(self.vf_column.currentData(), op, parse_number(self.vf_a.text()),
+                           parse_number(self.vf_b.text()), self.filter.text(), self.hide_blank.isChecked())
+
+    def shown_indices(self) -> set[int]:
+        """Peak indices (active run, table signal) the table shows now."""
+        return {self.model.rows[self.proxy.mapToSource(self.proxy.index(r, 0)).row()].index
+                for r in range(self.proxy.rowCount())}
+
     def set_value_filter(self, column: str, op: str, a, b=None) -> None:
         """Programmatic filter, e.g. ``set_value_filter("conc", ">", 0.05)``."""
         self.vf_column.setCurrentIndex(max(0, self.vf_column.findData(column)))
@@ -307,21 +297,8 @@ class PeakTable(QWidget):
             e.setToolTip("not a number" if e.property("invalid") else "")
             e.style().unpolish(e)
             e.style().polish(e)
-        if active:
-            col = COLUMNS[COLUMN_KEYS.index(key)]
-            test = value_test(op, a, b if two else None, _decimals(col.fmt))
-
-            def keep(row, col=col, test=test):
-                v = col.get(self.model.rows[row], self.ws)
-                if v is None or v == "":
-                    return False                  # no value: cannot satisfy the condition
-                try:
-                    return test(float(v))
-                except (TypeError, ValueError):
-                    return False
-            self.proxy.value_filter = keep
-        else:
-            self.proxy.value_filter = None
+        pred = value_predicate(FilterState(key, op, a, b), self.ws) if active else None
+        self.proxy.value_filter = (lambda row, pred=pred: pred(self.model.rows[row])) if pred else None
         self.vf_clear.setEnabled(active)
         self.vf_state.setText("(peaks without a value are hidden)" if active else "")
         self.proxy.invalidateFilter()

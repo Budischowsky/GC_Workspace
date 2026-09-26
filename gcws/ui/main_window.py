@@ -620,13 +620,15 @@ class MainWindow(QMainWindow):
         from gcws.ui.dialogs.identify import SearchStartDialog
         if not self.ws.states():
             return
-        dlg = SearchStartDialog(self.ws, self)
+        dlg = SearchStartDialog(self.ws, self, filter_text=self.table.info.text()
+                                if self.table.filter_state().active else "")
         if dlg.exec() != SearchStartDialog.Accepted:
             return
         v = dlg.values()
         ids = list(self.ws.order) if v["all"] else [self.ws.active_id]
         v["key"] = self.search_key(v.get("target", "TIC"))
-        items, protected = build_items(self.ws, ids, v["key"], v["mode"], v["rescan"], v["skip"])
+        only = self.shown_peaks(ids, v["key"]) if v.get("only_shown") else None
+        items, protected = build_items(self.ws, ids, v["key"], v["mode"], v["rescan"], v["skip"], only)
         if not items:
             QMessageBox.information(self, "Library search", "No peaks with MS data to search.")
             return
@@ -642,6 +644,22 @@ class MainWindow(QMainWindow):
         self._search.failed.connect(lambda e: QMessageBox.warning(self, "EI Atlas", e))
         self._search.finished.connect(lambda cancelled: self._search_done(items, v, protected, cancelled))
         self._search.start()
+
+    def shown_peaks(self, run_ids, key: str) -> dict:
+        """``{run id: peak indices of key}`` that the peak table's filters let through.
+
+        The filters work on the table's signal (quantities live on the FID); when the search
+        runs on the other detector the shown peaks are mapped over through the FID-MS delay."""
+        from gcws.ui.models.peak_filter import map_indices, visible_indices
+        state, table_key = self.table.filter_state(), self.ws.signal_key
+        out = {}
+        for rid in run_ids:
+            if rid == self.ws.active_id:
+                shown = self.table.shown_indices()        # exactly what the analyst sees
+            else:
+                shown = visible_indices(self.ws, rid, table_key, state)
+            out[rid] = map_indices(self.ws, rid, table_key, key, shown)
+        return out
 
     def search_key(self, target: str) -> str:
         """The TIC or FID key to search: the one a chromatogram shows (with its blank switch)."""
