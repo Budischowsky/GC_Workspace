@@ -9,12 +9,13 @@ Where entries can go:
   folder and checked by exporting it again. Only then is the original copied
   to a backup (``<data>/library_backups``) and replaced. EI Atlas and NIST MS
   Search read the result like any user library.
-* **MSP files** of GC Workspace under ``<EI Atlas>/libraries/gcws`` (created
-  here when no Lib2NIST is available); EI Atlas searches them as references.
-* **Agilent ``.L`` libraries** are read-only: their binary format belongs to
-  ChemStation.
+* **MSP files** (created here when no Lib2NIST is available); the built-in
+  search reads them like any library.
+* **Agilent ``.L``, NIST main/replicate and Wiley/Shimadzu libraries** are
+  read-only: their binary formats belong to their vendors.
 
-After a change, a running EI Atlas is asked to rescan its libraries.
+The libraries are the analyst's (Identify > Libraries..., ``gcws.libsearch.store``);
+after a change the search index of the library is rebuilt on the next search.
 """
 from __future__ import annotations
 
@@ -253,6 +254,61 @@ def list_libraries(root: Optional[Path] = None) -> list[LibraryInfo]:
     return out
 
 
+def own_libraries() -> list[LibraryInfo]:
+    """The analyst's libraries (Identify > Libraries...), writable or not."""
+    from gcws.libsearch import store
+    out = []
+    for s in store.load():
+        p = Path(s.path)
+        if s.kind == "msp":
+            out.append(LibraryInfo(s.name, p, "msp", True, "MSP library"))
+        elif s.kind == "nist":
+            user = "user.dbu" in _files_lower(p)
+            out.append(LibraryInfo(s.name, p, "nist", user, "NIST MS Search user library" if user else
+                                   "NIST main / replicate libraries are read-only; add own spectra to a user "
+                                   "library"))
+        elif s.kind == "agilent":
+            out.append(LibraryInfo(s.name, p, "agilent", False,
+                                   "Agilent .L libraries can only be edited in ChemStation; use its NIST copy "
+                                   "(e.g. CCAlu_GCMS) or an MSP library"))
+        else:
+            out.append(LibraryInfo(s.name, p, s.kind, False, "Wiley / Shimadzu libraries are read-only"))
+    return out
+
+
+def parse_spectrum_text(text: str) -> list[tuple[float, float]]:
+    """Peaks from pasted text: an MSP record, or lines / pairs of "m/z abundance"."""
+    text = str(text or "")
+    if re.search(r"(?im)^\s*num\s*peaks\s*:", text):
+        recs = [r for r in parse_msp(text) if r.peaks]
+        if recs:
+            return list(recs[0].peaks)
+    number = r"\d+(?:\.\d+)?(?:[eE][+-]?\d+)?"
+    pairs = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if ";" in line:                                   # MSP peak lines: "91 999; 92 450"
+            pairs += re.findall(rf"({number})\s*[\s:,]\s*({number})", line)
+            continue
+        tokens = [t for t in re.split(r"[\s:]+", line) if t]
+        if len(tokens) == 1 and tokens[0].count(",") == 1:
+            tokens = tokens[0].split(",")                 # "91,999"
+        elif len(tokens) == 2:
+            tokens = [t.replace(",", ".") for t in tokens]  # "91 999,5" (decimal comma)
+        pairs += [(tokens[i], tokens[i + 1]) for i in range(0, len(tokens) - 1, 2)]
+    peaks: dict[float, float] = {}
+    for m, a in pairs:
+        try:
+            mz, ab = float(m), float(a)
+        except ValueError:
+            continue
+        if 1 <= mz <= 10000 and ab > 0:
+            peaks[mz] = peaks.get(mz, 0.0) + ab
+    return sorted(peaks.items())
+
+
 def default_library(libs: list[LibraryInfo], remembered: str = "") -> Optional[LibraryInfo]:
     writable = [lb for lb in libs if lb.writable]
     for lb in writable:
@@ -451,25 +507,50 @@ class LibraryEditor:
         return self.save(records, f"deleted {gone.name}")
 
 
-def create_library(name: str, root: Optional[Path] = None, lib2nist: Optional[Lib2Nist] = None) -> LibraryInfo:
-    """A new, empty own library: a NIST user library in ``<EI Atlas>/Library`` with Lib2NIST,
-    else a GC Workspace MSP file in ``<EI Atlas>/libraries/gcws``. Its first entry creates it."""
-    root = Path(root) if root is not None else atlas_root()
-    if root is None:
-        raise LibraryError("EI Atlas was not found (Edit > Preferences).")
+def create_library(name: str, folder: Optional[Path] = None, lib2nist: Optional[Lib2Nist] = None,
+                   kind: str = "") -> LibraryInfo:
+    """A new, empty own library in ``folder`` (default ``<data>/libraries``): a NIST user library
+    (with Lib2NIST) or an MSP file. Its first entry creates it; it is then added to the
+    analyst's libraries (:func:`register`)."""
+    from gcws import paths
+    folder = Path(folder) if folder is not None else paths.DATA / "libraries"
     clean = re.sub(r'[<>:"/\\|?*.]+', "_", name).strip(" _")
     if not clean:
         raise LibraryError("Please enter a library name.")
-    if lib2nist is not None:
-        path = root / "Library" / clean
+    kind = kind or ("nist" if lib2nist is not None else "msp")
+    if kind == "nist":
+        if lib2nist is None:
+            raise LibraryError("A NIST user library needs Lib2NIST (Edit > Preferences).")
+        path = folder / clean
         if path.exists():
             raise LibraryError(f"{clean} already exists.")
-        return LibraryInfo(clean, path, "nist", True, "NIST MS Search user library (new)", root)
-    path = root / "libraries" / "gcws" / f"{clean}.msp"
+        return LibraryInfo(clean, path, "nist", True, "NIST MS Search user library (new)")
+    path = folder / f"{clean}.msp"
     if path.exists():
         raise LibraryError(f"{clean} already exists.")
     path.parent.mkdir(parents=True, exist_ok=True)
-    return LibraryInfo(clean, path, "msp", True, "GC Workspace MSP library (new)", root)
+    return LibraryInfo(clean, path, "msp", True, "MSP library (new)")
+
+
+def register(info: LibraryInfo) -> None:
+    """Add a (new) library to the analyst's libraries and to every search method."""
+    from gcws.libsearch import store
+    libs = store.load()
+    if not any(Path(s.path).resolve() == Path(info.path).resolve() for s in libs):
+        libs = store.add(libs, [store.LibrarySpec(info.name, info.kind, str(info.path))])
+        store.save(libs)
+    enable_in_search_methods(info.name)
+    library_changed()
+
+
+def library_changed() -> str:
+    """After a change: the built-in search reads the library again ("" = done)."""
+    try:
+        from gcws.libsearch import service
+        service.reset()
+    except Exception as exc:  # noqa: BLE001 - the library is saved; the next start reads it anyway
+        return f"The search sees the change after a restart ({exc})"
+    return ""
 
 
 def rescan_atlas() -> str:

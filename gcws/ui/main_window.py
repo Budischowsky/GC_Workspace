@@ -745,9 +745,9 @@ class MainWindow(QMainWindow):
         if from_spectrum and not entry.get("peaks"):
             self.statusBar().showMessage("No spectrum on display: select a peak or right-click a chromatogram", 6000)
         dlg = EditLibraryDialog(self, entry)
-        if not (from_spectrum and entry.get("peaks")):
-            dlg.tabs.setCurrentIndex(1)
-        dlg.exec()
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
+        self._library_dialog = dlg          # not modal: peaks can be picked while it is open
+        dlg.show()
 
     def edit_search_methods(self):
         from gcws.ui.dialogs.search_method import SearchMethodDialog

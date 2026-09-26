@@ -690,17 +690,19 @@ def test_library_search_all_runs_and_only_shown_peaks(qtbot, win, samples):
 def test_edit_library_dialog_adds_current_spectrum(qtbot, win, samples, tmp_path, monkeypatch):
     from gcws.identify import library_edit as LE
     from gcws.ui.dialogs.library_edit import EditLibraryDialog, entry_from_spectrum
-    root = tmp_path / "atlas"
-    (root / "libraries" / "gcws").mkdir(parents=True)
-    (root / "Library" / "CCALU_GCMS_1.L").mkdir(parents=True)
-    (root / "Library" / "CCALU_GCMS_1.L" / "HEADER.IND").write_bytes(b"")
-    lib = root / "libraries" / "gcws" / "Own spectra.msp"
+    from gcws import paths
+    from gcws.libsearch import store
+    monkeypatch.setattr(paths, "DATA", tmp_path / "data")
+    root = tmp_path / "libs"
+    (root / "CCALU_GCMS_1.L").mkdir(parents=True)
+    (root / "CCALU_GCMS_1.L" / "HEADER.IND").write_bytes(b"")
+    lib = root / "Own spectra.msp"
     lib.write_text(LE.write_msp([LE.new_record("Old entry", [(57, 999), (71, 300)])]), encoding="cp1252",
                    newline="")
-    monkeypatch.setattr(LE, "atlas_root", lambda: root)
+    store.save(store.discover(root))                 # the analyst's libraries (Identify > Libraries...)
     monkeypatch.setattr(LE, "find_lib2nist", lambda *a, **k: None)
     rescans = []
-    monkeypatch.setattr(LE, "rescan_atlas", lambda: rescans.append(1) or "")
+    monkeypatch.setattr(LE, "library_changed", lambda: rescans.append(1) or "")
     _load(qtbot, win, samples, ["07_"])
     ws = win.ws
     res = ws.result(ws.active_id, "TIC")
@@ -955,3 +957,60 @@ def test_migration_dialog_derives_cell_and_occupancy(qtbot, win, monkeypatch):
     cur = MG.current(q)
     assert cur["cell_area_dm2"] == pytest.approx(0.44) and cur["migration_cell"] == "Glaszelle (0.44 dm²)"
     assert MG.current({}) == {}
+
+
+
+def test_edit_library_new_entry_takes_a_spectrum(qtbot, win, samples, tmp_path, monkeypatch):
+    from gcws import paths
+    from gcws.identify import library_edit as LE
+    from gcws.libsearch import service, store
+    from gcws.ui.dialogs.library_edit import EditLibraryDialog
+    monkeypatch.setattr(paths, "DATA", tmp_path / "data")
+    monkeypatch.setattr(LE, "find_lib2nist", lambda *a, **k: None)
+    service.reset()
+    dlg = EditLibraryDialog(win, {})
+    qtbot.addWidget(dlg)
+    assert dlg.current_library() is None and not dlg.add_btn.isEnabled()
+    # a new MSP library (no EI Atlas, no Lib2NIST needed)
+    from PySide6.QtWidgets import QInputDialog
+    with monkeypatch.context() as m:
+        m.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("My spectra", True)))
+        dlg.new_library()
+    assert dlg.current_library().name == "My spectra" and not dlg.add_btn.isEnabled()   # no spectrum yet
+    # the spectrum: from an MSP file with several records (the analyst picks one)
+    src = tmp_path / "in.msp"
+    src.write_text(LE.write_msp([LE.new_record("First", [(43, 999), (58, 400)], cas="67-64-1"),
+                                 LE.new_record("Second", [(149, 999), (167, 320), (279, 80)], cas="84-74-2",
+                                               formula="C16H22O4")]), encoding="cp1252", newline="")
+    with monkeypatch.context() as m:
+        m.setattr(QInputDialog, "getItem", staticmethod(lambda *a, **k: ("2: Second", True)))
+        dlg.import_msp(str(src))
+    assert dlg.name.text() == "Second" and dlg.cas.text() == "84-74-2" and dlg.mw.text() == "278"
+    assert [m for m, _ in dlg._peaks] == [149, 167, 279] and dlg.add_btn.isEnabled()
+    # pasted pairs and typed ions replace it
+    dlg.paste_spectrum("91 999\n92 610\n65 120")
+    assert [m for m, _ in dlg._peaks] == [65, 91, 92]
+    assert LE.parse_spectrum_text("Num Peaks: 2\n91 999; 92 500") == [(91.0, 999.0), (92.0, 500.0)]
+    assert LE.parse_spectrum_text("91,999\n92,5 500") == [(91.0, 999.0), (92.5, 500.0)]
+    dlg.paste_spectrum("no numbers here")
+    assert [m for m, _ in dlg._peaks] == [65, 91, 92]
+    # the current spectrum of the Mass spectrum panel, while the dialog is open
+    _load(qtbot, win, samples, ["07_"])
+    ws = win.ws
+    ws.set_signal_key("TIC")
+    res = ws.result(ws.active_id, "TIC")
+    ws.select_peak(max(range(len(res.peaks)), key=lambda i: res.peaks[i].area if 20 < res.peaks[i].apex_rt < 26 else 0))
+    dlg.name.setText("From the run")
+    dlg.take_current()
+    assert len(dlg._peaks) > 5 and dlg.rt.text() and "07_" in dlg.source.text()
+    dlg.save_entry()
+    qtbot.waitUntil(lambda: not dlg._busy, timeout=20000)
+    lib = tmp_path / "data" / "libraries" / "My spectra.msp"
+    assert [r.name for r in LE.parse_msp(lib.read_text(encoding="cp1252"))] == ["From the run"]
+    # the new library is one of the analyst's libraries and searchable at once
+    assert [s.name for s in store.load()] == ["My spectra"]
+    hits = service.analyze(dlg.trimmed_peaks(), "q", {"lite": True, "libraries": ["My spectra"]})["hits"]
+    assert hits[0]["name"] == "From the run"
+    dlg.close()
+    ws.dirty = False
+    service.reset()

@@ -63,8 +63,7 @@ class EditLibraryDialog(QDialog):
         self.editing = None                  # index of the entry being edited, None = new entry
         self._busy = False
         s = QSettings()
-        self.root = LE.atlas_root()
-        self.l2n_exe = LE.find_lib2nist(self.root, s.value("prefs/lib2nist", "") or "")
+        self.l2n_exe = LE.find_lib2nist(None, s.value("prefs/lib2nist", "") or "")
 
         # -- library -----------------------------------------------------------------------
         self.library = QComboBox()
@@ -130,6 +129,24 @@ class EditLibraryDialog(QDialog):
         tr.addStretch(1)
         right.addLayout(tr)
         right.addWidget(self.spec_note)
+        take = QPushButton("Take current spectrum")
+        take.setToolTip("The spectrum the Mass spectrum panel shows now (select a peak or right-click a "
+                        "chromatogram while this window stays open)")
+        take.clicked.connect(self.take_current)
+        imp = QPushButton("Import MSP...")
+        imp.setToolTip("A spectrum from an .msp file (with its name, CAS, formula ...)")
+        imp.clicked.connect(self.import_msp)
+        paste = QPushButton("Paste")
+        paste.setToolTip("An MSP record or 'm/z abundance' pairs from the clipboard")
+        paste.clicked.connect(self.paste_spectrum)
+        typed = QPushButton("Type ions...")
+        typed.setToolTip("Enter or correct the ions as 'm/z abundance' lines")
+        typed.clicked.connect(self.type_ions)
+        src = QHBoxLayout()
+        for w in (take, imp, paste, typed):
+            src.addWidget(w)
+        src.addStretch(1)
+        right.addLayout(src)
         self.add_btn = QPushButton("Add to library")
         theme.set_primary(self.add_btn)
         self.add_btn.clicked.connect(self.save_entry)
@@ -209,11 +226,12 @@ class EditLibraryDialog(QDialog):
         return LE.Lib2Nist(self.l2n_exe) if self.l2n_exe else None
 
     def _fill_libraries(self, select: str = ""):
-        self.libs = LE.list_libraries(self.root)
+        self.libs = LE.own_libraries()
         self.library.blockSignals(True)
         self.library.clear()
         for lb in self.libs:
-            kind = {"nist": "NIST user library", "msp": "MSP", "agilent": "Agilent .L, read-only"}[lb.kind]
+            kind = {"nist": "NIST user library" if lb.writable else "NIST, read-only", "msp": "MSP",
+                    "agilent": "Agilent .L, read-only"}.get(lb.kind, "read-only")
             self.library.addItem(f"{lb.name}   ({kind})", lb.name)
             if not lb.writable:
                 item = self.library.model().item(self.library.count() - 1)
@@ -234,10 +252,9 @@ class EditLibraryDialog(QDialog):
         lb = self.current_library()
         self.records = []
         self.table.setRowCount(0)
-        if self.root is None:
-            self.lib_note.setText("EI Atlas was not found: set its folder in Edit > Preferences.")
-        elif lb is None:
-            self.lib_note.setText("No library that can take entries: create one with 'New library...'.")
+        if lb is None:
+            self.lib_note.setText("No library that can take entries: create one with 'New library...' (or add "
+                                  "one under Identify > Libraries...).")
         elif lb.kind == "nist" and self.l2n_exe is None:
             self.lib_note.setText("NIST Lib2NIST (lib2nist.exe) was not found; it is needed to change NIST user "
                                   "libraries. Set its path in Edit > Preferences.")
@@ -254,7 +271,7 @@ class EditLibraryDialog(QDialog):
         if not ok or not name.strip():
             return
         try:
-            info = LE.create_library(name.strip(), self.root, self._lib2nist())
+            info = LE.create_library(name.strip(), None, self._lib2nist())
         except LE.LibraryError as exc:
             QMessageBox.warning(self, "New library", str(exc))
             return
@@ -298,6 +315,89 @@ class EditLibraryDialog(QDialog):
         if mw:
             self.mw.setText(str(mw))
 
+    # -- spectrum sources ------------------------------------------------------------------------
+
+    def set_spectrum(self, peaks, note: str = "", fields: dict | None = None):
+        """New ions for the entry; ``fields`` fill the form where it is still empty."""
+        self._peaks = [(float(m), float(a)) for m, a in peaks if float(a) > 0]
+        self.entry["note"] = note
+        for key, value in (fields or {}).items():
+            w = {"name": self.name, "cas": self.cas, "formula": self.formula, "mw": self.mw, "ri": self.ri,
+                 "rt": self.rt, "column": self.column, "source": self.source}.get(key)
+            if w is not None and value not in (None, "") and not w.text().strip():
+                w.setText(str(value))
+        self._show_spectrum()
+        self._update_buttons()
+
+    def take_current(self):
+        e = entry_from_spectrum(self.win)
+        if not e.get("peaks"):
+            self.status.setText("The Mass spectrum panel shows no spectrum: select a peak or right-click a "
+                                "chromatogram, then press 'Take current spectrum' again.")
+            return
+        self.set_spectrum(e["peaks"], e.get("note", ""), e)
+        self.status.setText(f"Spectrum taken: {e.get('source') or 'Mass spectrum panel'}")
+
+    def import_msp(self, path: str = ""):
+        from PySide6.QtWidgets import QFileDialog
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(self, "Import a spectrum", QSettings().value("library_edit/msp_dir", ""),
+                                                  "MSP spectra (*.msp *.MSP *.txt);;All files (*)")
+        if not path:
+            return
+        from pathlib import Path
+        QSettings().setValue("library_edit/msp_dir", str(Path(path).parent))
+        data = Path(path).read_bytes()
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            text = data.decode(LE.ENCODING, errors="replace")
+        recs = [r for r in LE.parse_msp(text) if r.peaks]
+        if not recs:
+            QMessageBox.information(self, "Import MSP", "No spectrum found in this file.")
+            return
+        rec = recs[0]
+        if len(recs) > 1:
+            names = [f"{i + 1}: {r.name or '(no name)'}" for i, r in enumerate(recs)]
+            choice, ok = QInputDialog.getItem(self, "Import MSP", "Spectrum:", names, 0, False)
+            if not ok:
+                return
+            rec = recs[names.index(choice)]
+        self.set_spectrum(rec.peaks, f"from {Path(path).name}", self._fields_of(rec))
+        self.status.setText(f"Imported '{rec.name}' from {Path(path).name}")
+
+    @staticmethod
+    def _fields_of(rec) -> dict:
+        return {"name": rec.name, "cas": rec.cas, "formula": rec.get("Formula"), "mw": rec.get("MW"),
+                "ri": "" if rec.ri is None else f"{rec.ri:.0f}", "comment": rec.get("Comment")}
+
+    def paste_spectrum(self, text: str | None = None):
+        from PySide6.QtGui import QGuiApplication
+        text = QGuiApplication.clipboard().text() if text is None else text
+        peaks = LE.parse_spectrum_text(text)
+        if not peaks:
+            self.status.setText("The clipboard holds no spectrum (an MSP record or 'm/z abundance' pairs).")
+            return
+        recs = [r for r in LE.parse_msp(text) if r.peaks] if "num peaks" in text.lower() else []
+        self.set_spectrum(peaks, "pasted", self._fields_of(recs[0]) if recs else None)
+        self.status.setText(f"{len(peaks)} ions pasted")
+
+    def type_ions(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Ions of the entry")
+        edit = QPlainTextEdit("\n".join(f"{m:g} {a:g}" for m, a in self._peaks))
+        edit.setPlaceholderText("one ion per line: m/z abundance, e.g.\n149 999\n167 320")
+        from PySide6.QtWidgets import QDialogButtonBox
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(edit)
+        lay.addWidget(bb)
+        dlg.resize(320, 420)
+        if dlg.exec() == QDialog.Accepted:
+            self.set_spectrum(LE.parse_spectrum_text(edit.toPlainText()), "typed in")
+
     def trimmed_peaks(self):
         if not self._peaks:
             return []
@@ -313,7 +413,8 @@ class EditLibraryDialog(QDialog):
             mz, ab = np.array([m for m, _ in pk]), np.array([a for _, a in pk])
             self.plot.show_spectrum(mz, ab, title=self.name.text() or "spectrum")
         else:
-            self.plot.show_spectrum(None, None, title="no spectrum: select a peak or right-click a chromatogram")
+            self.plot.show_spectrum(None, None, title="no spectrum yet: Take current spectrum, Import MSP, Paste "
+                                                      "or Type ions")
         note = self.entry.get("note", "") if self.editing is None else "stored spectrum"
         self.spec_note.setText(f"{len(pk)} ions" + (f"  -  {note}" if note else ""))
         QSettings().setValue("library_edit/trim", self.trim.value())
@@ -379,8 +480,8 @@ class EditLibraryDialog(QDialog):
         def work():
             res = ed.replace(editing, rec) if editing is not None else ed.add(rec)
             if new_lib:
-                LE.enable_in_search_methods(lb.label)
-            res.notes.append(LE.rescan_atlas())
+                LE.register(lb)
+            res.notes.append(LE.library_changed())
             return res
 
         def done(res):
@@ -474,7 +575,7 @@ class EditLibraryDialog(QDialog):
 
         def work():
             res = ed.delete(i)
-            res.notes.append(LE.rescan_atlas())
+            res.notes.append(LE.library_changed())
             return res
 
         def done(res):
