@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt, QTimer
+from PySide6.QtCore import QByteArray, QSettings, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (QApplication, QComboBox, QDockWidget, QFileDialog, QInputDialog, QLabel,
                                QMainWindow, QMessageBox, QProgressBar, QPushButton, QToolBar, QWidget)
@@ -51,6 +51,7 @@ class MainWindow(QMainWindow):
         self.docks: dict[str, QDockWidget] = {}
         self.loading = 0
         self._pending_project = None
+        self._maximized = None          # (dock, saved main-window state | floating geometry)
         central = QWidget()
         central.hide()
         self.setCentralWidget(central)
@@ -107,6 +108,8 @@ class MainWindow(QMainWindow):
         d.setWidget(widget)
         d.setFeatures(QDockWidget.DockWidgetClosable | QDockWidget.DockWidgetMovable
                       | QDockWidget.DockWidgetFloatable)
+        from gcws.ui.layout.title_bar import DockTitleBar
+        d.setTitleBarWidget(DockTitleBar(d, self.toggle_maximize))
         self.overlay.watch(d)
         self.docks[key] = d
         return d
@@ -287,7 +290,7 @@ class MainWindow(QMainWindow):
 
         m = mb.addMenu("&Layout")
         for name, tip in presets.PRESETS.items():
-            a = m.addAction(name, lambda n=name: presets.apply_preset(self, n))
+            a = m.addAction(name, lambda n=name: self.apply_preset(n))
             a.setStatusTip(tip)
         m.addSeparator()
         m.addAction("Save layout...", self.save_layout)
@@ -1099,18 +1102,59 @@ class MainWindow(QMainWindow):
     def save_layout(self):
         name, ok = QInputDialog.getText(self, "Save layout", "Name:")
         if ok and name.strip():
+            self.restore_maximized()
             presets.save_layout(self, name.strip())
             self.statusBar().showMessage(f"Layout '{name.strip()}' saved", 4000)
 
     def _fill_layouts(self):
         self.saved_layouts_menu.clear()
         for n in presets.saved_layouts():
-            self.saved_layouts_menu.addAction(n, lambda n=n: presets.restore_layout(self, n))
+            self.saved_layouts_menu.addAction(n, lambda n=n: (self.restore_maximized(),
+                                                              presets.restore_layout(self, n)))
 
     def _fill_delete_layouts(self):
         self.delete_layouts_menu.clear()
         for n in presets.saved_layouts():
             self.delete_layouts_menu.addAction(n, lambda n=n: presets.delete_layout(n))
+
+    def apply_preset(self, name):
+        self.restore_maximized()
+        presets.apply_preset(self, name)
+
+    def toggle_maximize(self, dock):
+        """Double-click on a panel title: the panel alone fills the window (a detached one its
+        screen); again restores the previous layout."""
+        if self._maximized is not None:
+            self.restore_maximized()
+            return
+        if dock.isFloating():
+            self._maximized = (dock, dock.geometry())
+            screen = dock.screen() or self.screen()
+            dock.setGeometry(screen.availableGeometry())
+        else:
+            self._maximized = (dock, self.saveState(presets.LAYOUT_VERSION))
+            for d in self.docks.values():
+                if d is not dock and not d.isFloating() and d.isVisible():
+                    d.hide()
+            dock.show()
+            dock.raise_()
+        bar = dock.titleBarWidget()
+        if hasattr(bar, "set_maximized"):
+            bar.set_maximized(True)
+        self.statusBar().showMessage(f"{dock.windowTitle()} maximized - double-click its title to restore", 4000)
+
+    def restore_maximized(self):
+        if self._maximized is None:
+            return
+        dock, saved = self._maximized
+        self._maximized = None
+        if isinstance(saved, QByteArray):
+            self.restoreState(saved, presets.LAYOUT_VERSION)
+        else:
+            dock.setGeometry(saved)
+        bar = dock.titleBarWidget()
+        if hasattr(bar, "set_maximized"):
+            bar.set_maximized(False)
 
     def _lock(self, locked):
         for d in self.docks.values():
@@ -1141,6 +1185,7 @@ class MainWindow(QMainWindow):
             self.autosave_path().unlink(missing_ok=True)       # a clean exit needs no recovery
         except OSError:
             pass
+        self.restore_maximized()
         s = QSettings()
         s.setValue("window/geometry", self.saveGeometry())
         s.setValue("window/state", self.saveState(presets.LAYOUT_VERSION))
@@ -1164,6 +1209,8 @@ class MainWindow(QMainWindow):
                   "  Shift+right-drag         background range (subtracted from scan spectra)",
                   "  wheel                    zoom; right-drag on an axis scales it",
                   "  double-click             reset the view; Shift disables snapping",
+                  "",
+                  "Panels: double-click a title to maximize the panel, again to restore the layout.",
                   "Spectrum panel: ← / → step one scan, Esc returns to the peak."]
         QMessageBox.information(self, "Keyboard shortcuts", "\n".join(lines))
 

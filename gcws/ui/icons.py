@@ -141,6 +141,29 @@ def icon(name: str, color: str = ACCENT) -> QIcon:
         qp.drawRect(QRectF(4, 5, 24, 22))
         qp.drawLine(QPointF(12, 5), QPointF(12, 27))
         qp.drawLine(QPointF(12, 16), QPointF(28, 16))
+    elif name.startswith("panel-"):
+        # panel title buttons: drawn in ``color`` (dark on the light title, white on the active one)
+        qp.setPen(_pen(color, 2.6))
+        qp.setBrush(Qt.NoBrush)
+        if name == "panel-maximize":
+            qp.drawRect(QRectF(6, 7, 20, 18))
+            qp.drawLine(QPointF(6, 10), QPointF(26, 10))
+        elif name == "panel-restore":
+            qp.drawRect(QRectF(5, 12, 15, 14))
+            qp.drawPolyline(QPolygonF([QPointF(11, 12), QPointF(11, 6), QPointF(27, 6), QPointF(27, 20),
+                                       QPointF(20, 20)]))
+        elif name == "panel-float":
+            qp.drawPolyline(QPolygonF([QPointF(15, 7), QPointF(6, 7), QPointF(6, 26), QPointF(25, 26),
+                                       QPointF(25, 17)]))
+            qp.drawLine(QPointF(14, 18), QPointF(27, 5))
+            qp.drawPolyline(QPolygonF([QPointF(19, 5), QPointF(27, 5), QPointF(27, 13)]))
+        elif name == "panel-dock":
+            qp.drawRect(QRectF(5, 5, 22, 22))
+            qp.drawLine(QPointF(24, 8), QPointF(12, 20))
+            qp.drawPolyline(QPolygonF([QPointF(11, 12), QPointF(11, 21), QPointF(20, 21)]))
+        else:                                   # panel-close
+            qp.drawLine(QPointF(8, 8), QPointF(24, 24))
+            qp.drawLine(QPointF(24, 8), QPointF(8, 24))
     elif name == "report":
         qp.setPen(_pen(dark, 1.5))
         qp.setBrush(QColor("white"))

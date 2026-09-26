@@ -70,6 +70,37 @@ def test_layout_presets_roundtrip(qtbot, win):
         d.setFloating(False)
 
 
+def test_dock_title_buttons_and_maximize(qtbot, win):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    from gcws.ui.layout.title_bar import DockTitleBar
+    qtbot.waitUntil(lambda: win.docks["chrom"].isVisible(), timeout=5000)
+    for d in win.docks.values():
+        bar = d.titleBarWidget()
+        assert isinstance(bar, DockTitleBar)
+        assert not bar.b_close.icon().isNull() and not bar.b_float.icon().isNull()
+    bar = win.docks["table"].titleBarWidget()
+    assert bar.b_close.isVisible() and bar.b_float.isVisible() and bar.b_max.isVisible()
+    before = {k for k, d in win.docks.items() if d.isVisible()}
+    QTest.mouseDClick(bar, Qt.LeftButton, Qt.NoModifier, QPoint(30, bar.height() // 2))
+    assert win.docks["table"].isVisible() and not win.docks["table"].isFloating()
+    assert {k for k, d in win.docks.items() if d.isVisible()} == {"table"}
+    assert bar.maximized
+    QTest.mouseDClick(bar, Qt.LeftButton, Qt.NoModifier, QPoint(30, bar.height() // 2))
+    assert {k for k, d in win.docks.items() if d.isVisible()} == before
+    assert not bar.maximized
+    # locked panels: no detach / close buttons
+    win._lock(True)
+    assert bar.b_float.isHidden() and not bar.b_close.isHidden()
+    win._lock(False)
+    assert not bar.b_float.isHidden()
+    # detach and dock back with the button
+    bar.b_float.click()
+    assert win.docks["table"].isFloating()
+    bar.b_float.click()
+    assert not win.docks["table"].isFloating()
+
+
 def test_project_roundtrip(qtbot, win, samples, tmp_path):
     from gcws.core.events import ManualEvent, ManualKind as K
     from gcws.core.ident import Identification

@@ -137,7 +137,17 @@ QToolTip {{ background: {SURFACE}; color: {TEXT}; border: 1px solid {BORDER_STRO
 
 QMainWindow::separator {{ background: {BG}; width: 5px; height: 5px; }}
 QMainWindow::separator:hover {{ background: {ACCENT_SOFT2}; }}
-QDockWidget {{ titlebar-close-icon: none; titlebar-normal-icon: none; }}
+QWidget#dockTitle {{ background: {ACCENT_SOFT}; border-left: 3px solid {ACCENT_SOFT2}; }}
+QWidget#dockTitle[active="true"] {{ background: {ACCENT}; border-left: 3px solid {ACCENT_PRESSED}; }}
+QLabel#dockTitleText {{ color: {ACCENT_PRESSED}; font-weight: 600; background: transparent; }}
+QWidget#dockTitle[active="true"] QLabel#dockTitleText {{ color: white; }}
+QToolButton#dockButton {{ border: 1px solid transparent; border-radius: 4px; padding: 2px; margin: 0;
+    background: transparent; }}
+QToolButton#dockButton:hover {{ background: {ACCENT_SOFT2}; border-color: {ACCENT_SOFT2}; }}
+QToolButton#dockButton[role="close"]:hover {{ background: {BAD_SOFT}; border-color: {BAD_SOFT}; }}
+QWidget#dockTitle[active="true"] QToolButton#dockButton:hover {{ background: {ACCENT_HOVER};
+    border-color: {ACCENT_SOFT2}; }}
+QWidget#dockTitle[active="true"] QToolButton#dockButton[role="close"]:hover {{ background: {BAD}; }}
 QDockWidget::title {{
     background: {ACCENT_SOFT}; color: {ACCENT_PRESSED}; padding: 5px 8px 5px 10px;
     border-left: 3px solid {ACCENT_SOFT2}; font-weight: 600; text-align: left;
@@ -299,6 +309,9 @@ class ActiveDockTracker(QObject):
                 try:
                     d.setProperty("active", on)
                     _repolish(d)
+                    bar = d.titleBarWidget()
+                    if hasattr(bar, "set_active"):
+                        bar.set_active(on)
                 except RuntimeError:          # dock already deleted
                     pass
         self._current = dock
