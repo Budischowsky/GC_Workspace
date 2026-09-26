@@ -816,7 +816,8 @@ def test_double_determination_mirror_scales_to_view(qtbot, win, samples):
     k = min((i for i, r in enumerate(page.rows) if r.get("source1") and r.get("source2")),
             key=lambda i: page.rows[i].get("mean") or 1e9)
     r = next(i for i in range(page.table.rowCount()) if page.table.item(i, 0).data(Qt.UserRole) == k)
-    page.table.selectRow(r)
+    page.table.setCurrentCell(r, 2)
+    qtbot.waitUntil(lambda: page.mirror.getViewBox().viewRange()[0][1] - page.mirror.getViewBox().viewRange()[0][0] < 1)
     qtbot.wait(20)
     (x0, x1), (lo, hi) = page.mirror.getViewBox().viewRange()
     rt = page.rows[k]["rt"]
@@ -826,3 +827,88 @@ def test_double_determination_mirror_scales_to_view(qtbot, win, samples):
     assert hi < 0.5 * max(float(y_a.max()), float(-y_b.min()))     # zoomed in, not the whole run
     page.full_view()
     assert page.mirror.getViewBox().viewRange()[0][0] <= rt_a[0] + 0.05
+
+
+def test_double_determination_sheet_keys_and_fill(qtbot, win, samples):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QTableWidgetSelectionRange
+    from gcws.ui.docks.duplicate import C_NAME, C_REPORT
+    _load(qtbot, win, samples, ["07_", "11_"])
+    ws = win.ws
+    a = next(s.id for s in ws.states() if s.name.startswith("07_"))
+    b = next(s.id for s in ws.states() if s.name.startswith("11_"))
+    win.run_tabs.pairRequested.emit(a, b)
+    page = win.replicates.duplicate
+    t = page.table
+    t.sortItems(2)                                # by RT
+
+    def k_of(r):
+        return t.item(r, 0).data(Qt.UserRole)
+
+    def rows_by_rt(rts):
+        return [next(r for r in range(t.rowCount()) if page.rows[k_of(r)]["rt"] == rt) for rt in rts]
+    both = [r for r in range(t.rowCount()) if page.rows[k_of(r)].get("source1") and page.rows[k_of(r)].get("source2")
+            and page.rows[k_of(r)].get("report")]
+    r0 = next(r for r in both if r + 1 in both and r + 2 in both)
+    rts = [page.rows[k_of(r0 + i)]["rt"] for i in range(3)]
+    stack = page._stack()
+    n0 = stack.count()
+    # Delete: two marked rows leave the report, as one undo step
+    t.setFocus()
+    t.setCurrentCell(r0, C_NAME)
+    t.setRangeSelected(QTableWidgetSelectionRange(r0, C_NAME, r0 + 1, C_NAME), True)
+    QTest.keyClick(t, Qt.Key_Delete)
+    r = rows_by_rt(rts[:2])
+    assert all(not page.rows[k_of(x)]["report"] for x in r)
+    assert stack.count() == n0 + 1
+    assert {(t.item(x, C_NAME).row()) for x in r} == {i.row() for i in t.selectedItems()}   # marking kept
+    # Enter: back into the report
+    QTest.keyClick(t, Qt.Key_Return)
+    assert all(page.rows[k_of(x)]["report"] for x in rows_by_rt(rts[:2]))
+    win.a_undo.trigger()
+    win.a_undo.trigger()
+    assert all(page.rows[k_of(x)]["report"] for x in rows_by_rt(rts[:2]))
+    # Ctrl+D: the top name goes into the marked cells below (both determinations' peaks)
+    def names(n=3):
+        return [page.rows[k_of(x)]["name"] for x in rows_by_rt(rts)][:n]
+
+    r = rows_by_rt(rts)
+    t.clearSelection()
+    t.item(r[0], C_NAME).setText("Fill name")            # an ordinary edit first
+    qtbot.waitUntil(lambda: names(1) == ["Fill name"], timeout=20000)   # the rows follow the quantification
+    r = rows_by_rt(rts)
+    t.clearSelection()
+    t.setRangeSelected(QTableWidgetSelectionRange(r[0], C_NAME, r[2], C_NAME), True)
+    QTest.keyClick(t, Qt.Key_D, Qt.ControlModifier)
+    for rid in (a, b):
+        assert sum(1 for i in ws.runs[rid].ident_set("FID").items if i.name == "Fill name") >= 3
+    qtbot.waitUntil(lambda: names() == ["Fill name"] * 3, timeout=20000)
+    win.a_undo.trigger()
+    qtbot.waitUntil(lambda: names()[1:] != ["Fill name"] * 2, timeout=20000)
+    # Ctrl+V: one copied value into every marked cell; Ctrl+C gives tab-separated text
+    r = rows_by_rt(rts)
+    t.clearSelection()
+    t.setRangeSelected(QTableWidgetSelectionRange(r[1], C_NAME, r[2], C_NAME), True)
+    QGuiApplication.clipboard().setText("Pasted")
+    QTest.keyClick(t, Qt.Key_V, Qt.ControlModifier)
+    qtbot.waitUntil(lambda: names()[1:] == ["Pasted", "Pasted"], timeout=20000)
+    r = rows_by_rt(rts)
+    t.clearSelection()
+    t.setRangeSelected(QTableWidgetSelectionRange(r[1], C_REPORT, r[2], C_NAME), True)
+    QTest.keyClick(t, Qt.Key_C, Qt.ControlModifier)
+    assert QGuiApplication.clipboard().text().split(chr(10))[0].endswith(chr(9) + "Pasted")
+    # the fill handle: drag the small square of a marked cell two rows down
+    t.clearSelection()
+    t.setRangeSelected(QTableWidgetSelectionRange(r[0], C_NAME, r[0], C_NAME), True)
+    t.scrollToItem(t.item(r[0], C_NAME))
+    h = t._handle_rect()
+    assert h is not None
+    vp = t.viewport()
+    target = t.visualItemRect(t.item(r[2], C_NAME)).center()
+    QTest.mousePress(vp, Qt.LeftButton, Qt.NoModifier, h.center())
+    QTest.mouseMove(vp, QPoint(h.center().x(), (h.center().y() + target.y()) // 2))
+    QTest.mouseMove(vp, QPoint(h.center().x(), target.y()))
+    QTest.mouseRelease(vp, Qt.LeftButton, Qt.NoModifier, QPoint(h.center().x(), target.y()))
+    qtbot.waitUntil(lambda: names() == ["Fill name"] * 3, timeout=20000)

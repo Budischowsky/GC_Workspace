@@ -22,8 +22,8 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QTimer, Qt, Signal as QtSignal
 from PySide6.QtGui import QBrush, QColor
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame,
-                               QHBoxLayout, QHeaderView, QLabel, QPushButton, QSplitter, QTableWidget,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame,
+                               QHBoxLayout, QHeaderView, QLabel, QPushButton, QSplitter,
                                QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 
 from gcws.core.model import FID
@@ -36,6 +36,8 @@ BASELINE_WINDOW = 1.0
 #: wider views (min) of the mirror plot scale to the substances without the internal standards
 WIDE_VIEW = 3.0
 WIDE_PERCENTILE = 90
+KEYS_NOTE = ("Enter: report · Delete: not reported · type or F2: edit · Ctrl+C / Ctrl+V · Ctrl+D or drag the "
+             "small square of the marking: copy down. Changes are marked, undoable and logged.")
 ICON = {"ok": "✔", "warn": "⚠", "bad": "✖", "info": "ℹ", "neutral": "·"}
 #: table column -> edited field
 C_ICON, C_REPORT, C_RT, C_NAME, C_CAS, C_A1, C_A2, C_C1, C_C2, C_MEAN, C_DIFF, C_VERDICT, C_NOTES, C_COMMENT = range(14)
@@ -142,15 +144,18 @@ class DuplicatePage(QWidget):
         self.banner.setWordWrap(True)
         self.banner.setObjectName("chip")
 
-        self.table = QTableWidget(0, 0)
+        from gcws.ui.widgets.sheet_table import SheetTable
+        self.table = SheetTable(0, 0)            # Excel-like: keys, Ctrl+C/V/D, fill handle
         self.table.verticalHeader().setVisible(False)
-        self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed
-                                   | QAbstractItemView.AnyKeyPressed)
         self.table.itemChanged.connect(self._cell_edited)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.table.markRequested.connect(self._mark_rows)
+        self.table.bulkEdit.connect(self._bulk_edit)
         self.table.setAlternatingRowColors(True)
-        self.table.itemSelectionChanged.connect(self._row_selected)
+        self._nav = QTimer(self)                 # arrow keys: jump to the peak once the cursor rests
+        self._nav.setSingleShot(True)
+        self._nav.setInterval(150)
+        self._nav.timeout.connect(self._row_selected)
+        self.table.currentItemChanged.connect(lambda *_: self._nav.start())
         self.table.cellDoubleClicked.connect(self._open_row)
 
         self.mirror = pg.PlotWidget(axisItems={"left": _AbsAxis("left")})
@@ -217,8 +222,7 @@ class DuplicatePage(QWidget):
         ws.runChanged.connect(lambda *_: self.refresh_choices())
         ws.quantChanged.connect(self._quant_changed)
         ws.replicatesChanged.connect(self._reapply)
-        self.edit_note = theme.hint("Double-click a cell to change it; the Report box decides what goes into the "
-                                    "report. Changes are marked, undoable and logged.", True)
+        self.edit_note = theme.hint(KEYS_NOTE, True)
         lay.insertWidget(lay.indexOf(split), self.edit_note)
         self.refresh_choices()
 
@@ -375,15 +379,21 @@ class DuplicatePage(QWidget):
         text = f"{n} of {len(self.rows)} substances go into the report"
         if changed:
             text += f"; {changed} changed by the analyst"
-        self.edit_note.setText(text + ". Double-click a cell to change it; changes are marked, undoable and logged.")
+        self.edit_note.setText(text + ". " + KEYS_NOTE)
 
     def _names(self) -> str:
         return " / ".join(self.ws.runs[m].name for m in self.members if m in self.ws.runs)
 
     def set_edit(self, row: dict, field: str, value) -> None:
         """Store (or with ``None`` remove) one analyst change of ``row`` in the replicate group."""
+        self.set_edits([(row, field, value)])
+
+    def set_edits(self, changes: list) -> None:
+        """Several ``(row, field, value)`` changes as one undo step; each is logged."""
         from datetime import datetime
         from gcws.core.audit import current_user
+        if not changes:
+            return
         self._sync_group(self.members)
         g = self.group()
         if g is None:
@@ -391,53 +401,136 @@ class DuplicatePage(QWidget):
         groups = copy.deepcopy(self.ws.replicate_groups)
         tg = next(x for x in groups if x["id"] == g["id"])
         edits = tg.setdefault("edits", {})
-        key = row.get("edit_key") or DV.edit_key(row["rt"])
-        e = edits.setdefault(key, {"rt": float(row["rt"])})
-        before = row.get(field) if field not in ("a1", "a2", "c1", "c2", "mean", "report") else \
-            row.get("edited", {}).get(field, row.get(field))
-        if value is None:
-            e.pop(field, None)
+        logs = []
+        for row, field, value in changes:
+            key = row.get("edit_key") or DV.edit_key(row["rt"])
+            e = edits.setdefault(key, {"rt": float(row["rt"])})
+            before = row.get(field) if field not in ("a1", "a2", "c1", "c2", "mean", "report") else \
+                row.get("edited", {}).get(field, row.get(field))
+            if value is None:
+                e.pop(field, None)
+            else:
+                e[field] = value
+            e["by"], e["at"] = current_user(), datetime.now().isoformat(timespec="seconds")
+            if not any(k in e for k in DV.NUMERIC_EDITS + ("report", "comment")):
+                edits.pop(key, None)
+            name = row.get("name") or f"RT {row['rt']:.3f}"
+            logs.append((f"{name} (RT {row['rt']:.3f}): {field}", "" if before is None else str(before),
+                         "reset" if value is None else str(value)))
+        if len(changes) == 1:
+            label = f"double determination: {changes[0][1]} of {name}"
         else:
-            e[field] = value
-        e["by"], e["at"] = current_user(), datetime.now().isoformat(timespec="seconds")
-        if not any(k in e for k in DV.NUMERIC_EDITS + ("report", "comment")):
-            edits.pop(key, None)
-        name = row.get("name") or f"RT {row['rt']:.3f}"
-        self.set_groups(groups, f"double determination: {field} of {name}")
-        self.ws.log("Double determination changed", self._names(), f"{name} (RT {row['rt']:.3f}): {field}",
-                    "" if before is None else str(before), "reset" if value is None else str(value))
+            label = f"double determination: {len(changes)} cells changed"
+        self.set_groups(groups, label)
+        for what, before, after in logs:
+            self.ws.log("Double determination changed", self._names(), what, before, after)
 
     def set_identity(self, row: dict, name: str | None = None, cas: str | None = None) -> None:
         """Name / CAS of a substance: the identification of its FID peak in both determinations."""
+        self.set_identities([(row, name, cas)])
+
+    def set_identities(self, changes: list) -> None:
+        """``(row, name, cas)`` of several substances as one undo step (None keeps a value)."""
         from gcws.core.ident import Identification
         from gcws.ui.undo import IdentCommand, MultiCommand
-        cmds = []
-        for key, i in (("source1", 0), ("source2", 1)):
-            src = row.get(key)
-            if src is None or i >= len(self.members) or self.members[i] not in self.ws.runs:
+        per_run: dict = {}                       # one command per run: each command snapshots the set
+        for row, name, cas in changes:
+            for key, i in (("source1", 0), ("source2", 1)):
+                src = row.get(key)
+                if src is None or i >= len(self.members) or self.members[i] not in self.ws.runs:
+                    continue
+                rid = self.members[i]
+                st = self.ws.runs[rid]
+                res = self.ws.result(rid, FID)
+                if res is None or not res.peaks:
+                    continue
+                j = min(range(len(res.peaks)), key=lambda q: abs(res.peaks[q].apex_rt - src["rt"]))
+                peak = res.peaks[j]
+                if abs(peak.apex_rt - src["rt"]) > 0.05:
+                    continue
+                old = st.ident_set(FID).for_peak(peak)
+                ident = Identification(apex_rt=peak.apex_rt,
+                                       name=name if name is not None else (old.name if old else ""),
+                                       cas=cas if cas is not None else (old.cas if old else ""),
+                                       score=old.score if old else None, status="Accepted (analyst)",
+                                       formula=old.formula if old else "", library=old.library if old else "",
+                                       hits=list(old.hits) if old else [], source="double determination",
+                                       manual=True, istd=old.istd if old else "")
+                what = "name" if name is not None else "CAS"
+                value = name if name is not None else cas
+                per_run.setdefault(rid, []).append((peak.apex_rt, ident,
+                                                    f"{what} of peak {peak.apex_rt:.3f} = {value!r}"))
+        cmds = [IdentCommand(self.ws, rid, FID, [(t, ident) for t, ident, _ in items],
+                             items[0][2] if len(items) == 1 else f"{len(items)} names / CAS")
+                for rid, items in per_run.items()]
+        if not cmds:
+            return
+        if len(changes) == 1:
+            _row, name, cas = changes[0]
+            label = f"double determination: {'name' if name is not None else 'CAS'} = " \
+                    f"{name if name is not None else cas}"
+        else:
+            label = f"double determination: {len(changes)} names / CAS changed"
+        self._stack().push(MultiCommand(label, cmds))
+
+    def _stack(self):
+        return self.ws.undo_group.activeStack() or self.ws.project_undo
+
+    def _row_index(self, visual_row: int):
+        it = self.table.item(visual_row, 0)
+        k = it.data(Qt.UserRole) if it is not None else None
+        return k if k is not None and 0 <= k < len(self.rows) else None
+
+    def _report_value(self, k: int, on: bool):
+        """The stored report edit: None where ``on`` is what the default rule gives anyway."""
+        return None if on == DV.default_report(self.base_rows[k], self.verdicts[k]) else on
+
+    def _mark_rows(self, visual_rows: list, on: bool):
+        """Enter / Delete: the marked substances go into the report, or not."""
+        changes = []
+        for r in visual_rows:
+            k = self._row_index(r)
+            if k is not None and bool(self.rows[k].get("report")) != on:
+                changes.append((self.rows[k], "report", self._report_value(k, on)))
+        self.set_edits(changes)
+
+    def _bulk_edit(self, cells: list):
+        """Paste, Ctrl+D and the fill handle: many cells as one undo step."""
+        from gcws.ui.docks.peak_table import parse_number
+        edits, idents, bad = [], [], []
+        for r, c, value in cells:
+            k, field = self._row_index(r), FIELD_OF.get(c)
+            if k is None or field is None:
                 continue
-            rid = self.members[i]
-            st = self.ws.runs[rid]
-            res = self.ws.result(rid, FID)
-            if res is None or not res.peaks:
-                continue
-            j = min(range(len(res.peaks)), key=lambda q: abs(res.peaks[q].apex_rt - src["rt"]))
-            peak = res.peaks[j]
-            if abs(peak.apex_rt - src["rt"]) > 0.05:
-                continue
-            old = st.ident_set(FID).for_peak(peak)
-            ident = Identification(apex_rt=peak.apex_rt, name=name if name is not None else (old.name if old else ""),
-                                   cas=cas if cas is not None else (old.cas if old else ""),
-                                   score=old.score if old else None, status="Accepted (analyst)",
-                                   formula=old.formula if old else "", library=old.library if old else "",
-                                   hits=list(old.hits) if old else [], source="double determination",
-                                   manual=True, istd=old.istd if old else "")
-            what = "name" if name is not None else "CAS"
-            cmds.append(IdentCommand(self.ws, rid, FID, [(peak.apex_rt, ident)],
-                                     f"{what} of peak {peak.apex_rt:.3f} = {name if name is not None else cas!r}"))
-        if cmds:
-            label = f"double determination: {'name' if name is not None else 'CAS'} = {name if name is not None else cas}"
-            (self.ws.undo_group.activeStack() or self.ws.project_undo).push(MultiCommand(label, cmds))
+            row = self.rows[k]
+            if field == "report":
+                edits.append((row, "report", self._report_value(k, bool(value))))
+            elif field in ("name", "cas"):
+                text = str(value).strip()
+                if field == "name" and not text:
+                    continue
+                if text != (row.get(field) or ""):
+                    idents.append((row, text, None) if field == "name" else (row, None, text))
+            elif field == "comment":
+                edits.append((row, "comment", str(value).strip() or None))
+            else:
+                text = str(value).strip()
+                number = parse_number(text) if text else None
+                if text and number is None:
+                    bad.append(text)
+                    continue
+                edits.append((row, field, number))
+        if bad:
+            self.ws.message.emit(f"not a number, left out: {', '.join(sorted(set(bad))[:5])}")
+        if not edits and not idents:
+            return
+        stack = self._stack()
+        stack.beginMacro(f"double determination: {len(edits) + len(idents)} cells changed")
+        try:
+            self.set_identities(idents)
+            self.set_edits(edits)
+        finally:
+            stack.endMacro()
 
     def _cell_edited(self, item):
         if self._filling:
@@ -530,6 +623,9 @@ class DuplicatePage(QWidget):
         headers = ["", "Report", "RT [min]", "Substance", "CAS", f"Area {labels[0]}", f"Area {labels[1]}",
                    f"{labels[0]} [{unit}]", f"{labels[1]} [{unit}]", f"Mean [{unit}]", "Diff. %", "Verdict", "Notes",
                    "Comment"]
+        cur = self.table.currentItem()
+        keep_cur = (cur.data(Qt.UserRole), cur.column()) if cur is not None else None
+        keep_sel = {(i.data(Qt.UserRole), i.column()) for i in self.table.selectedItems()}
         self._filling = True
         self.table.setSortingEnabled(False)
         self.table.clear()
@@ -592,7 +688,24 @@ class DuplicatePage(QWidget):
         self.table.setColumnWidth(C_NAME, min(260, max(140, self.table.columnWidth(C_NAME))))
         hh.setStretchLastSection(True)
         self.table.setSortingEnabled(True)
+        self._restore_selection(keep_cur, keep_sel)
         self._filling = False
+
+    def _restore_selection(self, cur, sel):
+        """After a rebuild the same substances and columns are marked again (no navigation)."""
+        from PySide6.QtCore import QItemSelectionModel
+        rowof = {self.table.item(r, 0).data(Qt.UserRole): r for r in range(self.table.rowCount())
+                 if self.table.item(r, 0) is not None}
+        self.table.blockSignals(True)
+        try:
+            for k, c in sel:
+                if k in rowof and self.table.item(rowof[k], c) is not None:
+                    self.table.item(rowof[k], c).setSelected(True)
+            if cur is not None and cur[0] in rowof:
+                idx = self.table.model().index(rowof[cur[0]], cur[1])
+                self.table.selectionModel().setCurrentIndex(idx, QItemSelectionModel.NoUpdate)
+        finally:
+            self.table.blockSignals(False)
 
     # -- mirror plot -----------------------------------------------------------------------
 
@@ -700,10 +813,13 @@ class DuplicatePage(QWidget):
     # -- navigation ----------------------------------------------------------------------------
 
     def _current_row(self):
-        items = self.table.selectedItems()
-        if not items:
+        it = self.table.currentItem()
+        if it is None:
+            items = self.table.selectedItems()
+            it = items[0] if items else None
+        if it is None:
             return None
-        k = items[0].data(Qt.UserRole)
+        k = it.data(Qt.UserRole)
         return self.rows[k] if k is not None and 0 <= k < len(self.rows) else None
 
     def _row_selected(self):
