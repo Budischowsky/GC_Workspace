@@ -255,7 +255,7 @@ class BlanksDialog(QDialog):
 class AtlasHitsDialog(QDialog):
     """EI Atlas hit list for one spectrum, with head-to-tail plot and 'Assign hit'."""
 
-    def __init__(self, points, name, method, parent=None, on_assign=None):
+    def __init__(self, points, name, method, parent=None, on_assign=None, on_library=None):
         super().__init__(parent)
         self.setWindowTitle(f"EI Atlas - {name}")
         self.resize(980, 640)
@@ -280,6 +280,11 @@ class AtlasHitsDialog(QDialog):
         lay.addWidget(self.table, 2)
         h = QHBoxLayout()
         h.addWidget(self.status, 1)
+        if on_library is not None:
+            lib = QPushButton("Add spectrum to library...")
+            lib.setToolTip("Store this spectrum in a library (Edit library)")
+            lib.clicked.connect(on_library)
+            h.addWidget(lib)
         h.addWidget(assign)
         lay.addLayout(h)
         self._show_unknown()

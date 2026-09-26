@@ -108,6 +108,7 @@ class SpectrumDock(QWidget):
     atlasRequested = QtSignal(list, str)
     registerRequested = QtSignal()
     investigateRequested = QtSignal()
+    libraryRequested = QtSignal()                # add this spectrum to a library (Edit library)
     ionClicked = QtSignal(int)
 
     def __init__(self, ws, parent=None):
@@ -145,11 +146,15 @@ class SpectrumDock(QWidget):
         b_reg = QToolButton()
         b_reg.setText("Register unknown")
         b_reg.clicked.connect(self.registerRequested.emit)
+        b_lib = QToolButton()
+        b_lib.setText("Add to library...")
+        b_lib.setToolTip("Store this spectrum with name, CAS, formula, RI ... in a library (Edit library)")
+        b_lib.clicked.connect(self.libraryRequested.emit)
         self.mode.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
         self.mode.setMinimumContentsLength(12)
         actions = QToolBar()                    # overflows into a » menu when the panel is narrow
         actions.setIconSize(actions.iconSize() * 0.8)
-        for b in (b_atlas, b_res, b_nist, b_copy, b_save, b_reg):
+        for b in (b_atlas, b_res, b_nist, b_copy, b_save, b_reg, b_lib):
             actions.addWidget(b)
         self.minus_blank = QCheckBox("− blank")
         self.minus_blank.setToolTip("Subtract the assigned blank's spectrum at the same (aligned) time; "

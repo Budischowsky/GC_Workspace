@@ -250,6 +250,8 @@ class MainWindow(QMainWindow):
         m.addSeparator()
         m.addAction(self.registerUnknownAction)
         m.addAction("Unknown register...", self.open_register)
+        m.addAction("Edit library...", lambda: self.edit_library(False))
+        m.addAction("Add current spectrum to library...", lambda: self.edit_library(True))
         m.addSeparator()
         m.addAction("Retention index (alkane ladder)...", self.retention_index)
         m.addAction("Deconvolution of selected peak...", lambda: self.deconvolution("peak"))
@@ -358,6 +360,7 @@ class MainWindow(QMainWindow):
         self.spectrum.registerRequested.connect(self.register_unknown)
         self.spectrum.investigateRequested.connect(self.atlas_research)
         self.spectrum.ionClicked.connect(self.show_ion_eic)
+        self.spectrum.libraryRequested.connect(lambda: self.edit_library(True))
         self.replicates.reportRequested.connect(lambda kind, gid: self.report(kind, gid))
         self._tool_changed("select")
 
@@ -699,6 +702,17 @@ class MainWindow(QMainWindow):
                 msg += f", {copied['protected']} FID names kept)" if copied["protected"] else ")"
         self.statusBar().showMessage(msg + (" (cancelled)" if cancelled else ""), 12000)
 
+    def edit_library(self, from_spectrum: bool = True):
+        """Identify > Edit library: add the spectrum on display to a library, or browse one."""
+        from gcws.ui.dialogs.library_edit import EditLibraryDialog, entry_from_spectrum
+        entry = entry_from_spectrum(self) if from_spectrum else {}
+        if from_spectrum and not entry.get("peaks"):
+            self.statusBar().showMessage("No spectrum on display: select a peak or right-click a chromatogram", 6000)
+        dlg = EditLibraryDialog(self, entry)
+        if not (from_spectrum and entry.get("peaks")):
+            dlg.tabs.setCurrentIndex(1)
+        dlg.exec()
+
     def edit_search_methods(self):
         from gcws.ui.dialogs.search_method import SearchMethodDialog
         SearchMethodDialog(self).exec()
@@ -756,7 +770,8 @@ class MainWindow(QMainWindow):
             st.undo.push(IdentCommand(self.ws, st.id, self.ws.signal_key, [(peak.apex_rt, ident)],
                                       f"peak {peak.apex_rt:.3f}: EI Atlas hit {ident.name}"))
 
-        dlg = AtlasHitsDialog(points, name, method, self, on_assign=assign if peak is not None else None)
+        dlg = AtlasHitsDialog(points, name, method, self, on_assign=assign if peak is not None else None,
+                              on_library=lambda: self.edit_library(True))
         dlg.show()
 
     def atlas_research(self):

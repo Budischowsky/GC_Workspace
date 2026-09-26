@@ -22,6 +22,7 @@ def win(qtbot, tmp_path, monkeypatch):
     w.show()
     yield w
     w.ws.dirty = False
+    w.close()             # while "No" is still the answer: a test run must never wait for a dialog
 
 
 def _load(qtbot, w, samples, prefixes):
@@ -609,3 +610,66 @@ def test_library_search_on_tic_copies_names_to_fid(qtbot, win, samples):
     out, counts = transfer_names(ws, st.id, [(t, Identification(apex_rt=t, name="A", score=80)),
                                              (t + 0.001, Identification(apex_rt=t + 0.001, name="B", score=90))])
     assert [i.name for _rt, i in out] == ["B"] and counts["coeluting"] == 1
+
+
+def test_edit_library_dialog_adds_current_spectrum(qtbot, win, samples, tmp_path, monkeypatch):
+    from gcws.identify import library_edit as LE
+    from gcws.ui.dialogs.library_edit import EditLibraryDialog, entry_from_spectrum
+    root = tmp_path / "atlas"
+    (root / "libraries" / "gcws").mkdir(parents=True)
+    (root / "Library" / "CCALU_GCMS_1.L").mkdir(parents=True)
+    (root / "Library" / "CCALU_GCMS_1.L" / "HEADER.IND").write_bytes(b"")
+    lib = root / "libraries" / "gcws" / "Own spectra.msp"
+    lib.write_text(LE.write_msp([LE.new_record("Old entry", [(57, 999), (71, 300)])]), encoding="cp1252",
+                   newline="")
+    monkeypatch.setattr(LE, "atlas_root", lambda: root)
+    monkeypatch.setattr(LE, "find_lib2nist", lambda *a, **k: None)
+    rescans = []
+    monkeypatch.setattr(LE, "rescan_atlas", lambda: rescans.append(1) or "")
+    _load(qtbot, win, samples, ["07_"])
+    ws = win.ws
+    res = ws.result(ws.active_id, "TIC")
+    ws.set_signal_key("TIC")
+    k = max(range(len(res.peaks)), key=lambda i: res.peaks[i].area if 20 < res.peaks[i].apex_rt < 26 else 0)
+    ws.select_peak(k)
+    entry = entry_from_spectrum(win)
+    assert entry["peaks"] and entry["rt"] and "07_" in entry["source"]
+    dlg = EditLibraryDialog(win, entry)
+    qtbot.addWidget(dlg)
+    # the Agilent library is listed but cannot be chosen; the MSP library is the default
+    assert dlg.current_library().name == "Own spectra"
+    agilent = dlg.library.findData("CCALU_GCMS_1.L")
+    assert agilent >= 0 and not dlg.library.model().item(agilent).isEnabled()
+    dlg.name.setText("Test substance")
+    dlg.cas.setText("117-81-7")
+    dlg.formula.setText("C24H38O4")
+    assert dlg.mw.text() == "390"                       # nominal mass from the formula
+    dlg.ri.setText("2530")
+    dlg.save_entry()
+    qtbot.waitUntil(lambda: not dlg._busy, timeout=20000)
+    recs = LE.parse_msp(lib.read_text(encoding="cp1252"))
+    assert [r.name for r in recs] == ["Old entry", "Test substance"]
+    new = recs[1]
+    assert new.cas == "117-81-7" and new.ri == 2530 and len(new.peaks) == len(dlg.trimmed_peaks()) > 5
+    assert "07_" in new.get("Comment") and rescans
+    assert any(r.action == "Library entry added" for r in ws.audit.records)
+    # browse, edit and delete
+    dlg.tabs.setCurrentIndex(1)
+    qtbot.waitUntil(lambda: not dlg._busy and len(dlg.records) == 2, timeout=20000)
+    dlg.table.setCurrentCell(1, 0)
+    dlg.edit_selected()
+    assert dlg.editing == 1 and dlg.name.text() == "Test substance" and dlg.ri.text() == "2530"
+    dlg.name.setText("Test substance, corrected")
+    dlg.save_entry()
+    qtbot.waitUntil(lambda: not dlg._busy and len(dlg.records) == 2, timeout=20000)
+    assert [r.name for r in LE.parse_msp(lib.read_text(encoding="cp1252"))] == ["Old entry",
+                                                                                 "Test substance, corrected"]
+    from PySide6.QtWidgets import QMessageBox
+    with monkeypatch.context() as m:                  # "Yes" only for this question, never for closing the app
+        m.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))
+        dlg.table.setCurrentCell(0, 0)
+        dlg.delete_selected()
+    qtbot.waitUntil(lambda: not dlg._busy and len(dlg.records) == 1, timeout=20000)
+    dlg.close()
+    ws.dirty = False
+    assert [r.name for r in LE.parse_msp(lib.read_text(encoding="cp1252"))] == ["Test substance, corrected"]
