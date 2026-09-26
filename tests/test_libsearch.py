@@ -190,3 +190,86 @@ def test_own_library_first_use_asks_for_the_library(qtbot, data, settings, monke
     assert len(win.methods) == 1 and win.methods[0].enabled_libraries() == ["Own"]
     MainWindow.own_library_search(win, spectrum, "q")          # chosen now: no dialog any more
     assert len(win.methods) == 2
+
+
+def test_search_order_for_sequential_search(qtbot, data, monkeypatch):
+    """Search methods dialog: the list order is the search order; sequential search follows it."""
+    import gc_search_method as SM
+    from PySide6.QtCore import Qt
+    from gcws.identify.service import search_spectrum
+    from gcws.libsearch import store
+    from gcws.ui.dialogs.search_method import SearchMethodDialog, order_summary
+    monkeypatch.setattr(SM, "store_path", lambda: data / "library_search_methods.json")
+    toluene_b = [("Toluene", [(91, 999), (92, 550), (65, 150)])]
+    libs = store.add([], store.discover(_msp(data / "A.msp")))
+    libs = store.add(libs, store.discover(_msp(data / "B.msp", toluene_b)))
+    store.save(libs)
+    ms = SM.MethodStore()
+    m = SM.SearchMethod(name="Seq", algorithm="similarity", min_score=0)
+    m.libraries = [SM.LibraryEntry("A"), SM.LibraryEntry("B"), SM.LibraryEntry("C", enabled=False)]
+    ms.put(m)
+    ms.save()
+
+    dlg = SearchMethodDialog(None, "Seq")
+    qtbot.addWidget(dlg)
+    assert dlg.names.currentText() == "Seq" and dlg.library_order() == ["A", "B", "C"]
+    assert dlg.libs.item(0).text().startswith("1.") and dlg.libs.item(2).text().strip() == "C"
+    assert not dlg.stop_score.isEnabled()                      # combined: no stop score
+    dlg.mode.setCurrentIndex(dlg.mode.findData("sequential"))
+    assert dlg.stop_score.isEnabled() and "top down" in dlg.order_hint.text()
+    dlg.stop_score.setValue(100)
+    assert dlg.stop_score.value() == 99                        # the engine's limit
+    dlg.stop_score.setValue(10)
+    dlg.libs.setCurrentRow(1)
+    dlg.move_library("top")                                    # B, A, C
+    dlg.libs.setCurrentRow(2)
+    dlg.move_library("up")                                     # B, C, A
+    assert dlg.library_order() == ["B", "C", "A"] and dlg.libs.currentRow() == 1
+    dlg.libs.item(1).setCheckState(Qt.Checked)                 # C ticked: numbered 2., A becomes 3.
+    assert dlg.libs.item(1).text().startswith("2.") and dlg.libs.item(2).text().startswith("3.")
+    dlg.libs.item(1).setCheckState(Qt.Unchecked)
+    dlg._save()
+    assert dlg.saved.text().startswith("Saved")
+
+    saved = SM.MethodStore().get("Seq")
+    assert [e.name for e in saved.libraries] == ["B", "C", "A"] and not saved.libraries[1].enabled
+    assert saved.mode == "sequential" and saved.stop_score == 10
+    assert order_summary(saved) == "Sequential, stop at score 10:  1. B  →  2. A"
+    query = [(91, 1000), (92, 590), (65, 115)]
+    hits = search_spectrum(query, "q", saved)
+    assert hits and {h["library"] for h in hits} == {"B"}      # B searched first and it has a good hit
+    saved.libraries = [saved.libraries[2], saved.libraries[0]]  # A first
+    hits = search_spectrum(query, "q", saved)
+    assert hits and {h["library"] for h in hits} == {"A"}
+    saved.mode, saved.dedupe = "combined", False                # both Toluenes listed
+    assert {h["library"] for h in search_spectrum(query, "q", saved)} == {"A", "B"}
+    assert order_summary(saved) == "Combined: 2 libraries searched together."
+
+
+def test_start_dialog_shows_and_edits_the_search_order(qtbot, data, monkeypatch):
+    import gc_search_method as SM
+    from gcws.ui.dialogs.identify import SearchStartDialog
+    from gcws.ui.dialogs.search_method import SearchMethodDialog
+    monkeypatch.setattr(SM, "store_path", lambda: data / "library_search_methods.json")
+    ms = SM.MethodStore()
+    m = SM.SearchMethod(name="Seq", mode="sequential", stop_score=70)
+    m.libraries = [SM.LibraryEntry("A"), SM.LibraryEntry("B")]
+    ms.put(m)
+    ms.save()
+
+    class WS:
+        active = None
+
+        def states(self):
+            return []
+
+    dlg = SearchStartDialog(WS())
+    qtbot.addWidget(dlg)
+    dlg.method.setCurrentText("Seq")
+    assert dlg.order.text() == "Sequential, stop at score 70:  1. A  →  2. B"
+    with monkeypatch.context() as mp:           # Edit...: B moved to the top and saved
+        mp.setattr(SearchMethodDialog, "exec", lambda self: (self.libs.setCurrentRow(1), self.move_library("top"),
+                                                             self._save(), 0)[-1])
+        dlg.edit_method.click()
+    assert dlg.method.currentText() == "Seq" and dlg.order.text().endswith("1. B  →  2. A")
+    assert dlg.values()["method"].enabled_libraries() == ["B", "A"]

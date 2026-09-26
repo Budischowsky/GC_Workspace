@@ -22,6 +22,16 @@ class SearchStartDialog(QDialog):
         self.method.addItems(self.store.names())
         gc_method = ws.active.run.meta.method if ws.active and ws.active.run.meta else ""
         self.method.setCurrentText(self.store.for_gc_method(gc_method).name)
+        self.method.currentTextChanged.connect(lambda *_: self._show_order())
+        self.edit_method = QPushButton("Edit...")
+        self.edit_method.setToolTip("Libraries, their order (sequential search) and the search options of "
+                                    "this method")
+        self.edit_method.clicked.connect(self._edit_method)
+        self.order = QLabel()
+        self.order.setObjectName("hint")
+        self.order.setWordWrap(True)
+        self.order.setToolTip("Identify > Search methods...: tick the libraries and set their order")
+        self._show_order()
         self.active_only = QRadioButton("Active chromatogram")
         self.all_runs = QRadioButton(f"All loaded chromatograms ({len(ws.states())})")
         self.active_only.setChecked(True)
@@ -63,7 +73,11 @@ class SearchStartDialog(QDialog):
         self.target_tic.toggled.connect(lambda on: self.transfer.setVisible(on))
         self.transfer.setVisible(self.target_tic.isChecked())
         f = QFormLayout()
-        f.addRow("Search method", self.method)
+        pick = QHBoxLayout()
+        pick.addWidget(self.method, 1)
+        pick.addWidget(self.edit_method)
+        f.addRow("Search method", pick)
+        f.addRow("", self.order)
         f.addRow("Peaks", self.target_tic)
         f.addRow("", self.transfer)
         f.addRow("", self.target_fid)
@@ -90,6 +104,24 @@ class SearchStartDialog(QDialog):
         lay.addLayout(f)
         lay.addWidget(note)
         lay.addWidget(bb)
+
+    def _show_order(self):
+        from gcws.ui.dialogs.search_method import order_summary
+        name = self.method.currentText()
+        self.order.setText(order_summary(self.store.get(name)) if name in self.store.methods else "")
+
+    def _edit_method(self):
+        from gcws.identify.service import search_methods
+        from gcws.ui.dialogs.search_method import SearchMethodDialog
+        name = self.method.currentText()
+        SearchMethodDialog(self, name).exec()
+        self.store = search_methods()
+        self.method.blockSignals(True)
+        self.method.clear()
+        self.method.addItems(self.store.names())
+        self.method.setCurrentText(name if name in self.store.methods else self.store.default)
+        self.method.blockSignals(False)
+        self._show_order()
 
     def values(self) -> dict:
         from PySide6.QtCore import QSettings
