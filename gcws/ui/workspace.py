@@ -397,7 +397,7 @@ class Workspace(QObject):
         res = integrate(sig, self._derived_method(st, key, sig) if is_derived(key) else self.method_for(st, key),
                         st.events(key), t_min=self.solvent_cut(st, key))
         st.results[key] = res
-        stale = [] if is_derived(key) else self._drop_derived_of(run_id, key)
+        stale = [] if is_derived(key) or not self.blank_options().auto else self._drop_derived_of(run_id, key)
         if key == FID and st.run.ms is not None and st.delay is not None and st.delay_override is None:
             tic = st.results.get(TIC)
             if tic is not None:
@@ -570,7 +570,10 @@ class Workspace(QObject):
                     for key in keys[st.id]:
                         if is_derived(key) == derived:
                             self.integrate(st.id, key)
-        if hs_changed or any((old or {}).get(k) != (new or {}).get(k) for k in ("blank_sub", "istd_defs", "istd_bindings", "hs", "detector")):
+        from gcws.signal.blank import BlankOptions
+        auto = BlankOptions.from_dict((new or {}).get("blank_sub")).auto
+        if hs_changed or auto and any((old or {}).get(k) != (new or {}).get(k)
+                                      for k in ("blank_sub", "istd_defs", "istd_bindings", "hs", "detector")):
             self.invalidate_blank(None)             # the ISTD windows are kept out of the subtraction
         if cut_changed or (old or {}).get("deconv") != (new or {}).get("deconv"):
             for st in self.states():
@@ -729,6 +732,12 @@ class Workspace(QObject):
         for st in affected:
             if is_derived(self.signal_key) or st.blanks or st.blanks_istd:
                 self.runChanged.emit(st.id)
+
+    def subtract_blank(self) -> None:
+        """The "Subtract" button: rebuild every blank-subtracted trace with the current settings and
+        integrations (the manual step when automatic blank subtraction is off)."""
+        self.invalidate_blank(None)
+        self.log("blank subtraction", "", "blank subtraction")
 
     def _drop_matches(self, run_id: str, key: str) -> None:
         users = {s.id for s in self.states() if run_id in s.blanks + s.blanks_istd} | {run_id}

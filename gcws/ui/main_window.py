@@ -522,6 +522,8 @@ class MainWindow(QMainWindow):
         q["blank_sub"] = dlg.options().to_dict()
         if q.get("blank_sub") != self.ws.quant.get("blank_sub"):
             self.ws.push_quant("blank subtraction settings", q, "blank subtraction")
+        if dlg.subtract_now:
+            self.ws.subtract_blank()
 
     def ask_eic(self):
         """Ctrl+I: an extracted ion chromatogram in the MS chromatogram panel."""

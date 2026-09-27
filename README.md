@@ -251,6 +251,9 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
        the bleed.
      - Settings are in *Quantify > Blank subtraction settings*. By default only a Blank is subtracted; a
        Blank + ISTD (or both) can be chosen.
+     - **Automatic blank subtraction** (on by default, in the same window): the subtracted traces are
+       rebuilt after every settings change and re-integration. Switch it off to rebuild them only when you
+       click **Subtract** at the bottom of that window.
      - **Internal standards are never subtracted**: the peaks of the ISTD table (at the bound RT, or the
        largest peak within 0.1 min of the target RT; on MS traces at the FID time minus the delay) keep their
        full signal, and the peak-level blank check never marks them as blank.

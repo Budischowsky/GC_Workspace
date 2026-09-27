@@ -197,3 +197,41 @@ def test_istds_survive_blank_istd_subtraction(ws_blank, source):
         st.blanks_istd = []
         ws.quant = old
         ws._quant_settings_changed(q, old)
+
+
+def test_manual_blank_subtraction(ws_blank):
+    """Automatic off: settings changes keep the subtracted trace until "Subtract" is clicked."""
+    import copy
+    ws, ids = ws_blank
+    rid = ids["07_"]
+    old = copy.deepcopy(ws.quant)
+    manual = copy.deepcopy(ws.quant)
+    manual["blank_sub"] = BlankOptions(auto=False).to_dict()
+    ws.quant = manual
+    ws._quant_settings_changed(old, manual)
+    try:
+        der = ws.result(rid, "FID - Blank")
+        q = copy.deepcopy(manual)
+        q["blank_sub"] = BlankOptions(auto=False, scale=1.5).to_dict()
+        ws.quant = q
+        ws._quant_settings_changed(manual, q)
+        assert ws.result(rid, "FID - Blank") is der                  # not rebuilt automatically
+        ws.integrate(rid, "FID")
+        assert ws.result(rid, "FID - Blank") is der                  # nor on a re-integration
+        ws.subtract_blank()
+        assert ws.result(rid, "FID - Blank") is not der              # "Subtract" rebuilds it
+    finally:
+        ws.quant = old
+        ws._quant_settings_changed(q, old)
+
+
+def test_blank_dialog_auto_and_subtract_button():
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from gcws.ui.dialogs.blank import BlankOptionsDialog
+    dlg = BlankOptionsDialog(BlankOptions())
+    assert dlg.auto.isChecked() and not dlg.subtract.isEnabled()
+    dlg.auto.setChecked(False)
+    assert dlg.subtract.isEnabled() and dlg.options().auto is False
+    dlg.subtract.click()
+    assert dlg.subtract_now and dlg.result() == BlankOptionsDialog.Accepted

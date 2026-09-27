@@ -34,6 +34,11 @@ class BlankOptionsDialog(QDialog):
     def __init__(self, opts: BlankOptions, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Blank subtraction")
+        self.subtract_now = False
+        self.auto = QCheckBox("Automatic blank subtraction")
+        self.auto.setToolTip("On: the blank-subtracted traces are rebuilt after every change of these settings "
+                             "or of an integration.\nOff: they are only rebuilt when you click \"Subtract\".")
+        self.auto.setChecked(opts.auto)
         self.source = _combo(SOURCES, opts.source)
         self.mode_fid = _combo(MODES, opts.mode_fid)
         self.mode_ms = _combo(MODES, opts.mode_ms)
@@ -65,19 +70,30 @@ class BlankOptionsDialog(QDialog):
         g.addRow("MS: spectra must agree (cosine ≥)", self.spectral)
         g.addRow("RT tolerance", self.rt_tol)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.subtract = bb.addButton("Subtract", QDialogButtonBox.ActionRole)
+        self.subtract.setToolTip("Apply these settings and subtract the blank now")
+        self.subtract.clicked.connect(self._subtract)
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
         theme.set_primary(bb.button(QDialogButtonBox.Ok))
+        self.auto.toggled.connect(lambda on: self.subtract.setEnabled(not on))
+        self.subtract.setEnabled(not opts.auto)
         lay = QVBoxLayout(self)
         lay.addWidget(theme.hint("The NIAS mg/kg quantification keeps its own peak-area blank correction and is "
                                  "not affected by these settings."))
+        lay.addWidget(self.auto)
         lay.addWidget(trace)
         lay.addWidget(peaks)
         lay.addWidget(bb)
+
+    def _subtract(self):
+        self.subtract_now = True
+        self.accept()
 
     def options(self) -> BlankOptions:
         return BlankOptions(source=self.source.currentData(), mode_fid=self.mode_fid.currentData(),
                             mode_ms=self.mode_ms.currentData(), align="auto" if self.align.isChecked() else "off",
                             max_shift=self.max_shift.value(), scale=self.scale.value(), clip=self.clip.isChecked(),
                             ratio_limit=self.ratio.value(), spectral_min=self.spectral.value(),
-                            rt_tol=self.rt_tol.value() or None, env_window=self.env.value())
+                            rt_tol=self.rt_tol.value() or None, env_window=self.env.value(),
+                            auto=self.auto.isChecked())

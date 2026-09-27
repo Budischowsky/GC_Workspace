@@ -36,6 +36,7 @@ class BlankOptions:
     spectral_min: float = 0.7        # peak level: spectral cosine needed for an MS blank match
     rt_tol: float | None = None      # peak level: None = NIAS blank RT tolerance (FID) / 0.03 min (MS)
     env_window: float = 0.5          # min, SNIP window of the blank's baseline ("peaks" mode)
+    auto: bool = True                # rebuild the subtracted traces on every change; off = only on "Subtract"
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "BlankOptions":
