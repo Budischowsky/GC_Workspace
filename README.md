@@ -130,6 +130,13 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
      mean spectrum over a range, Shift+right-drag to set a background range that is subtracted. In the
      spectrum panel ← / → step one scan and Esc returns to the selected peak. Clicking an ion in a spectrum
      shows its EIC in the MS chromatogram panel.
+   - **Spectrum display**: the m/z axis fits the ions that carry signal (from 1 % of the base peak), with a
+     margin rounded to round numbers and never wider than the run's scan range. *Whole scan range on the m/z
+     axis* in the spectrum menu keeps every spectrum on the full scan range instead. A box zoom or wheel
+     zoom sets the m/z window and refits the abundance axis to the tallest ion in view; double-click
+     returns. Sticks stay at least one pixel wide at every zoom. The m/z labels are laid out for the
+     current view: strongest ions first, above or beside their stick, never over another label or a
+     taller stick, so zooming in labels crowded ions.
    - Scan navigation is on the keyboard only; a plain return to the peak (Esc) also ends a background
      range. Detailed scan notes appear on hover over the single caption.
    - **Subtract baseline**, beside Library search, starts a two-scan selection: right-click the apex,

@@ -13,11 +13,13 @@ spectrum on display, whatever its source.
 """
 from __future__ import annotations
 
-import numpy as np
 import hashlib
+import re
+
+import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QSettings, Qt, Signal as QtSignal
-from PySide6.QtGui import QAction, QColor, QGuiApplication
+from PySide6.QtCore import QSettings, Qt, QTimer, Signal as QtSignal
+from PySide6.QtGui import QAction, QColor, QFont, QFontMetricsF, QGuiApplication
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QHeaderView,
                                QMenu, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
                                QVBoxLayout, QWidget)
@@ -29,9 +31,68 @@ from gcws.ui import theme
 from gcws.ui.docks.interpretation_view import InterpretationView
 
 
+#: ions weaker than this (% of the base peak) do not stretch the m/z axis of a spectrum
+AXIS_MIN_REL = 1.0
+#: narrowest m/z window a spectrum is fitted to
+AXIS_MIN_SPAN = 60.0
+
+
+def _round_down(v: float, step: float) -> float:
+    return float(np.floor(v / step) * step)
+
+
+def _round_up(v: float, step: float) -> float:
+    return float(np.ceil(v / step) * step)
+
+
+def smart_mz_range(mz, rel, bounds=None, *, min_rel: float = AXIS_MIN_REL,
+                   min_span: float = AXIS_MIN_SPAN) -> tuple[float, float]:
+    """The m/z window a spectrum is shown in: every ion carrying signal (at least ``min_rel`` % of the base
+    peak) plus a margin, rounded outward to round numbers so that neighbouring scans usually share one axis
+    (tens at the low end; 10, 25 or 50 at the high end, depending on the width). ``bounds`` - the run's
+    scan range - caps the window; it is at least ``min_span`` wide."""
+    mz = np.asarray(mz, float)
+    rel = np.asarray(rel, float)
+    if mz.size == 0:
+        return (0.0, 100.0)
+    sig = mz[rel >= min_rel]
+    if sig.size == 0:
+        sig = mz
+    lo, hi = float(sig.min()), float(sig.max())
+    span = max(hi - lo, min_span)
+    pad = max(5.0, 0.04 * span)
+    step = 10.0 if span < 150 else (25.0 if span < 400 else 50.0)
+    x_lo = max(0.0, _round_down(lo - pad, 10.0))
+    x_hi = _round_up(hi + pad, step)
+    if bounds is not None and bounds[1] > bounds[0]:
+        b_lo, b_hi = _round_down(bounds[0], 10.0), _round_up(bounds[1], 10.0)
+        # ions outside the scan range (a library spectrum) stay on the axis
+        x_lo = max(x_lo, min(b_lo, _round_down(lo - 1, 10.0)))
+        x_hi = min(x_hi, max(b_hi, _round_up(hi + 1, 10.0)))
+    if x_hi - x_lo < min_span:
+        x_hi = x_lo + min_span
+        if bounds is not None and bounds[1] > bounds[0] and x_hi > _round_up(bounds[1], 10.0):
+            x_hi = max(_round_up(bounds[1], 10.0), hi + 1)
+            x_lo = max(0.0, min(x_lo, x_hi - min_span))
+    return x_lo, x_hi
+
+
 class StickPlot(pg.PlotWidget):
-    ionClicked = QtSignal(int)                  # m/z of the bar clicked
+    """Mass spectrum as sticks, optionally mirrored against a reference spectrum.
+
+    * Sticks are cosmetic lines, at least one pixel wide at every zoom (bars 0.6 m/z wide fell between
+      pixel columns on a wide axis and vanished, leaving their labels floating in the air).
+    * The m/z axis fits the ions that carry signal (:func:`smart_mz_range`), within the run's scan range
+      when ``range_provider`` gives one; ``full_range`` shows the whole scan range instead.
+    * Labels are laid out in pixels whenever the view changes: strongest ions first, never overlapping
+      another label or a taller neighbouring stick, so zooming in reveals the crowded ones.
+    * A zoom that changes the m/z window refits the abundance axis to the tallest ion in view.
+    """
+    ionClicked = QtSignal(int)                  # m/z of the stick clicked
     contextRequested = QtSignal(object)        # global screen position
+
+    LABEL_GAP = 3                               # px between labels, and between a label and its stick
+    CLICK_PX = 6                                # a click this close to a stick picks its ion
 
     def __init__(self, *, embedded_title=False):
         super().__init__()
@@ -39,19 +100,35 @@ class StickPlot(pg.PlotWidget):
         self.setLabel("bottom", "m/z")
         self.setLabel("left", "rel. abundance")
         self.showGrid(y=True, alpha=theme.PLOT["grid_alpha"])
-        self.getPlotItem().getViewBox().setMouseMode(pg.ViewBox.RectMode)
+        vb = self.getPlotItem().getViewBox()
+        vb.setMouseMode(pg.ViewBox.RectMode)
         self.setToolTip("Click an ion to show its extracted ion chromatogram; drag to zoom, double-click resets")
         self.texts = []
         self._mz = np.zeros(0)
+        self._rel = np.zeros(0)
+        self._ref = None                            # (m/z, rel. %) of the mirrored reference, or None
+        self._marks = {}                            # {m/z: (label, colour)}
+        self._sticks = []                           # [(PlotCurveItem, colour)]
         self.embedded_title = embedded_title
         if embedded_title:
             from gcws.ui.plot.overlay import ElidedLabel, PlotOverlay
             self.caption = ElidedLabel()
             self.caption_overlay = PlotOverlay(self, [self.caption])
         self._last = None                           # the last drawing, redrawn on a theme switch
-        #: callable -> (lo, hi) m/z axis kept for every spectrum, or None: fitted to each spectrum
+        #: callable -> (lo, hi) scan range of the run on display, or None: the m/z axis is never wider
         self.range_provider = None
+        #: True: every spectrum on the whole scan range (the range_provider's), instead of a fitted window
+        self.full_range = False
         self._home_range = None                     # ((x_lo, x_hi), (y_lo, y_hi)) of the last drawing
+        self._at_home = False                       # the view is the home range (kept on a resize)
+        self._x_seen = None                         # m/z window of the last layout (a change refits y)
+        self._layout_timer = QTimer(self)
+        self._layout_timer.setSingleShot(True)
+        self._layout_timer.setInterval(0)
+        self._layout_timer.timeout.connect(self._layout)
+        vb.sigRangeChanged.connect(lambda *_: self._layout_timer.start())
+        vb.sigRangeChangedManually.connect(self._user_range)
+        vb.sigResized.connect(self._resized)
         self.scene().sigMouseClicked.connect(self._clicked)
         theme.register_plot(self, self._redraw)
 
@@ -69,78 +146,220 @@ class StickPlot(pg.PlotWidget):
             if ev.double():
                 self._home()
             return
-        x = self.getPlotItem().getViewBox().mapSceneToView(ev.scenePos()).x()
+        vb = self.getPlotItem().getViewBox()
+        x = vb.mapSceneToView(ev.scenePos()).x()
         i = int(np.argmin(np.abs(self._mz - x)))
-        if abs(self._mz[i] - x) <= 0.7:
+        if abs(self._mz[i] - x) <= max(0.7, self.CLICK_PX * vb.viewPixelSize()[0]):
             self.ionClicked.emit(int(self._mz[i]))
 
+    # -- drawing ---------------------------------------------------------------
+
     def show_spectrum(self, mz, ab, ref=None, title="", marks=None):
-        """``marks``: optional {m/z: (label, level)} drawn above the bars (interpretation)."""
+        """``marks``: optional {m/z: (label, level)} drawn above the sticks (interpretation)."""
         self._last = ((mz, ab), dict(ref=ref, title=title, marks=marks))
         if self.embedded_title:
             self.caption.setText(title or "no spectrum")
             self.caption_overlay.reposition()
         self.clear()
-        for t in self.texts:
-            self.removeItem(t)
         self.texts = []
+        self._sticks = []
         self._mz = np.zeros(0)
+        self._rel = np.zeros(0)
+        self._ref = None
+        self._marks = {}
         if mz is None or len(mz) == 0 or ab is None or len(ab) == 0 or np.max(ab) <= 0:
+            self._home_range = None
             self.setTitle(None if self.embedded_title else (title or "no spectrum"))
             return
         mz = np.asarray(mz, float)
         ab = np.asarray(ab, float)
-        rel = ab / ab.max() * 100.0
         keep = np.isfinite(ab) & (ab > 0)
-        full_mz = mz
-        mz, rel = mz[keep], rel[keep]
-        self._mz = mz
-        self.addItem(pg.BarGraphItem(x=mz, height=rel, width=0.6, brush=theme.PLOT["spectrum"], pen=None))
-        marks = marks or {}
-        order = [i for i in np.argsort(rel)[::-1][:8] if int(mz[i]) not in marks]
-        for i in order:
-            t = pg.TextItem(str(int(mz[i])), color=theme.PLOT["spectrum"], anchor=(0.5, 1))
-            t.setPos(float(mz[i]), float(rel[i]))
-            self.addItem(t)
-            self.texts.append(t)
+        mz, rel = mz[keep], ab[keep] / ab[keep].max() * 100.0
+        self._mz, self._rel = mz, rel
         lookup = {int(m): r for m, r in zip(mz, rel)}
-        fixed = self.range_provider() if self.range_provider is not None else None
-        x_lo, x_hi = (fixed[0] - 3, fixed[1] + 3) if fixed else (float(min(full_mz)) - 5, float(max(full_mz)) + 5)
-        for m, (label, level) in marks.items():
-            if int(m) not in lookup:
-                continue
-            color = theme.status_color(level).name() if level in theme.LEVELS else level
-            y = lookup.get(int(m), 0.0)
-            ax = 1.0 if m > x_hi - 0.12 * (x_hi - x_lo) else (0.0 if m < x_lo + 0.08 * (x_hi - x_lo) else 0.5)
-            t = pg.TextItem(html=f'<span style="color:{color}; font-weight:600;">{label}</span>', anchor=(ax, 1))
-            t.setPos(float(m), float(y) + 2)
-            self.addItem(t)
-            self.texts.append(t)
+        for m, (label, level) in (marks or {}).items():
             if int(m) in lookup:
-                self.addItem(pg.BarGraphItem(x=[float(m)], height=[y], width=0.6, brush=color, pen=None))
+                color = theme.status_color(level).name() if level in theme.LEVELS else level
+                self._marks[int(m)] = (label, color)
+        plain = np.array([int(m) not in self._marks for m in mz], bool)
+        self._add_sticks(mz[plain], rel[plain], theme.PLOT["spectrum"])
+        for m, (_, color) in self._marks.items():
+            self._add_sticks([float(m)], [lookup[m]], color)
+        fit_mz, fit_rel = mz, rel
         if ref:
             rmz = np.array([p[0] for p in ref], float)
             rab = np.array([p[1] for p in ref], float)
             if rab.size and rab.max() > 0:
                 rrel = rab / rab.max() * 100.0
-                self.addItem(pg.BarGraphItem(x=rmz, y0=0, height=-rrel, width=0.6, brush=theme.PLOT["reference"],
-                                             pen=None))
-                for i in np.argsort(rrel)[::-1][:6]:
-                    t = pg.TextItem(str(int(rmz[i])), color=theme.PLOT["reference"], anchor=(0.5, 0))
-                    t.setPos(float(rmz[i]), float(-rrel[i]))
-                    self.addItem(t)
-                    self.texts.append(t)
+                self._ref = (rmz, rrel)
+                self._add_sticks(rmz, -rrel, theme.PLOT["reference"])
+                fit_mz, fit_rel = np.concatenate([mz, rmz]), np.concatenate([rel, rrel])
+        bounds = self.range_provider() if self.range_provider is not None else None
+        if self.full_range and bounds is not None and bounds[1] > bounds[0]:
+            x_range = (_round_down(bounds[0], 10.0), _round_up(bounds[1], 10.0))
+        else:
+            x_range = smart_mz_range(fit_mz, fit_rel, None if self._ref is not None else bounds)
         self.setTitle(None if self.embedded_title else title, size="9pt")
-        self._home_range = ((x_lo, x_hi), (-118 if ref else 0, 118))
+        self._home_range = (x_range, None)          # y: fitted to the ions in view with label headroom
         self._home()
+
+    def _add_sticks(self, x, h, color):
+        x = np.asarray(x, float)
+        if x.size == 0:
+            return
+        xs = np.repeat(x, 2)
+        ys = np.zeros(xs.size)
+        ys[1::2] = h
+        item = pg.PlotCurveItem(xs, ys, connect="pairs", antialias=False, pen=self._stick_pen(color, 1))
+        self.addItem(item)
+        self._sticks.append((item, color))
+
+    def _stick_pen(self, color, width):
+        pen = pg.mkPen(color, width=width)
+        pen.setCapStyle(Qt.FlatCap)
+        return pen
+
+    # -- view ------------------------------------------------------------------
+
+    def _label_font(self, bold=False):
+        font = QFont(self.font())
+        font.setBold(bold)
+        return font
+
+    def _headroom_px(self) -> float:
+        return QFontMetricsF(self._label_font()).height() + 4 + 2 * self.LABEL_GAP
+
+    def _fit_y(self, x_range) -> tuple[float, float]:
+        """Abundance axis for an m/z window: the tallest ion in it at the top, with room for its label."""
+        x0, x1 = x_range
+        vis = (self._mz >= x0) & (self._mz <= x1)
+        top = float(self._rel[vis].max()) if vis.any() else 100.0
+        bottom = 0.0
+        if self._ref is not None:
+            rmz, rrel = self._ref
+            rvis = (rmz >= x0) & (rmz <= x1)
+            bottom = float(rrel[rvis].max()) if rvis.any() else 100.0
+        top = max(top, 1e-3)
+        h_px = self.getPlotItem().getViewBox().height()
+        free = h_px / (2 if self._ref is not None else 1) - self._headroom_px()
+        factor = h_px / (2 if self._ref is not None else 1) / free if free > 40 else 1.18
+        return (-bottom * factor if self._ref is not None else 0.0), top * factor
 
     def _home(self):
         """The whole spectrum on its axis (after drawing, and on a double-click after zooming)."""
+        vb = self.getPlotItem().getViewBox()
         if self._home_range is None:
-            self.getPlotItem().getViewBox().autoRange()
+            vb.autoRange()
             return
-        x, y = self._home_range
-        self.getPlotItem().getViewBox().setRange(xRange=x, yRange=y, padding=0)
+        x, _ = self._home_range
+        y = self._fit_y(x)
+        self._home_range = (x, y)
+        self._x_seen = x
+        vb.setRange(xRange=x, yRange=y, padding=0)
+        self._at_home = True
+        self._layout()
+
+    def _user_range(self, *_):
+        """A zoom or pan by the user: a new m/z window refits the abundance axis (as in Enhanced Data
+        Analysis); a change of the abundance axis alone stays as the user set it."""
+        self._at_home = False
+        if self._mz.size == 0:
+            return
+        vb = self.getPlotItem().getViewBox()
+        x = tuple(vb.viewRange()[0])
+        if self._x_seen is None or not np.allclose(x, self._x_seen):
+            self._x_seen = x
+            vb.setRange(yRange=self._fit_y(x), padding=0)
+
+    def _resized(self, *_):
+        if self._at_home:
+            self._home()
+        else:
+            self._layout_timer.start()
+
+    def _layout(self):
+        """Place the m/z labels for the current view (see the class docstring)."""
+        self._layout_timer.stop()
+        for t in self.texts:
+            self.removeItem(t)
+        self.texts = []
+        if self._mz.size == 0:
+            return
+        vb = self.getPlotItem().getViewBox()
+        (x0, x1), (y0, y1) = vb.viewRange()
+        w_px, h_px = vb.width(), vb.height()
+        if w_px < 20 or h_px < 20 or x1 <= x0 or y1 <= y0:
+            return
+        sx, sy = w_px / (x1 - x0), h_px / (y1 - y0)
+        stick_w = float(np.clip(round(0.6 * sx), 1, 8))       # whole pixels: equal sticks look equal
+        for item, color in self._sticks:
+            item.setPen(self._stick_pen(color, stick_w))
+        cap = max(4, int(w_px / 38))
+        placed = []                                 # label rectangles (left, bottom, right, top) in px
+        self._place(self._mz, self._rel, self._marks, placed, (x0, y0, sx, sy, w_px, h_px), cap, up=True)
+        if self._ref is not None:
+            rmz, rrel = self._ref
+            self._place(rmz, rrel, {}, [], (x0, y0, sx, sy, w_px, h_px), cap, up=False)
+
+    def _place(self, mz, rel, marks, placed, view, cap, *, up):
+        x0, y0, sx, sy, w_px, h_px = view
+        px = (mz - x0) * sx
+        tip = ((rel if up else -rel) - y0) * sy     # stick tip, px from the bottom of the view
+        base = -y0 * sy                             # zero line, px from the bottom
+        inside = (px >= -0.5) & (px <= w_px + 0.5)
+        height = np.abs(tip - base)
+        fm, fm_bold = QFontMetricsF(self._label_font()), QFontMetricsF(self._label_font(True))
+        th = fm.height()
+        # the molecular ion first, then the strongest ions; interpretation marks are not counted against the cap
+        order = sorted(np.flatnonzero(inside),
+                       key=lambda i: (not marks.get(int(mz[i]), ("",))[0].startswith("M"), -rel[i]))
+        g = self.LABEL_GAP
+        n_plain = 0
+        for i in order:
+            m = int(mz[i])
+            mark = marks.get(m)
+            if mark is None and (n_plain >= cap or height[i] < 4 or rel[i] < 0.5):
+                continue
+            if (tip[i] > h_px + 0.5) if up else (tip[i] < -0.5):
+                continue                            # stick cut off by the view: no label at the edge
+            text = re.sub(r"<[^>]+>", "", mark[0]) if mark else str(m)
+            tw = (fm_bold if mark else fm).horizontalAdvance(text) + 8
+            y_lo, y_hi = (tip[i] + g, tip[i] + g + th + 4) if up else (tip[i] - g - th - 4, tip[i] - g)
+            if y_hi > h_px + 1 or y_lo < -1:
+                continue
+            molecular = bool(mark) and mark[0].startswith("M")
+            # centred over the stick; else beside it, starting or ending at the stick
+            for left in (px[i] - tw / 2, px[i] - 2, px[i] + 2 - tw):
+                left = float(np.clip(left, 0, max(0.0, w_px - tw)))
+                rect = (left, y_lo, left + tw, y_hi)
+                if any(rect[0] < r[2] + g and r[0] < rect[2] + g and rect[1] < r[3] and r[1] < rect[3]
+                       for r in placed):
+                    continue
+                if not molecular:
+                    # a taller neighbour stick running through the label would hide it
+                    near = inside & (px >= rect[0] - 1) & (px <= rect[2] + 1)
+                    near[i] = False
+                    if np.any(near & ((tip > y_lo) if up else (tip < y_hi))):
+                        continue
+                break
+            else:
+                continue
+            if mark is None:
+                n_plain += 1
+            placed.append(rect)
+            anchor = ((px[i] - left) / tw, 1.0 if up else 0.0)
+            if mark:
+                t = pg.TextItem(html=f'<span style="color:{mark[1]}; font-weight:600;">{mark[0]}</span>',
+                                anchor=anchor)
+            else:
+                t = pg.TextItem(text, color=theme.PLOT["spectrum" if up else "reference"], anchor=anchor)
+            t.setPos(float(mz[i]), float(rel[i] if up else -rel[i]))
+            self.addItem(t)
+            self.texts.append(t)
+
+    def label_texts(self) -> list[str]:
+        """The m/z labels on display (plain text), for tests and diagnostics."""
+        return [t.textItem.toPlainText() for t in self.texts]
 
 
 class SpectrumDock(QWidget):
@@ -197,6 +416,13 @@ class SpectrumDock(QWidget):
         from gcws.ui.plot.overlay import ElidedLabel
         self.plot = StickPlot(embedded_title=True)
         self.plot.range_provider = self.mz_axis_range
+        self.plot.full_range = QSettings().value("spectrum/full_mz_range", False, type=bool)
+        self.full_range_action = QAction("Whole scan range on the m/z axis", self)
+        self.full_range_action.setCheckable(True)
+        self.full_range_action.setChecked(self.plot.full_range)
+        self.full_range_action.setToolTip("Show every spectrum on the run's whole scan range instead of fitting "
+                                          "the m/z axis to the ions of the spectrum")
+        self.full_range_action.toggled.connect(self._set_full_range)
         self.plot.ionClicked.connect(self.ionClicked.emit)
         self.context_menu = QMenu(self.plot)
         self.plot.contextRequested.connect(self._context_menu)
@@ -288,7 +514,14 @@ class SpectrumDock(QWidget):
             menu.addAction(action)
             if action.text() == "Own library":
                 menu.addMenu(self.own_menu)
+        menu.addSeparator()
+        menu.addAction(self.full_range_action)
         menu.aboutToShow.connect(self._sync_actions)
+
+    def _set_full_range(self, on: bool):
+        QSettings().setValue("spectrum/full_mz_range", bool(on))
+        self.plot.full_range = bool(on)
+        self.plot._redraw()
 
     def _context_menu(self, pos):
         self._sync_actions()
@@ -503,8 +736,8 @@ class SpectrumDock(QWidget):
     DEFAULT_MZ_AXIS = (50.0, 550.0)
 
     def mz_axis_range(self) -> tuple[float, float]:
-        """The m/z axis every spectrum of a run is drawn on (as in Agilent Enhanced Data Analysis):
-        the run's acquired scan range, rounded outward to tens - never fitted to one spectrum."""
+        """The run's acquired scan range, rounded outward to tens: the widest m/z axis of its spectra
+        (the fitted window never exceeds it), and the whole axis with *Whole scan range on the m/z axis*."""
         rid = self.ws.active_id
         if self.source in ("scan", "subtraction") and self.scan_req is not None:
             rid = self.scan_req.run_id

@@ -10,22 +10,24 @@ def _x_range(plot):
 
 
 def test_mz_axis_is_the_scan_range(qtbot, win, samples):
+    # P48: the scan range caps the fitted m/z window (test_p48_spectrum_axis) or is the whole axis on request
     _load(qtbot, win, samples, ["07_"])
     ws, sp = win.ws, win.spectrum
     lo, hi = ws.active.run.ms.mass_range()
     axis = sp.mz_axis_range()
     assert axis[0] <= lo and axis[1] >= hi and axis[0] % 10 == 0 and axis[1] % 10 == 0
-    expected = (axis[0] - 3, axis[1] + 3)
+    sp.full_range_action.setChecked(True)
     peaks = ws.active_result().peaks
     seen = set()
     for i in (0, len(peaks) // 2, len(peaks) - 1):
         ws.select_peak(i)
         if sp.spec is not None and sp.spec.ab.size:
             seen.add(_x_range(sp.plot))
-    assert seen == {expected}                             # every spectrum on the same axis
+    assert seen == {axis}                                 # every spectrum on the same axis
     sp.plot.getPlotItem().getViewBox().setRange(xRange=(100, 120), padding=0)
     sp.plot._home()                                       # double-click
-    assert _x_range(sp.plot) == expected
+    assert _x_range(sp.plot) == axis
+    sp.full_range_action.setChecked(False)
 
 
 def test_mz_axis_fallback_without_ms(qtbot, win):

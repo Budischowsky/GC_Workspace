@@ -438,7 +438,7 @@ def _restyle_plots(callbacks: bool = True) -> None:
     alive = []
     for ref, cb in _plots:
         w = ref()
-        if w is None:
+        if w is None or w.getPlotItem() is None:      # collected, or closed (pyqtgraph drops the item)
             continue
         try:
             restyle_plot(w)
