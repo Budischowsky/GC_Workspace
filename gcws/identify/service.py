@@ -10,6 +10,7 @@ from PySide6.QtCore import QObject, QTimer, Signal as QtSignal
 
 from gcws.core.ident import Identification
 from gcws.ms.spectra import extract
+from gcws.ms.assignment import override_for, fragment_id
 
 
 @dataclass
@@ -21,6 +22,7 @@ class SearchItem:
     job: object                      # gc_identify.PeakJob
     spectrum_mode: str
     top_ions: list
+    peak_id: str = ""
 
 
 def search_methods():
@@ -59,7 +61,7 @@ def build_items(ws, run_ids: list[str], key: str, spectrum_mode: str,
             from gcws.ms import deconv_cache as DC
             dsettings = DC.settings_of(ws)
             spec = extract(st.run, p, key, st.delay_value, spectrum_mode,
-                           override=st.spectrum_overrides.get(round(p.apex_rt, 4)),
+                           override=override_for(st, key, p),
                            component=lambda st=st, p=p: DC.for_peak(st, p, key, dsettings))
             points = spec.points(min_permille=1.0) if spec is not None else []
             if not points:
@@ -68,7 +70,7 @@ def build_items(ws, run_ids: list[str], key: str, spectrum_mode: str,
                              before=(ident.name if ident else "", ident.cas if ident else "",
                                      ident.score if ident else None),
                              spectrum=points)
-            items.append(SearchItem(rid, key, i, p.apex_rt, job, spectrum_mode, spec.top_ions(3)))
+            items.append(SearchItem(rid, key, i, p.apex_rt, job, spec.mode, spec.top_ions(3), fragment_id(p)))
     return items, protected
 
 
@@ -92,13 +94,26 @@ def transfer_names(ws, run_id: str, changes: list, fid_key: str = "FID", tol: fl
     if st is None or res is None or not res.peaks:
         return [], counts
     idents, _ = st.ident_set(fid_key).bind(res.peaks)
-    apexes = [p.apex_rt for p in res.peaks]
+    apexes = [(p.extra['deconv_component']['rt'] + st.delay_value
+               if p.extra.get('deconv_component') else p.apex_rt) for p in res.peaks]
+    source_components = {fragment_id(p): p.extra['deconv_component']
+                         for signal, result in st.results.items() if not signal.startswith('FID')
+                         for p in result.peaks if p.extra.get('deconv_component')}
     best: dict[int, Identification] = {}
     for t, ident in changes:
         if ident is None or not ident.name:
             continue
-        target = t + st.delay_value
-        j = min(range(len(apexes)), key=lambda k: abs(apexes[k] - target))
+        component = source_components.get(ident.peak_id)
+        if ident.peak_id and component is None:
+            counts['unmatched'] += 1
+            continue
+        target = (component['rt'] if component else t) + st.delay_value
+        # A mixed TIC identification cannot choose between resolved FID components.
+        candidates = [i for i, p in enumerate(res.peaks) if component or not p.extra.get('deconv_component')]
+        if not candidates:
+            counts['unmatched'] += 1
+            continue
+        j = min(candidates, key=lambda k: abs(apexes[k] - target))
         if abs(apexes[j] - target) > tol:
             counts["unmatched"] += 1
             continue
@@ -115,6 +130,7 @@ def transfer_names(ws, run_id: str, changes: list, fid_key: str = "FID", tol: fl
     for j, ident in sorted(best.items()):
         new = copy.deepcopy(ident)
         new.apex_rt = res.peaks[j].apex_rt
+        new.peak_id = fragment_id(res.peaks[j])
         new.source = (ident.source + " via TIC").strip()
         prev = idents.get(j)
         new.istd = prev.istd if prev is not None else ""
@@ -153,7 +169,7 @@ def identification_from_hits(item: SearchItem, hits: list[dict], chosen: Optiona
         hits=[dict(GI.hit_record(h), peaks=h.get("peaks") or []) for h in ordered],
         source=GI.SOURCE, method=method.name,
         searched_at=datetime.now().isoformat(timespec="seconds"), spectrum_mode=item.spectrum_mode,
-        istd=prev.istd if prev else "")
+        istd=prev.istd if prev else "", peak_id=item.peak_id)
 
 
 def adapt_library_names(method, names) -> None:

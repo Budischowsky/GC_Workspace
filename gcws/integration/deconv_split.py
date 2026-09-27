@@ -13,7 +13,7 @@ import math
 from gcws.core.events import ManualEvent, ManualKind as K
 
 PREFIX = "deconvolution:"
-VERSION = 1
+VERSION = 2
 
 
 def _number(value, label: str) -> float:
@@ -55,7 +55,7 @@ def _component(item) -> dict:
 
 
 def _validate(event: ManualEvent, payload) -> dict:
-    if not isinstance(payload, dict) or payload.get("version") != VERSION:
+    if not isinstance(payload, dict) or payload.get("version") not in (1, VERSION):
         raise ValueError("Unsupported deconvolution split version")
     start = _number(event.t0, "peak start")
     end = _number(event.t1, "peak end")
@@ -78,10 +78,15 @@ def _validate(event: ManualEvent, payload) -> dict:
         raise ValueError("Deconvolution components must have distinct RTs in increasing order")
     if not all(left <= rt <= right for left, rt, right in zip(bounds, times, bounds[1:])):
         raise ValueError("Each deconvolution component must lie inside its split fragment")
-    return {"version": VERSION, "delay": delay, "points": points, "components": components}
+    signal = payload.get("signal_key", "FID")
+    from gcws.core.keys import base_key
+    if not isinstance(signal, str) or base_key(signal) not in ("FID", "TIC"):
+        raise ValueError("Proportional deconvolution splitting supports FID and TIC only")
+    return {"version": payload["version"], "delay": delay, "points": points,
+            "components": components, "signal_key": signal}
 
 
-def create_event(peak, components, delay: float = 0) -> ManualEvent:
+def create_event(peak, components, delay: float = 0, signal_key: str = "FID") -> ManualEvent:
     """Create one atomic split event; component RTs stay in MS minutes.
 
     ``delay`` maps those RTs to the selected signal's time frame (zero for an
@@ -90,7 +95,7 @@ def create_event(peak, components, delay: float = 0) -> ManualEvent:
     """
     delay = _number(delay, "detector delay")
     components = sorted((_component(item) for item in components), key=lambda item: item["rt"])
-    payload = {"version": VERSION, "delay": delay, "components": components,
+    payload = {"version": VERSION, "delay": delay, "signal_key": signal_key, "components": components,
                "points": [(left["rt"] + (right["rt"] - left["rt"]) / 2) + delay
                           for left, right in zip(components, components[1:])]}
     event = ManualEvent(K.SPLIT, float(peak.start), float(peak.end), ref_rt=float(peak.apex_rt),

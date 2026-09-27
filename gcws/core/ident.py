@@ -21,6 +21,7 @@ class Identification:
     spectrum_mode: str = ""
     manual: bool = False               # analyst typed name/CAS: protected from searches
     istd: str = ""                     # ISTD code bound to this peak (quantification)
+    peak_id: str = ""                  # replay-stable split fragment, empty for legacy RT binding
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -38,10 +39,14 @@ class IdentificationSet:
         self.items: list[Identification] = list(items or [])
 
     def for_peak(self, peak, tol: Optional[float] = None) -> Optional[Identification]:
-        if not self.items:
+        peak_id = (getattr(peak, "extra", None) or {}).get("spectrum_id", "")
+        if peak_id:
+            return next((i for i in self.items if i.peak_id == peak_id), None)
+        items = [i for i in self.items if not i.peak_id]
+        if not items:
             return None
         tol = tol if tol is not None else max(0.5 * (peak.width50 or 0.0), 0.01)
-        best = min(self.items, key=lambda i: abs(i.apex_rt - peak.apex_rt))
+        best = min(items, key=lambda i: abs(i.apex_rt - peak.apex_rt))
         return best if abs(best.apex_rt - peak.apex_rt) <= tol else None
 
     def bind(self, peaks) -> tuple[dict[int, Identification], list[Identification]]:
@@ -58,15 +63,17 @@ class IdentificationSet:
     def set(self, ident: Identification, tol: float = 0.005) -> Optional[Identification]:
         """Insert or replace the identification at ``ident.apex_rt``; returns the old one."""
         for k, x in enumerate(self.items):
-            if abs(x.apex_rt - ident.apex_rt) <= tol:
+            if ((ident.peak_id and x.peak_id == ident.peak_id) or
+                    (not ident.peak_id and not x.peak_id and abs(x.apex_rt - ident.apex_rt) <= tol)):
                 self.items[k] = ident
                 return x
         self.items.append(ident)
         return None
 
-    def remove_at(self, rt: float, tol: float = 0.005) -> Optional[Identification]:
+    def remove_at(self, rt: float, tol: float = 0.005, peak_id: str = "") -> Optional[Identification]:
         for k, x in enumerate(self.items):
-            if abs(x.apex_rt - rt) <= tol:
+            if ((peak_id and x.peak_id == peak_id) or
+                    (not peak_id and not x.peak_id and abs(x.apex_rt - rt) <= tol)):
                 return self.items.pop(k)
         return None
 

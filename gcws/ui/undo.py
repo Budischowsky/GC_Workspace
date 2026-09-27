@@ -90,11 +90,18 @@ class IdentCommand(QUndoCommand):
         self.old_items = copy.deepcopy(st.ident_set(key).items)
         items = copy.deepcopy(st.ident_set(key).items)
         from gcws.core.ident import IdentificationSet
+        from gcws.ms.assignment import fragment_id
         tmp = IdentificationSet(items)
+        res = ws.result(run_id, key)
         for rt, ident in changes:
+            peak = next((p for p in res.peaks if abs(p.apex_rt - rt) < 1e-8), None) if res else None
+            identity = fragment_id(peak)
             if ident is None:
-                tmp.remove_at(rt)
+                tmp.remove_at(rt, peak_id=identity)
             else:
+                ident = copy.deepcopy(ident)
+                # A search already bound to a fragment must not migrate after re-integration.
+                ident.peak_id = ident.peak_id or identity
                 tmp.set(ident)
         self.new_items = tmp.items
         self.count = len(changes)

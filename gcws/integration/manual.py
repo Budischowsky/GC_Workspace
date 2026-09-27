@@ -94,6 +94,8 @@ def _clear_allocation(p: WP) -> None:
     p.allocated_area_raw = None
     p.area_allocation = None
     p.deconv_component = {}
+    if p.spectrum_id and not p.spectrum_id.startswith("edited:"):
+        p.spectrum_id = "edited:" + p.spectrum_id
     if p.origin == "deconvoluted":
         p.origin = "manual"
 
@@ -130,7 +132,9 @@ def _split_by_components(peaks, sig, event, payload):
         _mark(frag, "deconvoluted")
         frag.allocated_area_raw = area
         frag.area_allocation = (total, tuple(weights), i)
-        frag.deconv_component = {**component, "weight": fraction}
+        frag.spectrum_id = f"{event.uid}:{i}"
+        frag.deconv_component = {**component, "weight": fraction, "id": frag.spectrum_id,
+                                 "signal_key": payload["signal_key"], "delay": payload["delay"]}
         fragments.append(frag)
     # Commit only after every validation and allocation succeeded.
     for child in p.children:
@@ -185,6 +189,8 @@ def _apply_one(peaks: list[WP], sig: WorkSignal, e: ManualEvent, tol: float, wid
             return "no peak at the split time"
         q = WP(e.t0, p.t1, p.ta, replace(p.base), ts="V", te=p.te, flags=p.flags,
                negative=p.negative, parent=p.parent)
+        if p.spectrum_id:
+            p.spectrum_id, q.spectrum_id = f"edited:{e.uid}:0", f"edited:{e.uid}:1"
         p.t1, p.te = e.t0, "V"
         for c in list(p.children):
             if c.t0 >= e.t0:
@@ -314,6 +320,8 @@ def _apply_one(peaks: list[WP], sig: WorkSignal, e: ManualEvent, tol: float, wid
             b1 = float(last.base.eval([last.t1])[0])
             base = Baseline("line", first.t0, b0, last.t1, b1)
         m = WP(first.t0, last.t1, first.ta, base, ts=first.ts, te=last.te)
+        if any(h.spectrum_id for h in hits):
+            m.spectrum_id = f"edited:{e.uid}:merged"
         for h in hits:
             m.children.extend(h.children)
             peaks.remove(h)

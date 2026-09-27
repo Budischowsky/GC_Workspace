@@ -813,7 +813,8 @@ class MainWindow(QMainWindow):
             st = self.ws.runs.get(it.run_id)
             if st is None:
                 continue
-            prev = st.ident_set(it.key).for_peak(type("P", (), {"apex_rt": it.apex_rt, "width50": 0})())
+            prev = st.ident_set(it.key).for_peak(type("P", (), {
+                "apex_rt": it.apex_rt, "width50": 0, "extra": {"spectrum_id": it.peak_id}})())
             ident = identification_from_hits(it, it.job.hits, it.job.chosen, method, prev)
             by_run.setdefault((it.run_id, it.key), []).append((it.apex_rt, ident))
         from gcws.core.keys import is_fid
@@ -908,6 +909,8 @@ class MainWindow(QMainWindow):
         from gcws.identify.service import search_methods
         from gcws.ui.dialogs.identify import AtlasHitsDialog
         st, peak = self.spectrum.target_peak()
+        source_key = self.ws.signal_key
+        source_mode = self.spectrum.spec.mode if self.spectrum.spec else self.spectrum.current_mode()
         if method is None:
             store = search_methods()
             method = store.for_gc_method(st.run.meta.method if st and st.run.meta else "")
@@ -920,11 +923,12 @@ class MainWindow(QMainWindow):
             job = GI.PeakJob(label=st.name, row_id=0, peak_no=peak.number, rt=peak.apex_rt,
                              before=("", "", None), spectrum=points)
             job.hits = hits
-            item = SearchItem(st.id, self.ws.signal_key, 0, peak.apex_rt, job, self.spectrum.current_mode(), [])
-            prev = st.ident_set(self.ws.signal_key).for_peak(peak)
+            from gcws.ms.assignment import fragment_id
+            item = SearchItem(st.id, source_key, 0, peak.apex_rt, job, source_mode, [], fragment_id(peak))
+            prev = st.ident_set(source_key).for_peak(peak)
             ident = identification_from_hits(item, hits, index, method, prev)
             ident.manual = True
-            st.undo.push(IdentCommand(self.ws, st.id, self.ws.signal_key, [(peak.apex_rt, ident)],
+            st.undo.push(IdentCommand(self.ws, st.id, source_key, [(peak.apex_rt, ident)],
                                       f"peak {peak.apex_rt:.3f}: library hit {ident.name}"))
 
         dlg = AtlasHitsDialog(points, name, method, self, on_assign=assign if peak is not None else None,

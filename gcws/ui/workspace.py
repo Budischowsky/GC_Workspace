@@ -15,6 +15,7 @@ from PySide6.QtGui import QUndoGroup, QUndoStack
 from gcws.core.audit import AuditLog, AuditRecord
 from gcws.core.events import ManualEvent
 from gcws.core.ident import IdentificationSet
+from gcws.ms.assignment import override_for
 from gcws.core.keys import BLANK_SUFFIX, base_key, derived_key, is_derived, is_fid, method_kind, split_key
 from gcws.core.model import FID, TIC, Run
 from gcws.integration.engine import IntegrationResult, integrate
@@ -85,6 +86,7 @@ class Workspace(QObject):
     replicatesChanged = QtSignal()
     quantChanged = QtSignal()
     deconvChanged = QtSignal(str)              # run id: whole-run deconvolution available / dropped
+    spectrumChanged = QtSignal(str)            # run id: analyst changed a spectrum assignment
     solventCutChanged = QtSignal()
     orderChanged = QtSignal()
     panelsChanged = QtSignal()                 # signal / blank choice of Chromatogram 1 or 2, table source
@@ -745,7 +747,7 @@ class Workspace(QObject):
             if ck not in cache:
                 p = peaks[i]
                 sp = extract(s.run, p, base_key(k), s.delay_value, "average_bg",
-                             override=s.spectrum_overrides.get(round(p.apex_rt, 4)))
+                             override=override_for(s, k, p))
                 cache[ck] = sp if sp is not None and sp.ab.size else None
             return cache[ck]
 

@@ -26,10 +26,13 @@ class HintCache(QObject):
         self._timer.timeout.connect(self._work)
         ws.resultChanged.connect(lambda rid, key: self.invalidate(rid))
         ws.runRemoved.connect(self.invalidate)
+        ws.spectrumChanged.connect(self.invalidate)
 
     @staticmethod
     def _key(run_id, signal_key, peak):
-        return (run_id, signal_key, round(peak.apex_rt, 4), round(peak.start, 4), round(peak.end, 4))
+        from gcws.ms.assignment import fragment_id
+        return (run_id, signal_key, round(peak.apex_rt, 4), round(peak.start, 4), round(peak.end, 4),
+                fragment_id(peak))
 
     def get(self, st, signal_key, peak) -> tuple[str, str] | None:
         """``(short text, tooltip)`` or None while it is being computed."""
@@ -49,20 +52,21 @@ class HintCache(QObject):
     def _work(self):
         from gcws.ms.interpret import Context, interpret
         from gcws.ms.spectra import extract
+        from gcws.ms.assignment import override_for
         done = set()
         for _ in range(BATCH):
             if not self._queue:
                 break
             k = self._queue.pop(0)
-            rid, skey, apex, _s, _e = k
+            rid, skey, apex, _s, _e, identity = k
             st = self.ws.runs.get(rid)
             res = self.ws.result(rid, skey) if st is not None else None
-            peak = next((p for p in res.peaks if round(p.apex_rt, 4) == apex), None) if res is not None else None
+            peak = next((p for p in res.peaks if self._key(rid, skey, p) == k), None) if res is not None else None
             if peak is None or st.run.ms is None:
                 continue
             try:
                 spec = extract(st.run, peak, skey, st.delay_value, "average_bg",
-                               override=st.spectrum_overrides.get(round(peak.apex_rt, 4)))
+                               override=override_for(st, skey, peak))
                 ms = st.run.ms
                 r = interpret(spec.mz, spec.ab, Context(mass_range=ms.mass_range(), min_abundance=ms.min_abundance()))
             except Exception:  # noqa: BLE001 - a hint is optional

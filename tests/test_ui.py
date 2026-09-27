@@ -437,6 +437,7 @@ def test_deconvolution_dialog_whole_run_and_markers(qtbot, win, samples):
     from gcws.ui.dialogs.deconv import DeconvolutionDialog
     dlg = DeconvolutionDialog(win, "peak")
     qtbot.addWidget(dlg)
+    qtbot.waitUntil(lambda: not dlg._busy, timeout=30000)
     assert dlg.comps and dlg.table.rowCount() == len(dlg.comps)
     assert any(abs(c.rt - 13.409) < 0.01 for c in dlg.comps)
     import gc_deconv
@@ -452,7 +453,8 @@ def test_deconvolution_dialog_whole_run_and_markers(qtbot, win, samples):
     dlg.table.selectRow(0)
     dlg.pin()
     st = ws.active
-    assert "component" in st.spectrum_overrides[round(res.peaks[idx].apex_rt, 4)]
+    from gcws.ms.assignment import override_for
+    assert "component" in override_for(st, "TIC", res.peaks[idx])
     assert win.spectrum.spec.mode == "deconvoluted"
     # whole run in the background -> cached, hidden components marked in the chromatogram
     dlg.scope.button(2).setChecked(True)

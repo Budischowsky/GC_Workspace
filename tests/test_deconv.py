@@ -115,4 +115,4 @@ def test_empty_window_and_component_choice():
     big = D.Component(10.00, 0, 57, [(57, 999)], area=100.0, purity=1, n_ions=3, s_n=10)
     small = D.Component(10.02, 0, 91, [(91, 999)], area=5.0, purity=1, n_ions=3, s_n=10)
     assert D.component_for_peak([small, big], 9.95, 10.05, 10.02) is big
-    assert D.component_for_peak([small], 10.5, 10.6, 10.55) is small
+    assert D.component_for_peak([small], 10.5, 10.6, 10.55) is None

@@ -137,7 +137,8 @@ def apply_run_state(st, entry: dict) -> list[str]:
     if d:
         st.delay = DelayEstimate(d["value"], d.get("quality", 1.0), d.get("method", "saved"))
     st.delay_override = entry.get("delay_override")
-    st.spectrum_overrides = {float(k): v for k, v in (entry.get("spectrum_overrides") or {}).items()}
+    from gcws.ms.assignment import restore_overrides
+    st.spectrum_overrides = restore_overrides(entry.get("spectrum_overrides") or {})
     st.saved_digests = dict(entry.get("result_digest") or {})
     fp_saved = entry.get("fingerprint") or {}
     fp_now = _fingerprint(st.run.path)

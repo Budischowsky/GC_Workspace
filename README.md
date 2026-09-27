@@ -142,9 +142,19 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
        and the original noise estimation, grouping and spectrum purification. There is no residual search.
      - Settings saved by the superseded engine start at NIAS defaults (shape correlation 0.90,
        apex tolerance 0.5 scans). NIAS settings saved subsequently are retained.
-     - Components can split a peak, be added as peaks, or have their spectrum pinned to the peak.
-       FID splits allocate the original peak area in proportion to the MS component areas, preserving
-       its total. These modeled areas are labelled in the area tooltip and report review notes.
+     - Check the components to include in **Split the peak**. The preview shows their MS times,
+       model ions, proportions and allocated areas. FID and TIC splits (including blank-subtracted
+       traces) preserve the original total and allocate it in proportion to the checked MS components.
+       FID shares are estimates based on MS response, labelled in area tooltips and report review notes.
+       EIC/BPC proportional splits are disabled because they need signal-specific weights.
+     - Each fragment retains its component spectrum for default display, library search and export,
+       including after undo/redo, reintegration and project reload. **Raw scans** spectrum modes let
+       you inspect measured spectra explicitly. Raw blank counts are not subtracted from normalized
+       component spectra. Parent identifications remain unassigned and available for undo; hover over
+       the table's orphaned-ID count to review them.
+     - The split completion message reports fragments hidden by table filters. Calculations run in
+       the background with cancellation; changed settings or samples invalidate obsolete results.
+       Components can also be added as peaks or have their spectrum pinned to the selected peak.
      - *Save as default* makes the settings apply to the "deconvoluted" spectrum mode and the library search.
      - After a whole-run deconvolution, components without an integrated peak are marked in the chromatogram.
 6. **Edit library** (*Identify > Edit library...*, or *Add to library...* in the spectrum panel, the hit list

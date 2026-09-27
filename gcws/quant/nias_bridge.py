@@ -80,7 +80,8 @@ def convert(st, key: str = FID) -> Optional[Determination]:
         peaks[n] = p
         index[n] = i
         ident = idents.get(i)
-        ms_rt = p.apex_rt - delay
+        component = p.extra.get("deconv_component")
+        ms_rt = component["rt"] if component else p.apex_rt - delay
         has_ms = ms_start is not None and ms_start <= ms_rt <= ms_end
         if ident is not None:
             id_map[n] = ident

@@ -130,17 +130,15 @@ def deconvolute_range(ms, t0: float, t1: float, settings: DeconvSettings | None 
 
 
 def component_for_peak(components: list[Component], t0: float, t1: float, apex: float | None = None):
-    """Largest NIAS component inside the peak, otherwise nearest to its apex."""
+    """Largest NIAS component inside the peak; never borrow a neighbour."""
     inside = [c for c in components if t0 <= c.rt <= t1]
     if inside:
         return max(inside, key=lambda c: c.area)
-    if apex is not None and components:
-        return min(components, key=lambda c: abs(c.rt - apex))
     return None
 
 
 def allocated_component(ms, peak):
-    """The original MS component attached to an area-allocated FID fragment."""
+    """The original MS component attached to an area-allocated FID/TIC fragment."""
     data = (getattr(peak, "extra", None) or {}).get("deconv_component")
     if not data or not data.get("spectrum"):
         return None

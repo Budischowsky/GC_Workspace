@@ -1,9 +1,8 @@
 """Mass spectra of integrated peaks.
 
-Default mode ``average_bg`` follows the MassHunter/ChemStation practice for a
-clean library-search spectrum: average the scans across the top of the peak
-and subtract a background interpolated per ion between the scans just
-before the peak start and just after its end.
+Default mode ``average_bg`` uses the retained component on split peaks.
+For unassigned peaks it averages the peak top and subtracts an interpolated
+background. Explicit ``raw_*`` modes bypass component and manual assignments.
 """
 from __future__ import annotations
 
@@ -15,10 +14,12 @@ from gcws.core.keys import is_fid
 from gcws.core.model import parse_key
 
 MODES = {
-    "average_bg": "Average of peak top minus background (start/end)",
+    "average_bg": "Assigned component, otherwise average minus background",
     "apex": "Apex scan",
     "apex_minus_start": "Apex minus start scan (PBM)",
     "deconvoluted": "Deconvoluted component",
+    "raw_average_bg": "Raw scans: average minus background (ignore assignment)",
+    "raw_apex": "Raw scans: apex (ignore assignment)",
 }
 
 
@@ -146,10 +147,15 @@ def extract(run, peak, key: str, delay: float, mode: str = "average_bg",
             top_fraction: float = 0.5, n_bg: int = 3, override: dict | None = None,
             component=None) -> Spectrum | None:
     """Spectrum of an integrated peak. ``component``: callable returning the deconvoluted
-    component of the peak (mode "deconvoluted"); a pinned component in ``override`` wins."""
+    component of the peak (mode "deconvoluted"). Explicit raw modes bypass overrides;
+    otherwise analyst overrides precede retained split components."""
     ms = run.ms
-    if ms is None or peak is None:
+    if ms is None or ms.n_scans == 0 or peak is None:
         return None
+    raw = mode.startswith("raw_")
+    if raw:
+        mode = mode[4:]
+        override = None
     t0, t1, ta = ms_times(peak, key, delay)
     scans = ms.scans_between(t0, t1)
     if override and override.get("component"):
@@ -161,11 +167,21 @@ def extract(run, peak, key: str, delay: float, mode: str = "average_bg",
                         f"pinned deconvoluted component {pc['rt']:.3f} min (model m/z {pc.get('model_mz', '?')})")
     if override and override.get("apex_scans"):
         apex_scans = [s for s in override["apex_scans"] if 0 <= s < ms.n_scans]
-        bg_scans = [s for s in override.get("bg_scans", []) if 0 <= s < ms.n_scans]
+        bg_scans = [s for s in override.get("bg_scans", []) if 0 <= s < ms.n_scans and s not in apex_scans]
+        if not apex_scans:
+            return Spectrum(np.zeros(0, int), np.zeros(0), ta, "manual", note="no valid analyst-defined scans")
         mean = ms.nominal_spectrum(apex_scans)
         spec = _sub(mean, ms.nominal_spectrum(bg_scans)) if bg_scans else mean
         mz, ab = _from_dict(spec)
         return Spectrum(mz, ab, ta, "manual", apex_scans, bg_scans, "analyst-defined scans")
+    if not raw and mode in ("average_bg", "deconvoluted"):
+        from gcws.ms.deconv import allocated_component
+        assigned = allocated_component(ms, peak)
+        if assigned is not None:
+            return Spectrum(np.array([int(m) for m, _ in assigned.spectrum]),
+                            np.array([float(a) for _, a in assigned.spectrum]),
+                            float(assigned.rt), "deconvoluted", [int(assigned.apex_scan)], [],
+                            f"assigned component {assigned.rt:.4f} min (MS), model m/z {assigned.model_mz}")
     if scans.size == 0:
         i = ms.scan_at_rt(ta)
         if abs(ms.rt[i] - ta) > 0.05:
@@ -174,9 +190,12 @@ def extract(run, peak, key: str, delay: float, mode: str = "average_bg",
     sig_key = key if parse_key(key)[0] == "EIC" else "TIC"
     trace = run.signal(sig_key).y if run.signal(sig_key) is not None else ms.tic()
     seg = trace[scans]
-    line = np.linspace(seg[0], seg[-1], seg.size) if seg.size > 1 else seg
+    line = np.interp(ms.rt[scans], [ms.rt[scans[0]], ms.rt[scans[-1]]], [seg[0], seg[-1]]) if seg.size > 1 else seg
     height = seg - line
     k = int(np.argmax(height))
+    positive_top = bool(height[k] > 0)
+    if not positive_top:
+        k = int(np.argmin(np.abs(ms.rt[scans] - ta)))
     apex = int(scans[k])
 
     if mode == "apex":
@@ -204,9 +223,9 @@ def extract(run, peak, key: str, delay: float, mode: str = "average_bg",
     # average_bg
     top = height[k]
     lo = hi = k
-    while lo > 0 and height[lo - 1] >= top_fraction * top:
+    while positive_top and lo > 0 and height[lo - 1] >= top_fraction * top:
         lo -= 1
-    while hi < height.size - 1 and height[hi + 1] >= top_fraction * top:
+    while positive_top and hi < height.size - 1 and height[hi + 1] >= top_fraction * top:
         hi += 1
     apex_scans = [int(s) for s in scans[lo:hi + 1]]
     first, last = int(scans[0]), int(scans[-1])
@@ -226,6 +245,8 @@ def extract(run, peak, key: str, delay: float, mode: str = "average_bg",
     spec = _sub(mean, bg)
     mz, ab = _from_dict(spec)
     note = f"{len(apex_scans)} scans averaged, {len(pre) + len(post)} background scans"
+    if not positive_top:
+        note += "; no positive peak top: nearest scan to requested apex"
     if "fallback_note" in locals():
         note = fallback_note + "; " + note
     return Spectrum(mz, ab, float(np.mean(ms.rt[apex_scans])), "average_bg", apex_scans, pre + post, note)

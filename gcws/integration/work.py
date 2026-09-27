@@ -59,6 +59,7 @@ class WP:
     allocated_area_raw: Optional[float] = None
     area_allocation: Optional[tuple] = None  # (parent raw area, MS weights, component index)
     deconv_component: dict = field(default_factory=dict)
+    spectrum_id: str = ""
 
     def add_flag(self, f: str) -> None:
         if f not in self.flags:

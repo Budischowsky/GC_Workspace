@@ -195,6 +195,9 @@ class PeakTable(QWidget):
         shown = self.proxy.rowCount()
         head = f"{shown} of {n} peaks shown" if shown != n else f"{n} peaks"
         self.info.setText(f"{head}  •  {idn} identified{extra}")
+        self.info.setToolTip("Unassigned identifications retained for review / undo:\n" + "\n".join(
+            f"{i.apex_rt:.4f} min: {i.name or 'unnamed'} ({i.cas or 'no CAS'})"
+            for i in self.model.orphans) if self.model.orphans else "")
 
     # -- which chromatogram the table lists ------------------------------------------
 

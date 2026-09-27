@@ -13,6 +13,7 @@ spectrum on display, whatever its source.
 from __future__ import annotations
 
 import numpy as np
+import hashlib
 import pyqtgraph as pg
 from PySide6.QtCore import QSettings, QSignalBlocker, Qt, Signal as QtSignal
 from PySide6.QtGui import QAction, QActionGroup, QColor, QGuiApplication
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDia
 
 from gcws.core.keys import is_fid
 from gcws.ms.spectra import MODES, ScanRequest, extract, extract_range, from_ms, ms_times
+from gcws.ms.assignment import override_for, override_key
 from gcws.ui import theme
 from gcws.ui.docks.interpretation_view import InterpretationView
 
@@ -79,7 +81,7 @@ class StickPlot(pg.PlotWidget):
             self.removeItem(t)
         self.texts = []
         self._mz = np.asarray(mz if mz is not None else [], float)
-        if mz is None or len(mz) == 0:
+        if mz is None or len(mz) == 0 or ab is None or len(ab) == 0 or np.max(ab) <= 0:
             self.setTitle(None if self.embedded_title else (title or "no spectrum"))
             return
         mz = np.asarray(mz, float)
@@ -459,12 +461,19 @@ class SpectrumDock(QWidget):
             self._spectrum_changed()
             return
         key = self.ws.signal_key
-        override = st.spectrum_overrides.get(round(peak.apex_rt, 4))
+        override = override_for(st, key, peak)
         from gcws.ms import deconv_cache as DC
         dsettings = DC.settings_of(self.ws)
         self.spec = self._minus_blank(st, extract(st.run, peak, key, st.delay_value, self.current_mode(),
                                                   override=override,
                                                   component=lambda: DC.for_peak(st, peak, key, dsettings)))
+        if self.spec is None:
+            self.plot.show_spectrum(None, None, title="no MS data")
+            self.info.setText("")
+            self.table.setRowCount(0)
+            self.regionsChanged.emit([])
+            self._spectrum_changed()
+            return
         ident = st.ident_set(key).for_peak(peak)
         title = f"RT {peak.apex_rt:.3f}" + (f"  (MS {self.spec.rt:.3f})" if is_fid(key) else "")
         if ident and ident.name:
@@ -489,7 +498,7 @@ class SpectrumDock(QWidget):
     def _refresh_scan(self):
         req = self.scan_req
         st = self.ws.runs.get(req.run_id)
-        if st is None or st.run.ms is None:
+        if st is None or st.run.ms is None or not st.run.ms.n_scans:
             self.scan_req = None
             self.source = "peak"
             self.refresh()
@@ -585,6 +594,9 @@ class SpectrumDock(QWidget):
         """The spectrum minus the blank's spectrum at the same scans, when asked for."""
         if spec is None or not spec.apex_scans or not self.minus_blank.isChecked() or not self.ws.blank_ids(st):
             return spec
+        if spec.mode == "deconvoluted":
+            from dataclasses import replace
+            return replace(spec, note=spec.note + "; normalized component: raw blank subtraction not applied")
         from gcws.ms.spectra import Spectrum, subtract
         bmz, bab = self.ws.blank_spectrum(st, spec.apex_scans)
         if bmz.size == 0:
@@ -627,8 +639,11 @@ class SpectrumDock(QWidget):
                 ri = gc_qc.retention_index(spec.rt + st.delay_value, {int(k): float(v) for k, v in ladder.items()})
             except Exception:  # noqa: BLE001 - RI is optional context
                 ri = None
-        key = (rid, spec.mode, tuple(spec.apex_scans), tuple(spec.bg_scans), spec.ab.size,
-               round(float(spec.ab.sum()), 3), ri, (hit or {}).get("name"))
+        import json
+        digest = hashlib.sha256(np.asarray(spec.mz, dtype=np.float64).tobytes()
+                                + np.asarray(spec.ab, dtype=np.float64).tobytes()).digest()
+        key = (rid, spec.mode, tuple(spec.apex_scans), tuple(spec.bg_scans), digest,
+               spec.rt, ri, json.dumps(hit, sort_keys=True), ms.mass_range(), ms.min_abundance())
         res = self._interp_cache.get(key)
         if res is None:
             lo, hi = ms.mass_range()
@@ -659,7 +674,7 @@ class SpectrumDock(QWidget):
 
     def _fill_table(self):
         self.table.setRowCount(0)
-        if self.spec is None or self.spec.ab.size == 0:
+        if self.spec is None or self.spec.ab.size == 0 or self.spec.ab.max() <= 0:
             return
         mx = self.spec.ab.max()
         for m, a in zip(self.spec.mz, self.spec.ab):
@@ -693,7 +708,7 @@ class SpectrumDock(QWidget):
         self.scan_curve.setData(ms.rt[sl], sig.y[sl] if sig is not None else ms.tic()[sl])
         spec = self.spec
         regions = []
-        self.bg_reg.setVisible(True)
+        self.bg_reg.setVisible(bool(self.spec and self.spec.bg_scans))
         if spec and spec.apex_scans:
             a0, a1 = float(ms.rt[min(spec.apex_scans)]), float(ms.rt[max(spec.apex_scans)])
             self.apex_reg.setRegion((a0 - 0.001, a1 + 0.001))
@@ -725,19 +740,23 @@ class SpectrumDock(QWidget):
             return
         ms = st.run.ms
         apex = [int(s) for s in ms.scans_between(a0, a1)]
-        bg = [int(s) for s in ms.scans_between(b0, b1) if s not in apex]
+        bg = [int(s) for s in ms.scans_between(b0, b1) if s not in apex] if self.bg_reg.isVisible() else []
         if not apex:
             return
-        st.spectrum_overrides[round(peak.apex_rt, 4)] = {"apex_scans": apex, "bg_scans": bg}
+        st.spectrum_overrides[override_key(self.ws.signal_key, peak)] = {"apex_scans": apex, "bg_scans": bg}
         self.ws.log("Spectrum scans", st.name, f"peak {peak.apex_rt:.3f}: apex {apex[0]}-{apex[-1]}, "
                                                f"{len(bg)} background scans")
+        self.ws.spectrumChanged.emit(st.id)
         self.refresh()
 
     def _clear_override(self):
         st = self.ws.active
         peak = self.ws.selected_peak()
-        if st is not None and peak is not None and st.spectrum_overrides.pop(round(peak.apex_rt, 4), None):
+        if st is not None and peak is not None and override_for(st, self.ws.signal_key, peak):
+            # A tombstone prevents legacy RT overrides from reappearing after release.
+            st.spectrum_overrides[override_key(self.ws.signal_key, peak)] = {}
             self.ws.log("Spectrum scans", st.name, f"peak {peak.apex_rt:.3f}: automatic")
+            self.ws.spectrumChanged.emit(st.id)
             self.refresh()
 
     # -- export ----------------------------------------------------------------

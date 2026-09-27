@@ -48,7 +48,8 @@ def _ms_rt(r: Row, ws):
     st = ws.active
     if st is None or not is_fid(ws.signal_key):
         return None
-    return r.peak.apex_rt - st.delay_value
+    component = r.peak.extra.get("deconv_component")
+    return component["rt"] if component else r.peak.apex_rt - st.delay_value
 
 
 def _bm(r: Row, ws):
@@ -76,7 +77,8 @@ def _hint(r: Row, ws):
 COLUMNS: list[Column] = [
     Column("num", "#", lambda r, ws: r.peak.number, "d"),
     Column("rt", "RT [min]", lambda r, ws: r.peak.apex_rt, ".3f"),
-    Column("ms_rt", "RT MS [min]", _ms_rt, ".3f", tip="Delay-corrected MS retention time", default=False),
+    Column("ms_rt", "RT MS [min]", _ms_rt, ".3f",
+           tip="Assigned component MS time, otherwise delay-corrected peak apex", default=False),
     Column("type", "Type", lambda r, ws: r.peak.type_code, numeric=False,
            tip="B baseline, V valley, P penetration, H hold; S solvent, T tangent, X exp. skim, "
                "F/R shoulder, N negative, M manual, + area sum"),
