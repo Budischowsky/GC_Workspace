@@ -153,6 +153,17 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
      a hit reaches the stop score (0–99). **Combined** mode searches all ticked libraries for the best hits
      overall. Saving shows a confirmation. The search start dialog shows the order and has **Edit...** to
      change it before searching. Processing methods retain the order and mode.
+   - **Fast search** (a switch per search method, *Search methods... > Speed*): the automatic library search
+     compares all peaks with the libraries at once instead of one after the other. Hits, scores and their
+     order are exactly those of the normal search. The libraries are expanded block by block into matrices
+     and multiplied with all peak spectra at once (BLAS, every core). The rounding of these products has a
+     proven bound; every reference that could come within it of a peak's 300 best is recomputed with the
+     normal search's own arithmetic. Decoded reference spectra are shared by all peaks and kept for the
+     next search. When identical spectra in several libraries tie at the 300-candidate boundary and one
+     of them would reach the hit list, that peak is searched the normal way. Measured with 13 libraries
+     (1.82 million spectra) on 375 peaks of six runs: 409 ms per peak normally, 49 ms with Fast search
+     (8x; one run of 87 peaks: 4.5x, a repeated search: 8x), with identical results for every peak.
+     Processing methods keep the switch.
    - **Libraries** (*Identify > Libraries...*): *Add library file...* (an `.msp` or Wiley/Shimadzu `.lib`) or
      *Add folder...* (an Agilent `.L` folder, a NIST library folder such as mainlib, replib or a user library, or
      a folder holding several libraries: all of them are added). Libraries can be switched off or removed; the

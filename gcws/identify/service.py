@@ -30,6 +30,49 @@ def search_methods():
     return SM.MethodStore()
 
 
+# -- Fast search -------------------------------------------------------------------------------
+# Which search methods use Fast search (``gcws.libsearch.fast``) is kept beside the method file,
+# so that file keeps NIAS's format.
+
+def fast_search_path():
+    from gcws import paths
+    return paths.DATA / "library_search_fast.json"
+
+
+def fast_search_methods() -> set:
+    """Names of the search methods with Fast search switched on."""
+    import json
+    try:
+        data = json.loads(fast_search_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    names = data.get("methods") if isinstance(data, dict) else None
+    return {n for n in names or [] if isinstance(n, str)}
+
+
+def is_fast(method) -> bool:
+    """True when ``method`` (a search method or its name) searches with Fast search."""
+    name = method if isinstance(method, str) else getattr(method, "name", "")
+    return bool(name) and name in fast_search_methods()
+
+
+def set_fast(name: str, on: bool) -> bool:
+    """Switch Fast search on or off for the method ``name``; False when it could not be saved."""
+    import json
+    names = fast_search_methods()
+    if on:
+        names.add(name)
+    else:
+        names.discard(name)
+    path = fast_search_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"methods": sorted(names)}, indent=2, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
 def build_items(ws, run_ids: list[str], key: str, spectrum_mode: str,
                 rescan_below: Optional[float] = None, skip_identified: bool = False,
                 only: Optional[dict] = None) -> tuple[list[SearchItem], int]:
@@ -260,6 +303,10 @@ class LocalBatchSearch:
             return
         rng = GI.mz_range(self.jobs)
         todo = [n for n, job in enumerate(self.jobs) if not job.done]
+        if len(todo) > 1 and is_fast(self.method):
+            self._run_fast(todo, rng)
+            self.messages.put(("done", self.cancelled.is_set()))
+            return
         for count, index in enumerate(todo, 1):
             if self.cancelled.is_set():
                 break
@@ -274,6 +321,34 @@ class LocalBatchSearch:
             job.done = True
             self.messages.put(("hit", index))
         self.messages.put(("done", self.cancelled.is_set()))
+
+    def _run_fast(self, todo, rng):
+        """Fast search: every peak at once, with the hits the search one by one gives."""
+        import gc_identify as GI
+        import gc_search_method as SM
+        from gcws.libsearch import service as LS
+        settings = SM.to_api_settings(self.method, SM.mz_range(self.method, rng), lite=True)
+        keep = max(1, min(self.method.top_n, GI.MAX_TOP_N))
+        jobs = [self.jobs[n] for n in todo]
+
+        def done(i, result):
+            job = jobs[i]
+            job.error, job.chosen = "", None
+            if isinstance(result, BaseException):
+                job.hits, job.error = [], str(result)
+            else:
+                job.hits = [dict(GI.hit_record(h), peaks=h.get("peaks") or [])
+                            for h in (result.get("hits") or [])[:keep]]
+            job.done = True
+            self.messages.put(("hit", todo[i]))
+
+        self.messages.put(("status", f"Fast search: {len(jobs)} peaks at once"))
+        try:
+            LS.analyze_many([(f"{job.label} Peak {job.peak_no} RT {job.rt:.3f}", job.spectrum) for job in jobs],
+                            settings, progress=lambda t: self.messages.put(("status", t)),
+                            cancelled=self.cancelled.is_set, done=done)
+        except Exception as exc:  # noqa: BLE001
+            self.messages.put(("error", str(exc)))
 
 
 class LibrarySearchWorker(QObject):

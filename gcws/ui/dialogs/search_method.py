@@ -4,6 +4,9 @@ In sequential mode the ticked libraries are searched from the top of the list
 down, and the search stops at the first library with a hit at or above the
 stop score: the list order is the search order (drag a library or use the
 buttons to move it).
+
+"Fast search" lets the automatic library search take all peaks at once
+(``gcws.libsearch.fast``): the same hits and scores, in a fraction of the time.
 """
 from __future__ import annotations
 
@@ -18,6 +21,9 @@ MODE_LABELS = {"combined": "Combined - all libraries at once, best hits overall"
                "sequential": "Sequential - top to bottom, stop at the first library with a hit ≥ stop score"}
 #: the engine accepts stop scores 0-99
 MAX_STOP_SCORE = 99
+FAST_TIP = ("Fast search: the automatic library search compares all peaks with the libraries at once "
+            "instead of one after the other. Hits, scores and their order are exactly those of the normal "
+            "search - it is only faster (several times with large libraries and many peaks).")
 
 
 def order_summary(method) -> str:
@@ -25,10 +31,12 @@ def order_summary(method) -> str:
     libs = method.enabled_libraries()
     if not libs:
         return "No library ticked in this search method."
+    from gcws.identify.service import is_fast
+    fast = "  ·  Fast search" if is_fast(method) else ""
     if method.mode == "sequential":
         return (f"Sequential, stop at score {method.stop_score}:  "
-                + "  →  ".join(f"{i}. {name}" for i, name in enumerate(libs, 1)))
-    return f"Combined: {len(libs)} librar{'y' if len(libs) == 1 else 'ies'} searched together."
+                + "  →  ".join(f"{i}. {name}" for i, name in enumerate(libs, 1)) + fast)
+    return f"Combined: {len(libs)} librar{'y' if len(libs) == 1 else 'ies'} searched together." + fast
 
 
 class SearchMethodDialog(QDialog):
@@ -55,6 +63,14 @@ class SearchMethodDialog(QDialog):
 
         self.algorithm = QComboBox()
         self.algorithm.addItems(["pbm", "similarity"])
+        self.fast = QCheckBox("Fast search")
+        self.fast.setToolTip(FAST_TIP)
+        fast_hint = QLabel("all peaks at once - same hits and scores, much faster")
+        fast_hint.setObjectName("hint")
+        fast_hint.setToolTip(FAST_TIP)
+        fast_row = QHBoxLayout()
+        fast_row.addWidget(self.fast)
+        fast_row.addWidget(fast_hint, 1)
         self.mode = QComboBox()
         for key, label in MODE_LABELS.items():
             self.mode.addItem(label, key)
@@ -117,6 +133,7 @@ class SearchMethodDialog(QDialog):
         mz.addWidget(self.max_mz)
         f = QFormLayout()
         f.addRow("Algorithm", self.algorithm)
+        f.addRow("Speed", fast_row)
         f.addRow("Library order", self.mode)
         f.addRow("Hits per peak", self.top_n)
         f.addRow("Quality limit (identified from)", self.min_score)
@@ -169,6 +186,8 @@ class SearchMethodDialog(QDialog):
         self.require_cas.setChecked(m.require_cas)
         self.name_include.setText(m.name_include)
         self.name_exclude.setText(m.name_exclude)
+        from gcws.identify.service import is_fast
+        self.fast.setChecked(is_fast(name))
         self._fill_libs(m.libraries)
 
     def _fill_libs(self, entries):
@@ -270,9 +289,10 @@ class SearchMethodDialog(QDialog):
         return m
 
     def _save(self):
+        from gcws.identify.service import set_fast
         m = self._collect()
         self.store.put(m)
-        if self.store.save():
+        if self.store.save() and set_fast(m.name, self.fast.isChecked()):
             self.current = m
             self.saved.setText(f"Saved {datetime.now():%H:%M:%S}")
         else:
@@ -281,19 +301,24 @@ class SearchMethodDialog(QDialog):
     def _new(self):
         name, ok = QInputDialog.getText(self, "New method", "Name:")
         if ok and name.strip():
+            from gcws.identify.service import set_fast
             m = self._collect()
             m.name = name.strip()
             self.store.put(m)
             self.store.save()
+            set_fast(m.name, self.fast.isChecked())
             self.names.addItem(m.name)
             self.names.setCurrentText(m.name)
 
     def _delete(self):
+        from gcws.identify.service import set_fast
+        name = self.names.currentText()
         try:
-            self.store.delete(self.names.currentText())
+            self.store.delete(name)
         except ValueError as exc:
             QMessageBox.information(self, "Delete", str(exc))
             return
         self.store.save()
+        set_fast(name, False)
         self.names.clear()
         self.names.addItems(self.store.names())

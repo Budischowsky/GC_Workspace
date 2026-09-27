@@ -144,3 +144,47 @@ def analyze(points, name: str = "unknown", settings: Optional[dict] = None,
         if not eng.count:
             raise ValueError("No library loaded. Add your libraries under Identify > Libraries...")
         return eng.analyze(spectrum, dict(settings or {}), regional=False)
+
+
+#: spectra per fast-search batch; the engine is locked for one batch at a time
+FAST_BATCH = 400
+
+
+def analyze_many(spectra: list, settings: Optional[dict] = None,
+                 progress: Callable[[str], None] = lambda t: None,
+                 cancelled: Callable[[], bool] = lambda: False,
+                 done: Optional[Callable[[int, object], None]] = None) -> list:
+    """Fast search: ``analyze`` of many spectra ``[(name, [(m/z, abundance), ...]), ...]`` at once.
+
+    Each result is exactly what ``analyze`` returns for that spectrum (see ``gcws.libsearch.fast``),
+    or the exception it raises; ``done(index, result)`` reports each one as it is finished."""
+    from gcws.libsearch.fast import FastSearch
+    results: list = [None] * len(spectra)
+
+    def finished(index, result):
+        results[index] = result
+        if done is not None:
+            done(index, result)
+
+    parsed = []
+    for n, (name, points) in enumerate(spectra):
+        peaks = [(float(m), float(i)) for m, i in points if float(i) > 0]
+        if peaks:
+            parsed.append((n, _msp.Spectrum(name=name, peaks=peaks)))
+        else:
+            finished(n, ValueError("The spectrum has no peaks."))
+    for start in range(0, len(parsed), FAST_BATCH):
+        if cancelled():
+            break
+        batch = parsed[start:start + FAST_BATCH]
+        with _lock:
+            eng = get_engine(progress)
+            if not eng.count:
+                error = ValueError("No library loaded. Add your libraries under Identify > Libraries...")
+                for n, _spectrum in parsed[start:]:
+                    finished(n, error)
+                break
+            search = FastSearch(eng, dict(settings or {}), progress, cancelled)
+            search.analyze([spectrum for _n, spectrum in batch],
+                           lambda i, result, batch=batch: finished(batch[i][0], result))
+    return results

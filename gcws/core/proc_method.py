@@ -71,10 +71,12 @@ def collect(win, name: str, comment: str = "") -> dict:
         sections["quant"]["hs"].pop("istd_bindings", None)
     for sec, key in QUANT_SECTIONS.items():
         sections[sec] = copy.deepcopy(q.get(key))
-    from gcws.identify.service import search_methods
+    from gcws.identify.service import is_fast, search_methods
     store = search_methods()
     gc_method = st.run.meta.method if st is not None and st.run.meta else ""
-    sections["search"] = {"method": store.for_gc_method(gc_method).as_dict(),
+    search = store.for_gc_method(gc_method)
+    sections["search"] = {"method": search.as_dict(),
+                          "fast": is_fast(search),
                           "target": s.value("search/target", "TIC"),
                           "transfer": s.value("search/transfer", True, type=bool)}
     from gcws.ui.dialogs.own_search import load_options
@@ -151,7 +153,8 @@ def summary(method: dict) -> str:
     if srch:
         libs = [e.get("name") for e in srch.get("libraries") or [] if e.get("enabled")]
         lines.append(f"Library search: '{srch.get('name')}', {srch.get('algorithm')}, {len(libs)} libraries, "
-                     f"{(sec.get('search') or {}).get('target', 'TIC')} peaks")
+                     f"{(sec.get('search') or {}).get('target', 'TIC')} peaks"
+                     + (", Fast search" if (sec.get('search') or {}).get('fast') else ""))
     own = sec.get("own_search") or {}
     if own.get("library"):
         lines.append(f"Own library: {own['library']}")
@@ -241,13 +244,15 @@ def _apply_integration(ws, integ: dict, name: str, stack) -> None:
 def _apply_search(d: dict) -> None:
     from PySide6.QtCore import QSettings
     import gc_search_method as SM
-    from gcws.identify.service import search_methods
+    from gcws.identify.service import search_methods, set_fast
     if d.get("method"):
         m = SM.SearchMethod.from_dict(d["method"])
         store = search_methods()
         store.put(m)
         store.set_default(m.name)
         store.save()
+        if "fast" in d:                    # methods saved before Fast search existed leave it as it is
+            set_fast(m.name, bool(d["fast"]))
     s = QSettings()
     for k in ("target", "transfer"):
         if k in d:
