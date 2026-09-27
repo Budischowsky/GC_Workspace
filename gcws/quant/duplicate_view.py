@@ -165,6 +165,7 @@ def member_problems(ws, members: list[str]) -> list[str]:
     """Why determinations cannot be compared, one line per run (empty list: fine)."""
     from gcws.core.model import FID
     from gcws.io.sequence import ROLE_LABELS
+    key = "TIC" if ws.quant.get("mode") == "hs_screening" else FID
     out = []
     for m in members:
         st = ws.runs.get(m)
@@ -173,10 +174,10 @@ def member_problems(ws, members: list[str]) -> list[str]:
             continue
         if st.role not in ("sample", "standard"):
             out.append(f"{st.name}: role is {ROLE_LABELS.get(st.role, st.role)} (needs Sample)")
-        elif st.run.fid is None:
-            out.append(f"{st.name}: no FID signal")
-        elif FID not in st.results:
-            out.append(f"{st.name}: FID not integrated")
+        elif st.run.signal(key) is None:
+            out.append(f"{st.name}: no {key} signal")
+        elif key not in st.results:
+            out.append(f"{st.name}: {key} not integrated")
         elif ws.quant_result is not None and ws.quant_result.errors.get(m):
             out.append(f"{st.name}: {ws.quant_result.errors[m]}")
     return out
@@ -187,7 +188,11 @@ def compute(ws, members: list[str], policy: str = "all"):
     from gcws.quant.nias_bridge import make_settings
     from gcws.quant.replicates import combine, engine_peaks
     members = [m for m in members if m in ws.runs]
-    if ws.quant_result is None or any(m not in ws.quant_result.samples for m in members):
+    key = "TIC" if ws.quant.get("mode") == "hs_screening" else "FID"
+    if ws.quant_result is None or any(m not in ws.quant_result.samples
+                                      and key in ws.runs[m].results
+                                      and ws.runs[m].role in ("sample", "standard")
+                                      and m not in ws.quant_result.errors for m in members):
         ws.recompute_quant()                  # the scheduled recomputation may not have run yet
     problems = member_problems(ws, members)
     samples = [ws.nias_sample(m) for m in members]
@@ -201,7 +206,7 @@ def compute(ws, members: list[str], policy: str = "all"):
         else:
             qr = ws.quant_result.rows.get(m, {})
             lists.append(engine_peaks(s, value=lambda row, qr=qr: qr.get(row.derived.get("gcws_index"), {}).get("conc")))
-    settings = make_settings(ws.quant.get("settings"))
+    settings = make_settings(ws.quant.get("hs" if mode == "hs_screening" else "settings"))
     tol = float(getattr(settings, "rt_tolerance", 0.035) or 0.035)
     return combine(lists, tol, policy), []
 
@@ -209,6 +214,8 @@ def compute(ws, members: list[str], policy: str = "all"):
 def limits(ws) -> tuple[float, float]:
     """(difference limit %, reporting limit) from the quantification settings."""
     from gcws.quant.nias_bridge import make_settings
+    if ws.quant.get("mode") == "hs_screening":
+        return float(ws.quant.get("hs", {}).get("duplicate_max_reldiff", 30)), 0.0
     s = make_settings(ws.quant.get("settings"))
     limit = float(getattr(s, "duplicate_max_reldiff", 30.0) or 30.0)
     rl = getattr(s, "reporting_limit", None)

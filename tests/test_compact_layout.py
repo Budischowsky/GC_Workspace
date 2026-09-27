@@ -38,7 +38,7 @@ def test_solvent_menu_commit_undo_and_independent_blanks(qtbot, win, samples):
     win.a_undo.trigger()
     assert menu.end.value() == 5.5
     menu.cut.trigger()
-    assert ws.quant["solvent_cut"] and win.chrom.cut.isChecked() and win.chrom2.cut.isChecked()
+    assert ws.quant["solvent_cut"] and win.chrom.cut.isChecked() and not win.chrom2.cut.isChecked()
     win.a_undo.trigger()
     assert not menu.cut.isChecked()
     menu.blanks[0].trigger()
@@ -90,8 +90,9 @@ def test_ms_shared_actions_scan_overlay_and_details(qtbot, win, samples):
     sp = win.spectrum
     sp.show_range(ScanRequest(win.ws.active_id, 13.0, 13.0))
     assert sp.spec is not None and sp.source == "scan"
-    assert sp.source_bar.parentWidget() is sp.plot.viewport()
-    assert sp.source_bar.isVisible()
+    assert not hasattr(sp, "source_bar")
+    assert sp.info.isHidden() and not hasattr(sp, "source_text") and not hasattr(sp, "b_back")
+    assert all(a in sp.context_menu.actions() for a in sp.navigation_actions)
     from PySide6.QtWidgets import QLabel, QToolButton
     assert not any(b.text() == "Details" for b in sp.plot.findChildren(QToolButton))
     assert not any(label.text().lower() == "scan spectrum" for label in sp.plot.findChildren(QLabel))

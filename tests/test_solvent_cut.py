@@ -12,6 +12,7 @@ def test_cut_curves_peaks_undo_and_methods(qtbot, win, samples, tmp_path):
     from gcws.ui.workspace import Workspace
     _load(qtbot, win, samples, ["07_"])
     ws, st = win.ws, win.ws.active
+    ws.quant.pop("ms_solvent", None)  # legacy projects retain linked detector cuts
     digest = ws.active_result().digest
     st.deconv[("run", "old")] = [object()]
     win.chrom.cut.setChecked(True)
@@ -64,6 +65,7 @@ def test_cut_curves_peaks_undo_and_methods(qtbot, win, samples, tmp_path):
 def test_cut_on_load_and_dialog(qtbot, win, samples):
     from gcws.ui.dialogs.solvent_cut import SolventCutDialog
     ws = win.ws
+    ws.quant.pop("ms_solvent", None)
     dialog = SolventCutDialog(ws, win)
     qtbot.addWidget(dialog)
     assert dialog.end.value() == 5.5
@@ -81,6 +83,7 @@ def test_whole_run_deconv_obeys_cut(qtbot, win, samples, monkeypatch):
     from gcws.ms import deconv_cache as DC
     _load(qtbot, win, samples, ["07_"])
     ws, st = win.ws, win.ws.active
+    ws.quant.pop("ms_solvent", None)
     ws.set_solvent_cut(True, 5.5)
     settings = DC.settings_of(ws)
     cut = ws.solvent_cut(st, "TIC")

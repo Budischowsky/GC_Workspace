@@ -105,6 +105,17 @@ class QuantDock(QScrollArea):
         self.defs_note.setObjectName("hint")
         il.addWidget(self.defs)
         il.addWidget(self.mean_area)
+        self.rrt_box = QWidget()
+        rf = QFormLayout(self.rrt_box)
+        rf.setContentsMargins(0, 0, 0, 0)
+        self.rrt_reference = QComboBox()
+        self.rrt_reference.setToolTip("One reference for all samples; uses each sample's measured ISTD RT")
+        self.rrt_reference.activated.connect(self._rrt_changed)
+        rf.addRow("RRT reference ISTD", self.rrt_reference)
+        self.rrt_status = QLabel()
+        self.rrt_status.setWordWrap(True)
+        rf.addRow(self.rrt_status)
+        il.addWidget(self.rrt_box)
         il.addLayout(h)
         il.addWidget(self.defs_note)
         lay.addWidget(istd)
@@ -134,6 +145,10 @@ class QuantDock(QScrollArea):
         rl.addLayout(h)
         rl.addWidget(self.factor)
         lay.addWidget(run)
+        self.legacy_groups = (par, istd, run)
+        from gcws.ui.docks.hs_quant import HSQuantPanel
+        self.hs_panel = HSQuantPanel(ws, self)
+        lay.addWidget(self.hs_panel)
         lay.addStretch(1)
 
         ws.quantChanged.connect(self.refresh)
@@ -163,10 +178,15 @@ class QuantDock(QScrollArea):
         q = self.ws.quant
         self.mode.setCurrentIndex(max(0, self.mode.findData(q.get("mode", "nias_mgkg"))))
         mode = self.mode.currentData()
+        self.rrt_box.setVisible(mode == "nias_mgkg")
+        hs = mode == "hs_screening"
+        for group in self.legacy_groups:
+            group.setVisible(not hs)
+        self.hs_panel.setVisible(hs)
         own = mode == "istd_conc"
         self.mode_form.setRowVisible(self.unit, own)
         self.mode_form.setRowVisible(self.istd_conc, own)
-        self.mode_form.setRowVisible(self.result_unit, not own)
+        self.mode_form.setRowVisible(self.result_unit, not own and not hs)
         unit = q.get("unit", UNITS[0]) or UNITS[0]
         pending = self._commit.isActive()           # never overwrite a value that is still being typed
         if not (pending or self.unit.hasFocus() or self.unit.lineEdit().hasFocus()):
@@ -177,6 +197,8 @@ class QuantDock(QScrollArea):
         from gcws.quant.service import mode_unit
         self.result_unit.setText(f"<b>{mode_unit(q)}</b> (fixed by the mode)")
         self.mode_note.setText({
+            "hs_screening": "<b>HS-Screening:</b> MS-only quantification from TIC peak areas. "
+                            "Configure the seven HS standards and sample amount below.",
             "nias_mgkg": "<b>What it computes:</b> mg/kg food simulant.<br>"
                          "mg/dm² = blank-corrected FID area × mean ISTD factor; mg/kg = mg/dm² × O/V.<br>"
                          "The factor comes from the Internal standards table (concentration, area) and the "
@@ -194,6 +216,10 @@ class QuantDock(QScrollArea):
             "area_pct": "<b>What it computes:</b> the area % of every peak among all integrated peaks "
                         "(solvent excluded). No ISTD needed.",
         }[mode])
+        if hs:
+            self.hs_panel.refresh()
+            self._loading = False
+            return
         s = self._settings()
         from PySide6.QtWidgets import QAbstractItemView
         editing = QAbstractItemView.EditingState
@@ -213,6 +239,20 @@ class QuantDock(QScrollArea):
             self.params.setItem(r, 2, _item(unit))
         self.params.resizeRowsToContents()
         defs = self._defs()
+        self.rrt_reference.clear()
+        self.rrt_reference.addItem("Not selected", "")
+        for d in defs:
+            self.rrt_reference.addItem(f"{d['code']}  {d['name']}", d["code"])
+        reference = q.get("rrt_reference") or ""
+        index = self.rrt_reference.findData(reference)
+        if index < 0:
+            self.rrt_reference.addItem(f"{reference} (removed)", reference)
+            index = self.rrt_reference.count() - 1
+        self.rrt_reference.setCurrentIndex(index)
+        from gcws.quant.service import rrt_reference
+        st = self.ws.active
+        sample = self.ws.quant_result.samples.get(st.id) if st and self.ws.quant_result else None
+        self.rrt_status.setText(rrt_reference(sample, q, st)[1])
         self.defs.setRowCount(0)
         for d in defs:
             self._def_row(d)
@@ -258,14 +298,22 @@ class QuantDock(QScrollArea):
 
     # -- edits -------------------------------------------------------------------------
 
+    def _rrt_changed(self, *_):
+        if not self._loading:
+            q = copy.deepcopy(self.ws.quant)
+            q["rrt_reference"] = self.rrt_reference.currentData() or ""
+            if q != self.ws.quant:
+                self._push_quant("RRT reference ISTD", q)
+
     def _mode_changed(self, *_):
         if self._loading:
             return
         self._commit.stop()
         q = copy.deepcopy(self.ws.quant)
         q["mode"] = self.mode.currentData()
-        q["unit"] = self.unit.currentText().strip() or UNITS[0]
-        q["istd_conc_value"] = self.istd_conc.value()
+        if q["mode"] != "hs_screening":
+            q["unit"] = self.unit.currentText().strip() or UNITS[0]
+            q["istd_conc_value"] = self.istd_conc.value()
         if q == self.ws.quant:
             return
         old = self.ws.quant
@@ -345,6 +393,9 @@ class QuantDock(QScrollArea):
                                                          ("unbound" if rt is None else f"{rt:.3f}")), q)
 
     def _bind_selected(self):
+        if self.ws.quant.get("mode") == "hs_screening":
+            self.hs_panel.bind()
+            return
         p = self.ws.selected_peak()
         if p is None:
             QMessageBox.information(self, "ISTD", "Select the ISTD peak in the chromatogram or table first.")

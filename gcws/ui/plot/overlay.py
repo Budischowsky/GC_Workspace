@@ -78,7 +78,7 @@ class PlotOverlay(QWidget):
         for w in self.widgets:
             w.setVisible(w in available)
             if isinstance(w, QLabel):
-                w.setToolTip(w.text())
+                w.setToolTip(w.property("detailTooltip") or w.text())
                 w.setMaximumWidth(max(1, w.sizeHint().width()))
         self.more.setVisible(bool(self.overflowed))
         height = max([w.sizeHint().height() for w in available] + [24]) + 2

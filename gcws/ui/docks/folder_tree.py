@@ -30,14 +30,14 @@ def _run_info(path: str, mtime: float) -> tuple[str, str]:
 
 
 def _is_run(path: str) -> bool:
-    return path.lower().endswith(".d") and folders.is_run_dir(path)
+    return path.lower().endswith((".d", ".qgd")) and folders.is_run_dir(path)
 
 
 class GCFileModel(QFileSystemModel):
     def data(self, index, role=Qt.DisplayRole):
         if index.column() == 0 and role in (Qt.DecorationRole, Qt.ToolTipRole):
             path = self.filePath(index)
-            if path.lower().endswith(".d") and self.isDir(index):
+            if _is_run(path):
                 if role == Qt.DecorationRole:
                     r = classify_role(Path(path).name)
                     return icon("run", ROLE_COLORS.get(r, "#1F6F8B"))
@@ -79,7 +79,7 @@ class DirsOnly(QSortFilterProxyModel):
         model = self.sourceModel()
         idx = model.index(row, 0, parent)
         if not model.isDir(idx):
-            return False
+            return model.fileName(idx).lower().endswith(".qgd")
         parent_path = model.filePath(parent)
         if parent_path.lower().endswith(".d"):
             return False
@@ -110,7 +110,7 @@ class FolderTree(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.model = GCFileModel(self)
-        self.model.setFilter(QDir.AllDirs | QDir.NoDotAndDotDot | QDir.Drives)
+        self.model.setFilter(QDir.AllDirs | QDir.Files | QDir.NoDotAndDotDot | QDir.Drives)
         self.model.setReadOnly(True)
         self.proxy = DirsOnly(self)
         self.proxy.setSourceModel(self.model)

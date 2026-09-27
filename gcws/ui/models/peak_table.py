@@ -97,6 +97,8 @@ COLUMNS: list[Column] = [
     Column("status", "ID status", lambda r, ws: r.ident.status if r.ident else "", numeric=False),
     Column("library", "Library", lambda r, ws: r.ident.library if r.ident else "", numeric=False, default=False),
     Column("ri", "RI", lambda r, ws: r.quant.get("ri"), ".0f", default=False),
+    Column("rrt", "RRT", lambda r, ws: r.quant.get("rrt"), ".4f", default=False,
+           tip="RT / measured RT of the selected NIAS reference ISTD, on this detector's time axis"),
     Column("istd", "ISTD", lambda r, ws: r.quant.get("istd", ""), numeric=False),
     Column("blank_area", "Blank area", lambda r, ws: r.quant.get("blank_area"), ",.0f", default=False,
            tip="NIAS quantification: blank area subtracted in the mg/kg calculation"),
@@ -110,6 +112,12 @@ COLUMNS: list[Column] = [
     Column("area_minus_blank", "Area − blank", _area_minus_blank, ",.0f", default=False,
            tip="Peak area minus the matching blank peak's area (peak-level blank check)"),
     Column("mg_dm2", "mg/dm²", lambda r, ws: r.quant.get("mg_dm2"), ".4f", default=False),
+    Column("ug_hs", "µg/HS", lambda r, ws: r.quant.get("ug_hs"), ".4f", default=False,
+           tip="HS amount per vial relative to the activated internal standards"),
+    Column("ug_dm2", "µg/dm²", lambda r, ws: r.quant.get("ug_dm2"), ".4f", default=False,
+           tip="HS amount divided by sample area; requires a positive area in dm²"),
+    Column("ug_g", "µg/g", lambda r, ws: r.quant.get("ug_g"), ".4f", default=False,
+           tip="HS amount divided by sample mass; requires a positive mass in g"),
     Column("conc", "Conc.", lambda r, ws: r.quant.get("conc"), ".4f",
            tip="Concentration in the unit of the quantification mode"),
     Column("sml", "SML", lambda r, ws: r.quant.get("sml", ""), numeric=False, default=False),
@@ -204,6 +212,8 @@ class PeakTableModel(QAbstractTableModel):
             return f
         if role == Qt.ToolTipRole and col.key in ("area", "area_pct", "type", "origin"):
             return row.peak.extra.get("area_note")
+        if role == Qt.ToolTipRole and col.key == "rrt":
+            return row.quant.get("rrt_status", col.tip)
         if role == Qt.ToolTipRole and col.key == "class_hint":
             cache = getattr(self.ws, "hints", None)
             v = cache.get(self.ws.active, self.ws.signal_key, row.peak) if cache is not None else None

@@ -33,7 +33,8 @@ SECTIONS = {
     "report": "Report options",
     "table": "Peak table (columns, value filter)",
 }
-QUANT_KEYS = ("mode", "unit", "istd_conc_value", "settings", "istd_defs", "istd_options", "solvent_cut")
+QUANT_KEYS = ("mode", "unit", "istd_conc_value", "settings", "istd_defs", "istd_options", "solvent_cut", "hs",
+              "ms_solvent", "rrt_reference")
 #: sections that live in ``ws.quant`` under one key
 QUANT_SECTIONS = {"blank": "blank_sub", "deconv": "deconv", "ri": "ri", "migration": "migration"}
 
@@ -64,6 +65,10 @@ def collect(win, name: str, comment: str = "") -> dict:
     sections["integration"] = integ
     q = ws.quant or {}
     sections["quant"] = {k: copy.deepcopy(q[k]) for k in QUANT_KEYS if k in q}
+    if "hs" in sections["quant"]:
+        # A method contains definitions, never another sample's amounts or peak bindings.
+        sections["quant"]["hs"].pop("samples", None)
+        sections["quant"]["hs"].pop("istd_bindings", None)
     for sec, key in QUANT_SECTIONS.items():
         sections[sec] = copy.deepcopy(q.get(key))
     from gcws.identify.service import search_methods
@@ -170,9 +175,18 @@ def apply(win, method: dict, sections=None) -> list[str]:
     try:
         q = copy.deepcopy(ws.quant or {})
         if "quant" in chosen:
+            # Missing detector/RRT fields identify an older method. Do not keep
+            # the current independent cut or reference when restoring it.
+            for key in ("ms_solvent", "rrt_reference"):
+                if key not in (sec["quant"] or {}):
+                    q.pop(key, None)
             for k in QUANT_KEYS:
                 if k in (sec["quant"] or {}):
-                    q[k] = copy.deepcopy(sec["quant"][k])
+                    value = copy.deepcopy(sec["quant"][k])
+                    if k == "hs":
+                        value["samples"] = copy.deepcopy(q.get("hs", {}).get("samples", {}))
+                        value["istd_bindings"] = copy.deepcopy(q.get("hs", {}).get("istd_bindings", {}))
+                    q[k] = value
         for s_name, key in QUANT_SECTIONS.items():
             if s_name in chosen:
                 if sec[s_name] is None:

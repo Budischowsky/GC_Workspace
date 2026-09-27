@@ -48,7 +48,7 @@ def _fold(value) -> str:
 
 
 def _parts(value) -> tuple[set[str], str]:
-    name = re.sub(r"\.d$", "", _fold(value), flags=re.IGNORECASE)
+    name = re.sub(r"\.(?:d|qgd)$", "", _fold(value), flags=re.IGNORECASE)
     tokens = {p.casefold() for p in re.split(r"[^0-9A-Za-z]+", name) if p}
     return tokens, re.sub(r"[^a-z0-9]+", "", name.casefold())
 
@@ -80,14 +80,14 @@ def sample_number(name) -> str:
 
 def replicate_stem(name) -> str:
     """Name without injection prefix and trailing replicate letter/number."""
-    stem = re.sub(r"\.d$", "", _fold(name), flags=re.IGNORECASE)
+    stem = re.sub(r"\.(?:d|qgd)$", "", _fold(name), flags=re.IGNORECASE)
     stem = LEADING_NUMBER.sub("", stem).lstrip("_- ")
     stem = re.sub(r"[_\- ]+(?:[A-Za-z]|\d{1,2}|rep\d+)$", "", stem, flags=re.IGNORECASE)
     return stem.casefold()
 
 
 def replicate_label(name) -> str:
-    stem = re.sub(r"\.d$", "", _fold(name), flags=re.IGNORECASE)
+    stem = re.sub(r"\.(?:d|qgd)$", "", _fold(name), flags=re.IGNORECASE)
     m = re.search(r"[_\- ]+([A-Za-z]|\d{1,2})$", stem)
     return m.group(1).upper() if m else ""
 

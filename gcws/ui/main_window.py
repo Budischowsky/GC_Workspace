@@ -164,10 +164,18 @@ class MainWindow(QMainWindow):
         self.a_save_as = A("Save project as...", lambda: self.save_project(True), "Ctrl+Shift+S")
         self.a_close_all = A("Close all chromatograms", self.close_all)
         self.a_quit = A("Exit", self.close, "Ctrl+Q")
-        self.a_undo = self.ws.undo_group.createUndoAction(self, "Undo")
+        self.a_undo = A("Undo", self.ws.undo_group.undo)
         self.a_undo.setShortcut(QKeySequence.Undo)
-        self.a_redo = self.ws.undo_group.createRedoAction(self, "Redo")
+        self.a_redo = A("Redo", self.ws.undo_group.redo)
         self.a_redo.setShortcut(QKeySequence.Redo)
+        self.a_undo.setEnabled(self.ws.undo_group.canUndo())
+        self.a_redo.setEnabled(self.ws.undo_group.canRedo())
+        self.ws.undo_group.canUndoChanged.connect(self.a_undo.setEnabled)
+        self.ws.undo_group.canRedoChanged.connect(self.a_redo.setEnabled)
+        self.ws.undo_group.undoTextChanged.connect(
+            lambda text: self.a_undo.setToolTip(f"Undo {text}" if text else "Undo"))
+        self.ws.undo_group.redoTextChanged.connect(
+            lambda text: self.a_redo.setToolTip(f"Redo {text}" if text else "Redo"))
         self.a_integrate = A("Integrate", lambda: self.integrate(False), "F5", icon("integrate"),
                              "Re-integrate the active chromatogram")
         self.a_integrate_all = A("Integrate all", lambda: self.integrate(True), "Shift+F5",
@@ -175,6 +183,13 @@ class MainWindow(QMainWindow):
         self.a_search = A("Library search...", self.library_search, "Ctrl+F", icon("search"),
                           "Automatic library search of all integrated peaks (your libraries)")
         self.a_search_method = A("Search methods...", self.edit_search_methods)
+        self.a_subtract = A("Subtract baseline", self.spectrum.toggle_subtraction,
+                            tip="Right-click the apex, then the baseline in a chromatogram", checkable=True)
+        self.a_cancel_subtract = A("Cancel baseline subtraction", self.spectrum.back_to_peak, "Escape")
+        self.a_cancel_subtract.setEnabled(False)
+        self.addAction(self.a_cancel_subtract)
+        self.spectrum.subtractionChanged.connect(self.a_subtract.setChecked)
+        self.spectrum.subtractionChanged.connect(self.a_cancel_subtract.setEnabled)
         self.spectrumSearchAtlasAction = A("Library hit list (selected peak)", self.atlas_selected, "Ctrl+E")
         self.a_libraries = A("Libraries...", self.manage_libraries)
         self.spectrumSearchNistAction = A("Search selected peak in NIST", self.nist_selected, "Ctrl+N")
@@ -204,6 +219,7 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
         tb.addAction(self.a_integrate)
         tb.addAction(self.a_search)
+        tb.addAction(self.a_subtract)
         from gcws.ui import theme
         for a in (self.a_integrate, self.a_search):
             theme.set_primary(tb.widgetForAction(a))
@@ -221,6 +237,7 @@ class MainWindow(QMainWindow):
         m = mb.addMenu("&File")
         for a in (self.a_open_folder, self.a_load):
             m.addAction(a)
+        m.addAction("Load Shimadzu QGD files...", self.load_qgd_dialog)
         m.addSeparator()
         for a in (self.a_open, self.a_save, self.a_save_as):
             m.addAction(a)
@@ -304,7 +321,6 @@ class MainWindow(QMainWindow):
         self.quant_menu.addAction(self.setIstdAction)
         self.quant_menu.addSeparator()
         self.quant_menu.addAction("Quantification panel", lambda: self._show_dock("quant"))
-        self.quant_menu.addAction("Migration conditions...", self.quant.edit_migration)
         self.quant_menu.addAction("Double determination...", lambda: self.open_double_determination())
         self.quant_menu.addAction("Replicate groups (N-fold)", lambda: (self._show_dock("replicates"),
                                                                         self.replicates.tabs.setCurrentIndex(1)))
@@ -515,9 +531,15 @@ class MainWindow(QMainWindow):
         from gcws.io import folders
         paths = [d] if folders.is_run_dir(d) else [str(p) for p in folders.list_runs(d)]
         if not paths:
-            QMessageBox.information(self, "Load", "No GC run folders (.D) found there.")
+            QMessageBox.information(self, "Load", "No GC runs (.D folders or .qgd files) found there.")
             return
         self.load_runs(paths, "")
+
+    def load_qgd_dialog(self):
+        paths, _ = QFileDialog.getOpenFileNames(self, "Load Shimadzu GC-MS runs", self.tree.root,
+                                                "Shimadzu GC-MS (*.qgd *.QGD)")
+        if paths:
+            self.load_runs(paths, "")
 
     def open_folder(self):
         d = QFileDialog.getExistingDirectory(self, "Show folder in the tree", self.tree.root)
@@ -1044,6 +1066,11 @@ class MainWindow(QMainWindow):
         from gcws.quant.service import cas_lookup
         from gcws.report import service as RS
         from gcws import paths
+        hs = self.ws.quant.get("mode") == "hs_screening"
+        if hs != (kind == "hs_screening"):
+            QMessageBox.information(self, "Report", "Select HS-Screening mode and its report together. "
+                                    "For other reports, select the corresponding quantification mode.")
+            return
         g = self._group_for_report(group_id)
         if g is None or not g["members"]:
             QMessageBox.information(self, "Report", "Choose a replicate group (Replicates panel) or activate a "
@@ -1053,9 +1080,14 @@ class MainWindow(QMainWindow):
         self.ws.recompute_quant()
         members = [m for m in g["members"] if m in self.ws.runs]
         samples = [self.ws.nias_sample(m) for m in members]
+        if hs:
+            errors = [self.ws.quant_result.errors[m] for m in members if m in self.ws.quant_result.errors]
+            if errors:
+                QMessageBox.warning(self, "HS-Screening report", "\n".join(errors))
+                return
         if not samples or any(s is None for s in samples):
             errs = [self.ws.quant_result.errors.get(m, "") for m in members]
-            QMessageBox.warning(self, "Report", "Every determination needs role Sample and an FID integration.\n"
+            QMessageBox.warning(self, "Report", "Every determination needs role Sample and an " + ("TIC" if hs else "FID") + " integration.\n"
                                 + "\n".join(e for e in errs if e))
             return
         if kind == "nias" and not any(s.mean_factor for s in samples):
@@ -1094,9 +1126,10 @@ class MainWindow(QMainWindow):
         bname = lambda ids: "; ".join(dict.fromkeys(str(self.ws.runs[i].run.path) for i in ids if i in self.ws.runs))
         from gcws.quant import migration as MG
         job = RS.ReportJob(
-            kind=kind, samples=samples, names=names, settings=make_settings(self.ws.quant.get("settings")),
+            kind=kind, samples=samples, names=names,
+            settings=make_settings(self.ws.quant.get("hs" if hs else "settings")),
             target=target, word=target.with_suffix(".docx"), cas_path=cas,
-            migration=MG.current(self.ws.quant), blank_names=(bname(blank_ids), bname(blank_istd_ids)),
+            migration={} if hs else MG.current(self.ws.quant), blank_names=(bname(blank_ids), bname(blank_istd_ids)),
             audit=[r for r in self.ws.audit.records if r.run in names or not r.run],
             policy=g.get("policy", "all"),
             batch_target=(target.parent / f"{stem}_Doppelbestimmung.xlsx") if kind == "nias" else None,
@@ -1104,7 +1137,7 @@ class MainWindow(QMainWindow):
                          if QSettings().value("report/keep_middle", False, type=bool) and not preview else None),
             sample_key=stem, record_seen=not preview,
             ri_options={k: bool((self.ws.quant.get("ri") or {}).get(k)) for k in ("report_ri", "replace_rt")},
-            edits=dict(g.get("edits") or {}))
+            edits=dict(g.get("hs_edits:" + self.ws.quant_unit() if hs else "edits") or {}))
         self.progress.setRange(0, 0)
         self.progress.setFormat(RS.KINDS[kind])
         self.progress.show()
@@ -1427,8 +1460,8 @@ class MainWindow(QMainWindow):
                   "  manual intensity stays on later time zooms; double-click fits it again",
                   "  Shift disables snapping of integration tools",
                   "  Delete in Peaks / substances   delete marked peaks (one undo step)",
-                  "  Chromatogramm > Solvent cut    exclude the solvent in both panels",
-                  "  Chromatogramm > Solvent end RT   edit the shared NIAS solvent end (FID time)",
+                  "  Chromatogramm > FID / TIC-MS solvent cut    independent detector cuts",
+                  "  Subtract baseline    right-click apex, then baseline; Escape clears",
                   "  a peak picked in the table zooms both chromatograms to it",
                   "",
                   "Panels: double-click a title to maximize the panel, again to restore the layout.",

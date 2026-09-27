@@ -16,6 +16,9 @@ POLICIES = {"all": "Found in all determinations", "majority": "Found in the majo
 
 
 def engine_peaks(sample, value: Optional[Callable] = None) -> list[dict]:
+    if getattr(sample, "mode", None) == "hs_screening":
+        from gcws.quant.hs import engine_peaks as hs_peaks
+        return hs_peaks(sample, value)
     import gc_fid
     out = []
     for row in gc_fid.report_rows(sample):

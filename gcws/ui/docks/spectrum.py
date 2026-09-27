@@ -1,11 +1,12 @@
 """Mass spectrum panel: the selected peak's spectrum, or any scan / time range.
 
-Two sources feed the panel:
+Sources feeding the panel:
 
 * **peak** -- the selected integrated peak (spectrum mode from the combo);
 * **scan** -- a right-click (one scan) or right-drag (mean over a range) in any
   chromatogram; Shift+right-drag sets a background range that is subtracted
   from every scan spectrum until it is cleared.
+* **subtraction** -- a temporary analyst-selected apex minus baseline scan.
 
 Library search, NIST, MSP export and the unknown register all work on the
 spectrum on display, whatever its source.
@@ -19,7 +20,7 @@ from PySide6.QtCore import QSettings, QSignalBlocker, Qt, Signal as QtSignal
 from PySide6.QtGui import QAction, QActionGroup, QColor, QGuiApplication
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QHeaderView,
                                QMenu, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
-                               QToolButton, QVBoxLayout, QWidget)
+                               QVBoxLayout, QWidget)
 
 from gcws.core.keys import is_fid
 from gcws.ms.spectra import MODES, ScanRequest, extract, extract_range, from_ms, ms_times
@@ -42,6 +43,7 @@ class StickPlot(pg.PlotWidget):
         self.setToolTip("Click an ion to show its extracted ion chromatogram; drag to zoom, double-click resets")
         self.texts = []
         self._mz = np.zeros(0)
+        self.hide_noise = QSettings().value("spectrum/hide_noise", True, type=bool)
         self.embedded_title = embedded_title
         if embedded_title:
             from gcws.ui.plot.overlay import ElidedLabel, PlotOverlay
@@ -80,13 +82,18 @@ class StickPlot(pg.PlotWidget):
         for t in self.texts:
             self.removeItem(t)
         self.texts = []
-        self._mz = np.asarray(mz if mz is not None else [], float)
+        self._mz = np.zeros(0)
         if mz is None or len(mz) == 0 or ab is None or len(ab) == 0 or np.max(ab) <= 0:
             self.setTitle(None if self.embedded_title else (title or "no spectrum"))
             return
         mz = np.asarray(mz, float)
         ab = np.asarray(ab, float)
         rel = ab / ab.max() * 100.0
+        from gcws.ms.display import visible_ions
+        keep = visible_ions(mz, ab, self.hide_noise)
+        full_mz = mz
+        mz, rel = mz[keep], rel[keep]
+        self._mz = mz
         self.addItem(pg.BarGraphItem(x=mz, height=rel, width=0.6, brush=theme.PLOT["spectrum"], pen=None))
         marks = marks or {}
         order = [i for i in np.argsort(rel)[::-1][:8] if int(mz[i]) not in marks]
@@ -96,8 +103,10 @@ class StickPlot(pg.PlotWidget):
             self.addItem(t)
             self.texts.append(t)
         lookup = {int(m): r for m, r in zip(mz, rel)}
-        x_lo, x_hi = float(min(mz)) - 5, float(max(mz)) + 5
+        x_lo, x_hi = float(min(full_mz)) - 5, float(max(full_mz)) + 5
         for m, (label, level) in marks.items():
+            if int(m) not in lookup:
+                continue
             color = theme.status_color(level).name() if level in theme.LEVELS else level
             y = lookup.get(int(m), 0.0)
             ax = 1.0 if m > x_hi - 0.12 * (x_hi - x_lo) else (0.0 if m < x_lo + 0.08 * (x_hi - x_lo) else 0.5)
@@ -121,11 +130,12 @@ class StickPlot(pg.PlotWidget):
                     self.texts.append(t)
         self.setTitle(None if self.embedded_title else title, size="9pt")
         vb = self.getPlotItem().getViewBox()
-        vb.setRange(xRange=(float(min(mz)) - 5, float(max(mz)) + 5),
+        vb.setRange(xRange=(x_lo, x_hi),
                     yRange=(-118 if ref else 0, 118), padding=0)
 
 
 class SpectrumDock(QWidget):
+    subtractionChanged = QtSignal(bool)
     regionsChanged = QtSignal(list)           # [(t0, t1, colour)] on the MS time axis
     nistRequested = QtSignal(list, str)
     atlasRequested = QtSignal(list, str)
@@ -143,6 +153,10 @@ class SpectrumDock(QWidget):
         self.scan_req: ScanRequest | None = None
         self.component = None                  # (run id, deconvoluted Component)
         self.bg_range: tuple[float, float] | None = None
+        self.subtraction_state = "off"
+        self.subtraction_run = None
+        self.subtraction_apex = None
+        self.subtraction_base = None
         self.setFocusPolicy(Qt.StrongFocus)
         self.mode = QComboBox()
         for k, v in MODES.items():
@@ -184,25 +198,7 @@ class SpectrumDock(QWidget):
             action.triggered.connect(slot)
             self.spectrum_actions.append(action)
 
-        # scan-mode bar: where the spectrum comes from, stepping, background
         from gcws.ui.plot.overlay import ElidedLabel
-        self.source_text = ElidedLabel()
-        self.b_prev = QToolButton()
-        self.b_prev.setText("◀")
-        self.b_prev.setToolTip("Previous scan  [←]")
-        self.b_prev.clicked.connect(lambda: self.step(-1))
-        self.b_next = QToolButton()
-        self.b_next.setText("▶")
-        self.b_next.setToolTip("Next scan  [→]")
-        self.b_next.clicked.connect(lambda: self.step(+1))
-        self.bg_chip = theme.chip("", "bad")
-        self.b_clear_bg = QToolButton()
-        self.b_clear_bg.setText("Clear background")
-        self.b_clear_bg.clicked.connect(self.clear_background)
-        self.b_back = QToolButton()
-        self.b_back.setText("Back to peak")
-        self.b_back.setToolTip("Show the selected peak's spectrum again  [Esc]")
-        self.b_back.clicked.connect(self.back_to_peak)
         self.plot = StickPlot(embedded_title=True)
         self.plot.ionClicked.connect(self.ionClicked.emit)
         self.context_menu = QMenu(self.plot)
@@ -225,10 +221,10 @@ class SpectrumDock(QWidget):
         self.scan_curve = pg.PlotDataItem(pen=pg.mkPen(theme.PLOT["secondary"]))
         for it in (self.scan_curve, self.apex_reg, self.bg_reg):
             self.scan_plot.addItem(it)
-        use = QPushButton("Use these scans")
+        use = self.use_scans = QPushButton("Use these scans")
         use.setToolTip("Blue: scans averaged, red: background scans subtracted")
         use.clicked.connect(self._use_regions)
-        auto = QPushButton("Automatic")
+        auto = self.auto_scans = QPushButton("Automatic")
         auto.setToolTip("Selected peak: automatic scan choice again")
         auto.clicked.connect(self._clear_override)
         sl = QVBoxLayout()
@@ -270,18 +266,30 @@ class SpectrumDock(QWidget):
         split.setCollapsible(1, True)
         split.setSizes([420, 0])
         self.details_height = QSettings().value("window/ms_details_height", 200, type=int)
-        from gcws.ui.plot.overlay import PlotOverlay
-        self.source_bar = PlotOverlay(self.plot, [self.b_prev, self.b_next,
-            self.source_text, self.bg_chip, self.b_clear_bg, self.b_back], bottom=True)
-        self.plot.caption_overlay.deleteLater()
-        self.plot.caption_overlay = PlotOverlay(self.plot, [self.plot.caption, self.info])
+        # Navigation belongs in the menu, never on top of spectrum bars.
+        self.info.setParent(self)
+        self.info.hide()
+        self.noise_action = QAction("Hide noise", self)
+        self.noise_action.setCheckable(True)
+        self.noise_action.setChecked(self.plot.hide_noise)
+        self.noise_action.setToolTip("Hide ions at the estimated noise floor in the plot only. "
+                                    "Analytical data, searches and spectral exports are unchanged.")
+        self.noise_action.toggled.connect(self._set_hide_noise)
+        self.navigation_actions = []
+        for text, slot in (("Previous scan [←]", lambda: self.step(-1)),
+                           ("Next scan [→]", lambda: self.step(1)),
+                           ("Back to peak [Esc]", self.back_to_peak),
+                           ("Clear background", self.clear_background)):
+            action = QAction(text, self)
+            action.triggered.connect(slot)
+            self.navigation_actions.append(action)
         split.splitterMoved.connect(self._remember_details_height)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         lay.addWidget(split, 1)
         self.populate_menu(self.context_menu)
-        self._update_source_bar()
+        self._sync_actions()
 
         ws.selectionChanged.connect(self._on_selection)
         ws.activeRunChanged.connect(self._on_active)
@@ -292,6 +300,10 @@ class SpectrumDock(QWidget):
         ws.runRemoved.connect(self._on_removed)
 
     def populate_menu(self, menu):
+        menu.setToolTipsVisible(True)
+        menu.addAction(self.noise_action)
+        menu.addActions(self.navigation_actions)
+        menu.addSeparator()
         menu.addMenu(self.mode_menu)
         menu.addAction(self.blank_action)
         menu.addSeparator()
@@ -312,11 +324,31 @@ class SpectrumDock(QWidget):
             self.blank_action.setChecked(self.minus_blank.isChecked())
         st = self.ws.active
         self.blank_action.setEnabled(bool(st and st.run.ms is not None and self.ws.blank_ids(st)))
+        if self.subtraction_state != "off":
+            self.blank_action.setEnabled(False)
+        self.use_scans.setEnabled(self.subtraction_state == "off")
+        self.auto_scans.setEnabled(self.subtraction_state == "off")
         for action in self.mode_group.actions():
             with QSignalBlocker(action):
                 action.setChecked(action.data() == self.mode.currentIndex())
         for action in self.spectrum_actions:
             action.setEnabled(bool(self.spec is not None and self.spec.ab.size))
+        if hasattr(self, "navigation_actions"):
+            for action in self.navigation_actions[:2]:
+                action.setEnabled(self.source == "scan" and self.subtraction_state == "off")
+            self.navigation_actions[2].setEnabled(self.source != "peak" or self.subtraction_state != "off")
+            self.navigation_actions[3].setEnabled(self.bg_range is not None)
+        self._update_caption_tip()
+
+    def _set_hide_noise(self, enabled):
+        self.plot.hide_noise = enabled
+        QSettings().setValue("spectrum/hide_noise", enabled)
+        self.plot._redraw()
+
+    def _update_caption_tip(self):
+        detail = self.plot.caption.text() + ("\n" + self.info.text() if self.info.text() else "")
+        self.plot.caption.setProperty("detailTooltip", detail)
+        self.plot.caption.setToolTip(detail)
 
     def _library_hits(self):
         self.show_details(self.hits)
@@ -341,18 +373,23 @@ class SpectrumDock(QWidget):
     # -- source switching --------------------------------------------------------
 
     def _on_selection(self, run_id, index):
+        if self.subtraction_state != "off":
+            return
         if index >= 0:
             self.source = "peak"
         if index >= 0 or self.source == "peak":
             self.refresh()
 
     def _on_active(self, *_):
+        self._reset_subtraction()
         self.source = "peak"
         self.scan_req = None
         self.bg_range = None
         self.refresh()
 
     def _on_removed(self, run_id):
+        if self.subtraction_run == run_id:
+            self.back_to_peak()
         if self.scan_req is not None and self.scan_req.run_id == run_id:
             self.scan_req = None
             self.source = "peak"
@@ -360,6 +397,11 @@ class SpectrumDock(QWidget):
 
     def show_range(self, req: ScanRequest) -> None:
         """Right-click / right-drag in a chromatogram (times on the MS axis)."""
+        if self.subtraction_state in ("apex", "base"):
+            self._pick_subtraction(req)
+            return
+        if self.subtraction_state == "done":
+            self.back_to_peak()
         if req.t0 is None:                       # Shift+right-drag: background only
             self.bg_range = req.bg
             if self.source == "scan" and self.scan_req is not None:
@@ -367,7 +409,7 @@ class SpectrumDock(QWidget):
             else:
                 self.ws.message.emit(f"Background {req.bg[0]:.3f}-{req.bg[1]:.3f} min set: right-click a time "
                                      "for its background-subtracted spectrum")
-                self._update_source_bar()
+                self._sync_actions()
             return
         self.scan_req = req
         self.source = "scan"
@@ -375,13 +417,79 @@ class SpectrumDock(QWidget):
 
     def show_component(self, run_id: str, comp) -> None:
         """A deconvoluted component (e.g. a hidden one from the whole-run deconvolution)."""
+        self._reset_subtraction()
         self.component = (run_id, comp)
         self.source = "component"
         self.refresh()
 
     def back_to_peak(self):
+        self._reset_subtraction()
         self.source = "peak"
         self.refresh()
+
+    def _reset_subtraction(self):
+        self.subtraction_state = "off"
+        self.subtraction_run = self.subtraction_apex = self.subtraction_base = None
+        self.subtractionChanged.emit(False)
+        self._sync_actions()
+
+    def toggle_subtraction(self):
+        if self.subtraction_state != "off":
+            self.back_to_peak()
+            return
+        st = self.ws.active
+        if st is None or st.run.ms is None or not st.run.ms.n_scans:
+            self._reset_subtraction()
+            self.ws.message.emit("No MS scans available for baseline subtraction")
+            return
+        self.subtraction_run = st.id
+        self.subtraction_state = "apex"
+        self.subtractionChanged.emit(True)
+        self._sync_actions()
+        self.ws.message.emit("Subtract baseline: right-click the apex in a chromatogram; Escape cancels")
+
+    def _pick_subtraction(self, req):
+        if req.run_id != self.subtraction_run:
+            self.back_to_peak()
+            self.ws.message.emit("Baseline subtraction cancelled: the sample changed")
+            return
+        if req.t0 is None or (req.t1 is not None and abs(req.t1 - req.t0) > 1e-9):
+            self.ws.message.emit("Select one scan with a right-click, not a range")
+            return
+        ms = self.ws.runs[req.run_id].run.ms
+        scan = ms.scan_at_rt(req.t0)
+        if self.subtraction_state == "apex":
+            self.subtraction_apex = scan
+            self.subtraction_state = "base"
+            t = float(ms.rt[scan])
+            self.regionsChanged.emit([(t - .001, t + .001, theme.PLOT["apex_region"])])
+            self.ws.message.emit(f"Apex scan {scan + 1}: now right-click the baseline")
+        elif scan == self.subtraction_apex:
+            self.ws.message.emit("Apex and baseline are the same scan; choose another baseline scan")
+        else:
+            self.subtraction_base = scan
+            self.subtraction_state = "done"
+            self.source = "subtraction"
+            self.scan_req = ScanRequest(req.run_id, float(ms.rt[self.subtraction_apex]), None)
+            self.refresh()
+            self.ws.message.emit("Baseline subtracted; click Subtract baseline or press Escape to clear")
+
+    def _refresh_subtraction(self):
+        st = self.ws.runs.get(self.subtraction_run)
+        if st is None:
+            self.back_to_peak()
+            return
+        ms = st.run.ms
+        a, b = self.subtraction_apex, self.subtraction_base
+        ta, tb = float(ms.rt[a]), float(ms.rt[b])
+        self.spec = extract_range(st.run, ta, bg=(tb, tb))
+        title = f"Apex scan {a + 1} ({ta:.3f} min) − baseline scan {b + 1} ({tb:.3f} min)"
+        self.plot.show_spectrum(self.spec.mz, self.spec.ab, title=title, marks=self._marks())
+        self.info.setText(self.spec.note)
+        self._fill_table()
+        self._sync_actions()
+        self._show_scan_trace(st, self.spec)
+        self._spectrum_changed()
 
     def clear_background(self):
         self.bg_range = None
@@ -407,7 +515,7 @@ class SpectrumDock(QWidget):
             self.step(-1 if ev.key() == Qt.Key_Left else 1)
             ev.accept()
             return
-        if self.source == "scan" and ev.key() == Qt.Key_Escape:
+        if (self.source != "peak" or self.subtraction_state != "off") and ev.key() == Qt.Key_Escape:
             self.back_to_peak()
             ev.accept()
             return
@@ -441,6 +549,9 @@ class SpectrumDock(QWidget):
     def refresh(self):
         self._sync_blank_box()
         self.hits.setRowCount(0)
+        if self.source == "subtraction" and self.subtraction_state == "done":
+            self._refresh_subtraction()
+            return
         if self.source == "scan" and self.scan_req is not None:
             self._refresh_scan()
             return
@@ -448,7 +559,7 @@ class SpectrumDock(QWidget):
             self._refresh_component()
             return
         self.source = "peak"
-        self._update_source_bar()
+        self._sync_actions()
         st = self.ws.active
         peak = self.ws.selected_peak()
         if st is None or peak is None or st.run.ms is None:
@@ -521,7 +632,7 @@ class SpectrumDock(QWidget):
         self.plot.show_spectrum(spec.mz, spec.ab, title=what, marks=self._marks())
         self.info.setText(spec.note)
         self._fill_table()
-        self._update_source_bar(what)
+        self._sync_actions()
         self._show_scan_trace(st, spec)
         self._spectrum_changed()
 
@@ -542,22 +653,9 @@ class SpectrumDock(QWidget):
         self.plot.show_spectrum(mz, ab, title=what, marks=self._marks())
         self.info.setText(self.spec.note)
         self._fill_table()
-        self._update_source_bar(what)
+        self._sync_actions()
         self.regionsChanged.emit([(float(comp.rt) - 0.004, float(comp.rt) + 0.004, theme.PLOT["apex_region"])])
         self._spectrum_changed()
-
-    def _update_source_bar(self, text: str = ""):
-        scan = self.source in ("scan", "component")
-        self.source_bar.setVisible(scan or self.bg_range is not None)
-        for w in (self.b_prev, self.b_next):
-            self.source_bar.set_available(w, self.source == "scan")
-        self.source_bar.set_available(self.b_back, scan)
-        self.source_text.setText(text if scan else "")
-        bg = self.bg_range
-        theme.set_chip(self.bg_chip, f"BG {bg[0]:.3f}-{bg[1]:.3f} min" if bg else "", "bad")
-        self.source_bar.set_available(self.b_clear_bg, bg is not None)
-        self.source_bar.set_available(self.bg_chip, bg is not None)
-        self.source_bar.reposition()
 
     def _show_scan_trace(self, st, spec):
         ms = st.run.ms
@@ -766,6 +864,9 @@ class SpectrumDock(QWidget):
 
     def spectrum_name(self) -> str:
         st = self.ws.active
+        if self.source == "subtraction" and self.spec is not None:
+            return (f"{st.name if st else 'GC'} apex scan {self.subtraction_apex + 1} "
+                    f"minus baseline scan {self.subtraction_base + 1}")
         if self.source == "scan" and self.scan_req is not None and self.spec is not None:
             run = self.ws.runs.get(self.scan_req.run_id)
             name = run.name if run is not None else "GC"

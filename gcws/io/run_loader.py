@@ -54,8 +54,19 @@ def load_ms(d: Path, notes: list[str]):
 
 def load_run(path) -> Run:
     d = Path(path)
+    if d.is_file() and d.suffix.lower() == ".qgd":
+        from gcws.io.shimadzu import QGDSource
+        from gcws.io.metadata import RunMetadata
+        try:
+            src = QGDSource(d)
+            run = Run(path=d, meta=RunMetadata(folder=d, instrument="Shimadzu GC-MS"),
+                      ms_source=src, ms=src.matrix())
+            run.role = classify_role(d.stem)
+            return run
+        except Exception as exc:
+            raise RunLoadError(f"{d.name}: {exc}") from exc
     if not folders.is_run_dir(d):
-        raise RunLoadError(f"{d} is not a GC run folder (.D with data.ms, *.ch or AcqData)")
+        raise RunLoadError(f"{d} is not a GC run (.D with data.ms, *.ch or AcqData, or a Shimadzu .qgd file)")
     notes: list[str] = []
     fid = load_fid(d, notes)
     ms_source, ms = load_ms(d, notes)

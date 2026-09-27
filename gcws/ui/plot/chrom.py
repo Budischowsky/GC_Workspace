@@ -194,7 +194,7 @@ class ChromPanel(QWidget):
         self.blank.toggled.connect(self._blank_toggled)
         self.cut = QCheckBox("Solvent cut", self)
         self.cut.hide()
-        self.cut.toggled.connect(lambda on: None if self._loading else self.ws.set_solvent_cut(on))
+        self.cut.toggled.connect(lambda on: None if self._loading else self.ws.set_solvent_cut(on, key=self.key))
         self.table_chip = theme.chip("", "accent")
         self.table_chip.setToolTip("The peak table lists the peaks of this chromatogram")
         from gcws.ui.plot.overlay import ElidedLabel
@@ -316,10 +316,11 @@ class ChromPanel(QWidget):
             self.signal.addItem(EIC_ITEM)
         self.signal.setCurrentText(cur)
         self.blank.setChecked(self.ws.panel_blank[self.index])
-        self.cut.setChecked(bool(self.ws.quant.get("solvent_cut", False)))
-        end = float((self.ws.quant.get("settings") or {}).get("solvent_end", 5.5))
-        self.cut.setToolTip(f"Hide and exclude solvent before {end:g} min (FID time). "
-                            "Change the time under Chromatogramm > Solvent end RT; MS follows the FID–MS delay.")
+        enabled, end = self.ws.solvent_cut_settings(self.key)
+        self.cut.setChecked(enabled)
+        axis = "FID" if is_fid(self.key) else "MS"
+        self.cut.setToolTip(f"Exclude solvent before {end:g} min ({axis} time). "
+                            "Change the detector's end time under Chromatogramm.")
         self.blank.setEnabled(self.ws.panel_blank[self.index]
                               or any(self.ws.blank_ids(st) for st in self.ws.states()))
         theme.set_chip(self.table_chip, "▦ Peak table" if self.is_table() else "", "accent")

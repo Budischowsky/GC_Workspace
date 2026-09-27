@@ -113,6 +113,7 @@ class Workspace(QObject):
         self.project_path: Optional[Path] = None
         self.replicate_groups: list[dict] = []
         self.quant: dict = {"mode": "nias_mgkg", "unit": "µg/L", "settings": {},
+                           "ms_solvent": {"enabled": False, "end": 0.0},
                            "solvent_cut": QSettings().value("integration/solvent_cut", False, type=bool)}
         self.quant_result = None
         self.dirty = False
@@ -155,8 +156,8 @@ class Workspace(QObject):
         if results:
             st.results.update(results)
         self.runs[run.id] = st
-        if self.quant.get("solvent_cut"):
-            for key in list(st.results):
+        for key in list(st.results):
+            if self.solvent_cut(st, key) is not None:
                 self.integrate(st.id, key, emit=False)
         self.order.append(run.id)
         self._sort_order()
@@ -342,16 +343,42 @@ class Workspace(QObject):
             st.methods[kind] = m
         return m
 
-    def solvent_cut(self, st, key: str):
-        """Cut in the signal's detector time; the shared setting is in FID minutes."""
-        if not self.quant.get("solvent_cut", False):
-            return None
+    def solvent_cut_settings(self, key=None, st=None):
+        """Enabled/end in detector minutes, including legacy linked-MS fallback."""
+        key = key or (TIC if self.quant.get("mode") == "hs_screening" else FID)
+        if self.quant.get("mode") == "hs_screening":
+            hs = self.quant.get("hs", {})
+            return (False, 0.0) if is_fid(key) else (bool(hs.get("solvent_cut", False)), float(hs.get("solvent_end", 0)))
+        if not is_fid(key) and "ms_solvent" in self.quant:
+            cfg = self.quant["ms_solvent"]
+            return bool(cfg.get("enabled", False)), float(cfg.get("end", 0))
         t = float((self.quant.get("settings") or {}).get("solvent_end", 5.5))
-        return t if is_fid(key) else t - st.delay_value
+        st = st or self.active
+        if not is_fid(key) and st is not None:
+            t -= st.delay_value
+        return bool(self.quant.get("solvent_cut", False)), t
 
-    def set_solvent_cut(self, enabled: bool, end=None):
+    def solvent_cut(self, st, key: str):
+        enabled, end = self.solvent_cut_settings(key, st)
+        return end if enabled else None
+
+    def set_solvent_cut(self, enabled: bool, end=None, key=None):
         import copy
         q = copy.deepcopy(self.quant)
+        if q.get("mode") == "hs_screening":
+            hs = q.setdefault("hs", {})
+            hs["solvent_cut"] = bool(enabled)
+            if end is not None:
+                hs["solvent_end"] = float(end)
+            if q != self.quant:
+                self.push_quant("HS solvent cut", q, "HS solvent end (MS time)")
+            return
+        if key is not None and not is_fid(key):
+            q["ms_solvent"] = {"enabled": bool(enabled),
+                               "end": float(end) if end is not None else self.solvent_cut_settings(key)[1]}
+            if q != self.quant:
+                self.push_quant("MS solvent cut", q, "TIC/MS solvent end (MS time)")
+            return
         q["solvent_cut"] = bool(enabled)
         if end is not None:
             q.setdefault("settings", {})["solvent_end"] = float(end)
@@ -457,19 +484,27 @@ class Workspace(QObject):
 
         The quantification is computed on the raw FID. A blank-subtracted FID trace shows the
         values of the FID peak with the nearest apex (one-to-one, within the RT tolerance);
-        MS traces get none."""
+        NIAS MS traces receive RRT only; HS quantities use TIC peaks."""
         st = self.runs.get(run_id)
         key = self.effective_key(st, key or self.signal_key)
-        if self.quant_result is None or st is None or not is_fid(key):
+        hs = self.quant.get("mode") == "hs_screening"
+        detector = TIC if hs else FID
+        if self.quant_result is None or st is None:
             return {}
+        res = self.result(run_id, key)
+        from gcws.quant.service import rrt_rows
+        rrt = rrt_rows(self.quant_result.samples.get(run_id), self.quant, st,
+                       res.peaks if res is not None else [], key)
+        if not (base_key(key) == TIC if hs else is_fid(key)):
+            return rrt
         rows = self.quant_result.rows.get(run_id, {})
-        if key == FID or not rows:
-            return rows
-        res, base = self.result(run_id, key), self.result(run_id, FID)
+        if key == detector or not rows:
+            return {i: dict(rows.get(i, {}), **rrt.get(i, {})) for i in rows.keys() | rrt.keys()}
+        res, base = self.result(run_id, key), self.result(run_id, detector)
         if res is None or base is None:
             return {}
         from gcws.quant.nias_bridge import make_settings
-        tol = float(getattr(make_settings(self.quant.get("settings")), "rt_tolerance", 0.035) or 0.035)
+        tol = float(getattr(make_settings(self.quant.get("hs" if hs else "settings")), "rt_tolerance", 0.035) or 0.035)
         pairs = sorted((abs(p.apex_rt - q.apex_rt), i, j) for i, p in enumerate(res.peaks)
                        for j, q in enumerate(base.peaks) if abs(p.apex_rt - q.apex_rt) <= tol and j in rows)
         out, used = {}, set()
@@ -477,7 +512,7 @@ class Workspace(QObject):
             if i not in out and j not in used:
                 out[i] = rows[j]
                 used.add(j)
-        return out
+        return {i: dict(out.get(i, {}), **rrt.get(i, {})) for i in out.keys() | rrt.keys()}
 
     def base_peak_index(self, run_id: str, key: str, index: int) -> int:
         """Index of the base-trace peak holding the apex of peak ``index`` of the derived trace ``key``."""
@@ -510,11 +545,23 @@ class Workspace(QObject):
 
     def _quant_settings_changed(self, old: dict, new: dict) -> None:
         """Sub-settings that feed derived data: only what changed is invalidated."""
+        hs_changed = (old.get("mode") == "hs_screening") != (new.get("mode") == "hs_screening")
+        if hs_changed:
+            if new.get("mode") == "hs_screening":
+                self._pre_hs_panels = (list(self.panel_keys), list(self.panel_blank), self.table_panel)
+                self.set_panels([TIC, "BPC"], [False, False], 0)
+            else:
+                self.set_panels(*getattr(self, "_pre_hs_panels", ([FID, TIC], [False, False], 0)))
+            self.signalKeyChanged.emit(self.signal_key)
         def cut(q):
-            return bool(q.get("solvent_cut", False)), (q.get("settings") or {}).get("solvent_end", 5.5)
-        cut_changed = cut(old or {}) != cut(new or {})
+            if q.get("mode") == "hs_screening":
+                return bool(q.get("hs", {}).get("solvent_cut", False)), q.get("hs", {}).get("solvent_end", 0)
+            return (bool(q.get("solvent_cut", False)), (q.get("settings") or {}).get("solvent_end", 5.5),
+                    q.get("ms_solvent"))
+        cut_changed = hs_changed or cut(old or {}) != cut(new or {})
         if cut_changed:
-            QSettings().setValue("integration/solvent_cut", bool(new.get("solvent_cut", False)))
+            if new.get("mode") != "hs_screening":
+                QSettings().setValue("integration/solvent_cut", bool(new.get("solvent_cut", False)))
             # Snapshot all keys first: base integrations invalidate derived results in other runs.
             keys = {st.id: list(st.results) for st in self.states()}
             for derived in (False, True):
@@ -522,7 +569,7 @@ class Workspace(QObject):
                     for key in keys[st.id]:
                         if is_derived(key) == derived:
                             self.integrate(st.id, key)
-        if any((old or {}).get(k) != (new or {}).get(k) for k in ("blank_sub", "istd_defs", "istd_bindings")):
+        if hs_changed or any((old or {}).get(k) != (new or {}).get(k) for k in ("blank_sub", "istd_defs", "istd_bindings", "hs")):
             self.invalidate_blank(None)             # the ISTD windows are kept out of the subtraction
         if cut_changed or (old or {}).get("deconv") != (new or {}).get("deconv"):
             for st in self.states():
@@ -608,6 +655,12 @@ class Workspace(QObject):
         import gc_fid
         from gcws.quant.nias_bridge import make_settings
         q = self.quant or {}
+        if q.get("mode") == "hs_screening":
+            if base != TIC:
+                return {}
+            from gcws.quant.hs import matched_standards
+            return {s["index"]: (res.peaks[s["index"]].start, res.peaks[s["index"]].end)
+                    for s in matched_standards(st, q.get("hs", {})) if s["index"] is not None}
         defs = gc_fid.normalise_istd_defs(q["istd_defs"]) if q.get("istd_defs") else \
             gc_fid.default_istd_defs(make_settings(q.get("settings")))
         bound = (q.get("istd_bindings") or {}).get(run_id) or {}

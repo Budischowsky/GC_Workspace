@@ -22,6 +22,34 @@ libraries are no longer copied from `..\NIAS Working`. The unknown register is k
 
 ## Raw data
 
+Shimadzu full-scan `.qgd` files can be loaded from the folder tree or **File > Load Shimadzu QGD files**.
+The reader validates scan boundaries, retention times and spectrum sums against the stored TIC.
+Unsupported layouts are rejected with an import error; the acquisition file remains unchanged.
+
+## HS-Screening
+
+Select **Quantify > Quantification panel > HS-Screening (MS only)**. Chromatogram 1 switches to TIC.
+HS has its own seven internal standards, sample amounts, bindings and solvent cut. NIAS settings and
+calculations retain their previous behavior. Save a project to retain sample-specific values; save a
+processing method to reuse the HS standard definitions.
+
+1. Enter the seven standard names and target retention times, or bind selected TIC peaks. The initial
+   amounts are **1 µg per headspace vial**; names and retention times are deliberately left unset.
+2. Activate the standards to use. Keep **Use mean of activated ISTD areas** checked for averaging,
+   or uncheck it and activate exactly one standard. Missing activated standards prevent quantification.
+3. Choose **µg/HS**, **µg/dm²**, or **µg/g**. For normalized results, enter the active sample's area in
+   dm² or mass in g. A 1 dm² sample gives the same numeric result in µg/HS and µg/dm².
+4. Assign blanks if applicable. Quantification subtracts the larger matching Blank / Blank+ISTD TIC
+   peak area, clamps corrected areas to zero and protects identified/bound internal standards.
+5. Choose **Report > HS-Screening Report** for Excel and Word reports using the Fingerprint column
+   layout with the selected quantity replacing Area %. The workbook includes calculation and ISTD details.
+
+Calculation: `µg/HS = corrected TIC area × mean(activated ISTD µg/HS) / mean(activated ISTD TIC areas)`.
+For µg/dm² or µg/g, divide this amount by the sample area or mass. Relative response is assumed to be 1.
+Results are screening estimates relative to the configured standards; no migration or FID factors apply.
+
+## Agilent raw data
+
 | Detector | Files read |
 |---|---|
 | FID | `*.ch` (ChemStation v179), otherwise `AcqData/FID*.cg` + `.cd` (MassHunter) |
@@ -59,14 +87,14 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
      - picking a peak in the table zooms both panels to it and fits their intensities again;
      - signal, Normalize and Stack changes refit that panel to its new units.
    - Tight plot margins and headroom based on visible peak labels give the traces more space.
-   - **Solvent cut** in the *Chromatogramm* menu switches the same setting in both panels. Edit
-     **Solvent end RT** directly in that menu and press Enter or leave the field to apply it
-     (default **5.5 min in FID time**; either a decimal point or comma is accepted). This is also the NIAS
-     **Solvent end** setting. MS traces
-     use that time minus each run's FID–MS delay. Earlier data are excluded from the curves, integration,
+   - **FID solvent cut** and **TIC/MS solvent cut** in the *Chromatogramm* menu have independent
+     switches and end times. Edit **Solvent end RT** and press Enter or leave the field to apply it
+     (a decimal point or comma is accepted). FID uses FID minutes and shares the NIAS **Solvent end**
+     parameter; TIC, BPC and EIC use MS minutes. HS-Screening has a separate MS cut. Older projects
+     retain their linked FID–MS cut until the MS control is edited. Earlier data are excluded from curves, integration,
      scaling and whole-run deconvolution, and therefore from peak-based library searches and exports.
      Exported chromatogram pictures show the cut curves. Changes are audited and undoable; the project and
-     processing method save the setting, and a new session remembers the last on/off choice.
+     processing method save both settings, and a new session remembers the last FID on/off choice.
    - Integration runs automatically on load, with the method of each signal. The *Integration method* panel
      holds the parameters (auto or fixed), the timed events and the list of manual events. F5 re-integrates the
      signals of both panels.
@@ -74,6 +102,13 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
    - The two buttons at the top choose which chromatogram the table lists (e.g. *Chromatogram 1 · FID − Blank*).
    - *Show only peaks with* filters by concentration, corrected area, area, area %, height, mg/dm², score or RT.
      The operators are <, ≤, =, ≥, >, *between* and *outside*. Copy and export follow the filter.
+   - Optional **µg/HS**, **µg/dm²**, **µg/g**, and **RRT** columns also support sorting and filtering.
+     HS quantities are available simultaneously, independently of the selected report unit. A missing
+     sample area or mass leaves only its corresponding normalized quantity empty.
+   - In NIAS mode, select **RRT reference ISTD** in the Quantification panel. RRT is peak RT divided
+     by that standard's measured RT in each sample. MS tables use the reference's FID–MS delay-corrected RT.
+     Missing references leave RRT empty; hover over the column for the reason. The reference is saved
+     in projects and processing methods.
    - If a run cannot be blank-subtracted (the blank itself, or no Blank assigned), the table shows its plain
      trace, and a note says why.
    - Mark rows with Ctrl/Shift and press **Delete**, or choose **Delete peak(s)** in the toolbar or row menu.
@@ -92,6 +127,14 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
      mean spectrum over a range, Shift+right-drag to set a background range that is subtracted. In the
      spectrum panel ← / → step one scan and Esc returns to the selected peak. Clicking an ion in a spectrum
      shows its EIC in the MS chromatogram panel.
+   - **Hide noise**, enabled by default in the Mass Spectrum menu, hides background-level ions in dense
+     spectra using median + 3 × 1.4826 × MAD. It only changes plotted bars and labels; raw values,
+     searches and MSP exports remain intact. Navigation and background controls are in the spectrum
+     context menu; detailed scan notes appear on hover over the single caption.
+   - **Subtract baseline**, beside Library search, starts a two-scan selection: right-click the apex,
+     then a different baseline scan in a chromatogram. The displayed difference spectrum is used by
+     spectrum searches and MSP export. Click the button again or press Escape to clear it. Sample
+     changes cancel it; existing peak assignments and background ranges are preserved.
    - **Export chromatogram** (*File* menu or the panel's *Export...*):
      - one chromatogram or both stacked, as PNG, JPEG, TIFF, BMP, SVG or PDF;
      - size per chromatogram, resolution 1×–3×, an optional title line, a preview, and copy to the clipboard.
@@ -211,7 +254,7 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
 
    Edits of the Internal standards table apply at once and can be undone.
 
-   **Migration conditions** (*Quantify > Migration conditions...*): analyst, simulant (EtOH 95 %, 50 %, 20 %,
+   **Migration conditions** (inside the NIAS Quantification panel): analyst, simulant (EtOH 95 %, 50 %, 20 %,
    Tenax, or *Other...* to type one), temperature, duration, cell area, coverage factor, volume and
    surface/volume. The report texts "Migrationszelle" and "Belegung" follow from the cell area (0.51 dm² =
    Zelle groß, 0.34 dm² = Zelle klein, 0.44 dm² = Glaszelle) and the coverage factor (1 = einfach,

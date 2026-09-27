@@ -16,6 +16,8 @@ def fid_files(d: Path) -> list[Path]:
 
 def is_run_dir(path) -> bool:
     d = Path(path)
+    if d.suffix.lower() == ".qgd":
+        return d.is_file()
     if not d.is_dir() or d.suffix.lower() != ".d":
         return False
     if (d / "data.ms").exists() or fid_files(d):
@@ -37,7 +39,7 @@ def is_analysis_folder(path) -> bool:
     if not d.is_dir() or d.suffix.lower() == ".d":
         return False
     try:
-        return any(is_run_dir(p) for p in d.iterdir() if p.suffix.lower() == ".d")
+        return any(is_run_dir(p) for p in d.iterdir() if p.suffix.lower() in (".d", ".qgd"))
     except OSError:
         return False
 
@@ -45,6 +47,8 @@ def is_analysis_folder(path) -> bool:
 def sources(d) -> dict[str, str]:
     """Which raw files a run folder offers (for tooltips and properties)."""
     d = Path(d)
+    if d.is_file() and d.suffix.lower() == ".qgd":
+        return {"MS": d.name}
     out = {}
     if (d / "data.ms").exists():
         out["MS"] = "data.ms"

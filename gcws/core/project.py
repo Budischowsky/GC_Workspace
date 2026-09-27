@@ -31,6 +31,9 @@ def _rel(path: Path, base: Path) -> str:
 
 def _fingerprint(path: Path) -> dict:
     out = {}
+    if path.is_file() and path.suffix.lower() == ".qgd":
+        s = path.stat()
+        return {path.name: [s.st_size, int(s.st_mtime)]}
     for name in ("data.ms", "FID1A.ch", "AcqData/MSScan.bin", "AcqData/FID1.cg"):
         f = path / name
         if f.exists():
@@ -109,7 +112,7 @@ def read(path) -> dict:
 def resolve_run_path(entry: dict, project_path: Path) -> Path | None:
     for cand in (project_path.parent / entry.get("path_rel", ""), Path(entry.get("path_abs", ""))):
         try:
-            if cand and cand.is_dir():
+            if cand and (cand.is_dir() or (cand.suffix.lower() == ".qgd" and cand.is_file())):
                 return cand.resolve()
         except OSError:
             continue

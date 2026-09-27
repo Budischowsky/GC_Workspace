@@ -78,7 +78,7 @@ class ReplicatesDock(QWidget):
         self.info.setWordWrap(True)
         buttons = QHBoxLayout()
         for kind, label in (("nias", "NIAS report..."), ("fingerprint", "Fingerprint report..."),
-                            ("total_extraction", "Total extraction report...")):
+                            ("total_extraction", "Total extraction report..."), ("hs_screening", "HS-Screening report...")):
             b = QPushButton(label)
             b.clicked.connect(lambda _=False, k=kind: self._report(k))
             buttons.addWidget(b)

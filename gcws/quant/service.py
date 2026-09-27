@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any, Optional
 
 from gcws.core.model import FID
@@ -13,6 +14,7 @@ MODES = {
     "istd_conc": "Internal standard concentration",
     "total_ugl": "NIAS total extraction (µg/L)",
     "area_pct": "Area percent",
+    "hs_screening": "HS-Screening (MS only)",
 }
 UNITS = ["µg/L", "mg/L", "mg/mL", "µg/mL", "ng/mL", "mg/kg", "µg/g", "%"]
 log = logging.getLogger(__name__)
@@ -20,6 +22,8 @@ log = logging.getLogger(__name__)
 
 def mode_unit(quant: dict) -> str:
     mode = quant.get("mode", "nias_mgkg")
+    if mode == "hs_screening":
+        return quant.get("hs", {}).get("unit", "µg/HS")
     if mode == "nias_mgkg":
         return "mg/kg"
     if mode == "total_ugl":
@@ -70,7 +74,46 @@ class QuantResult:
         self.errors: dict[str, str] = {}
 
 
+def rrt_reference(sample, quant, st, key="FID"):
+    """Measured reference RT and status, without target-RT or alternate-ISTD fallback."""
+    from gcws.core.keys import is_fid
+    code = quant.get("rrt_reference")
+    status = "Select an RRT reference ISTD in the NIAS quantification panel"
+    reference = None
+    if code:
+        status = f"RRT reference {code} is not found or bound in this sample"
+        matches = [s for s in getattr(sample, "standards", []) if s.get("code") == code]
+        if len(matches) == 1 and matches[0].get("row_id") is not None:
+            try:
+                reference = float(matches[0]["fid_rt"])
+                if not math.isfinite(reference) or reference <= 0:
+                    raise ValueError("Invalid measured FID RT")
+                if not is_fid(key):
+                    reference -= st.delay_value
+                if not math.isfinite(reference) or reference <= 0:
+                    reference = None
+                    status = f"RRT reference {code} has no positive measured RT on this detector"
+                else:
+                    status = f"RRT reference: {code}, measured RT {reference:.4f} min"
+            except (KeyError, TypeError, ValueError):
+                reference = None
+                status = f"RRT reference {code} has no positive measured RT"
+    return reference, status
+
+
+def rrt_rows(sample, quant, st, peaks, key):
+    """RRT on the displayed detector axis."""
+    if quant.get("mode", "nias_mgkg") != "nias_mgkg":
+        return {}
+    reference, status = rrt_reference(sample, quant, st, key)
+    return {i: {"rrt": p.apex_rt / reference if reference is not None else None,
+                "rrt_status": status} for i, p in enumerate(peaks)}
+
+
 def compute(ws) -> QuantResult:
+    if (ws.quant or {}).get("mode") == "hs_screening":
+        from gcws.quant.hs import compute as compute_hs
+        return compute_hs(ws)
     out = QuantResult()
     quant = ws.quant or {}
     settings = NB.make_settings(quant.get("settings"))

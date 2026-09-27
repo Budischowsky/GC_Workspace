@@ -20,10 +20,11 @@ from pathlib import Path
 from typing import Callable, Optional
 
 KINDS = {"nias": "NIAS Report", "fingerprint": "Fingerprint Report",
-         "total_extraction": "Total Extraction Report"}
+         "total_extraction": "Total Extraction Report", "hs_screening": "HS-Screening Report"}
 SUFFIXES = {"nias": "_NIAS_Report", "fingerprint": "_Fingerprint_Report",
-            "total_extraction": "_Total_Extraction_Report"}
-SEEN_TYPES = {"nias": "NIAS", "fingerprint": "Fingerprint", "total_extraction": "Total extraction"}
+            "total_extraction": "_Total_Extraction_Report", "hs_screening": "_HS_Screening_Report"}
+SEEN_TYPES = {"nias": "NIAS", "fingerprint": "Fingerprint", "total_extraction": "Total extraction",
+              "hs_screening": "HS-Screening"}
 
 
 @dataclass
@@ -133,6 +134,11 @@ def apply_overrides(middle: Path, overrides: dict) -> int:
 
 
 def generate(job: ReportJob, progress: Callable[[str], None] = lambda s: None) -> ReportResult:
+    if job.kind == "hs_screening":
+        from gcws.report.hs import generate as generate_hs
+        return generate_hs(job, progress)
+    if any(getattr(s, "mode", None) == "hs_screening" for s in job.samples):
+        raise ValueError("HS samples require the HS-Screening report")
     import gc_export
     from gcws.report.legacy_api import main_script
     warnings = []

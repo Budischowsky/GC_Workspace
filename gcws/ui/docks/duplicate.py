@@ -188,10 +188,10 @@ class DuplicatePage(QWidget):
         prev = QPushButton("NIAS report - preview")
         theme.set_primary(prev)
         prev.setToolTip("The NIAS report of this double determination with the rows and values chosen here")
-        prev.clicked.connect(lambda: self._report("nias", preview=True))
+        prev.clicked.connect(lambda: self._report("hs_screening" if self.quant_signal() == "TIC" else "nias", preview=True))
         buttons.addWidget(prev)
         for kind, label in (("nias", "NIAS report..."), ("fingerprint", "Fingerprint report..."),
-                            ("total_extraction", "Total extraction report...")):
+                            ("total_extraction", "Total extraction report..."), ("hs_screening", "HS-Screening report...")):
             b = QPushButton(label)
             b.clicked.connect(lambda _=False, k=kind: self._report(k))
             buttons.addWidget(b)
@@ -339,7 +339,17 @@ class DuplicatePage(QWidget):
             out.append(lab if lab and lab not in out else "AB"[i] if i < 2 else str(i + 1))
         return tuple(out) if len(out) == 2 else ("A", "B")
 
+    def edits_key(self):
+        return "hs_edits:" + self.ws.quant_unit() if self.ws.quant.get("mode") == "hs_screening" else "edits"
+
+    def quant_signal(self):
+        return "TIC" if self.ws.quant.get("mode") == "hs_screening" else FID
+
     def compare(self, sync: bool = False):
+        key = self.quant_signal()
+        self.mirror.setLabel("bottom", f"RT ({key})", units="min")
+        self.mirror.setLabel("left", f"A  ↑   {key}   ↓  B")
+        self.mirror.setToolTip(f"A up, B down, in {key} signal units. Wheel or drag: time; double-click: full view.")
         if self._loading:
             return
         a, b = self.a.currentData(), self.b.currentData()
@@ -365,7 +375,7 @@ class DuplicatePage(QWidget):
 
     def edits(self) -> dict:
         g = self.group()
-        return dict((g or {}).get("edits") or {})
+        return dict((g or {}).get(self.edits_key()) or {})
 
     def _reapply(self):
         if not self.base_rows or self._filling:
@@ -401,7 +411,7 @@ class DuplicatePage(QWidget):
             return
         groups = copy.deepcopy(self.ws.replicate_groups)
         tg = next(x for x in groups if x["id"] == g["id"])
-        edits = tg.setdefault("edits", {})
+        edits = tg.setdefault(self.edits_key(), {})
         logs = []
         for row, field, value in changes:
             key = row.get("edit_key") or DV.edit_key(row["rt"])
@@ -442,14 +452,14 @@ class DuplicatePage(QWidget):
                     continue
                 rid = self.members[i]
                 st = self.ws.runs[rid]
-                res = self.ws.result(rid, FID)
+                res = self.ws.result(rid, self.quant_signal())
                 if res is None or not res.peaks:
                     continue
                 j = min(range(len(res.peaks)), key=lambda q: abs(res.peaks[q].apex_rt - src["rt"]))
                 peak = res.peaks[j]
                 if abs(peak.apex_rt - src["rt"]) > 0.05:
                     continue
-                old = st.ident_set(FID).for_peak(peak)
+                old = st.ident_set(self.quant_signal()).for_peak(peak)
                 ident = Identification(apex_rt=peak.apex_rt,
                                        name=name if name is not None else (old.name if old else ""),
                                        cas=cas if cas is not None else (old.cas if old else ""),
@@ -461,7 +471,7 @@ class DuplicatePage(QWidget):
                 value = name if name is not None else cas
                 per_run.setdefault(rid, []).append((peak.apex_rt, ident,
                                                     f"{what} of peak {peak.apex_rt:.3f} = {value!r}"))
-        cmds = [IdentCommand(self.ws, rid, FID, [(t, ident) for t, ident, _ in items],
+        cmds = [IdentCommand(self.ws, rid, self.quant_signal(), [(t, ident) for t, ident, _ in items],
                              items[0][2] if len(items) == 1 else f"{len(items)} names / CAS")
                 for rid, items in per_run.items()]
         if not cmds:
@@ -576,16 +586,16 @@ class DuplicatePage(QWidget):
         g = self.group()
         groups = copy.deepcopy(self.ws.replicate_groups)
         tg = next(x for x in groups if x["id"] == g["id"])
-        tg.get("edits", {}).pop(row["edit_key"], None)
+        tg.get(self.edits_key(), {}).pop(row["edit_key"], None)
         self.set_groups(groups, f"double determination: reset {row.get('name') or row['rt']}")
         self.ws.log("Double determination changed", self._names(), f"{row.get('name')}: changes reset")
 
     def reset_all(self):
         g = self.group()
-        if g is None or not g.get("edits"):
+        if g is None or not g.get(self.edits_key()):
             return
         groups = copy.deepcopy(self.ws.replicate_groups)
-        next(x for x in groups if x["id"] == g["id"])["edits"] = {}
+        next(x for x in groups if x["id"] == g["id"])[self.edits_key()] = {}
         self.set_groups(groups, "double determination: all changes reset")
         self.ws.log("Double determination changed", self._names(), "all changes reset")
 
@@ -713,7 +723,9 @@ class DuplicatePage(QWidget):
     def _t0(self, st, sig) -> float:
         """Where the mirror plot starts: the integration start, else the solvent end."""
         from gcws.integration.autoparams import _integration_start
-        t = _integration_start(sig.rt, self.ws.method_for(st, FID), self.ws.solvent_cut(st, FID))
+        t = _integration_start(sig.rt, self.ws.method_for(st, self.quant_signal()), self.ws.solvent_cut(st, self.quant_signal()))
+        if t is None and self.quant_signal() == "TIC":
+            return float(sig.rt[0])
         if t is None:
             from gcws.quant.nias_bridge import make_settings
             t = float(getattr(make_settings(self.ws.quant.get("settings")), "solvent_end", 0.0) or 0.0)
@@ -726,7 +738,7 @@ class DuplicatePage(QWidget):
         twice as large in A also looks twice as large. The solvent front is left out and the
         slow baseline (solvent tail, column bleed) is removed, so peaks stand on zero."""
         st = self.ws.runs.get(rid)
-        sig = st.run.signal(FID) if st is not None else None
+        sig = st.run.signal(self.quant_signal()) if st is not None else None
         if sig is None or len(sig.rt) < 2:
             return None
         keep = sig.rt >= self._t0(st, sig)
@@ -781,10 +793,10 @@ class DuplicatePage(QWidget):
         """FID apexes of the internal standards (from the quantification) in A and B."""
         out = []
         for rid in self.members[:2]:
-            res = self.ws.result(rid, FID)
+            res = self.ws.result(rid, self.quant_signal())
             if res is None:
                 continue
-            for i, q in self.ws.quant_rows(rid, FID).items():
+            for i, q in self.ws.quant_rows(rid, self.quant_signal()).items():
                 if q.get("istd") and 0 <= i < len(res.peaks):
                     out.append(res.peaks[i].apex_rt)
         return out
@@ -848,9 +860,9 @@ class DuplicatePage(QWidget):
                 continue
             rid = self.members[i]
             self.ws.set_active(rid)
-            if self.ws.signal_key != FID:
-                self.ws.set_signal_key(FID)
-            res = self.ws.result(rid, FID)
+            if self.ws.signal_key != self.quant_signal():
+                self.ws.set_signal_key(self.quant_signal())
+            res = self.ws.result(rid, self.quant_signal())
             if res is not None and res.peaks:
                 j = min(range(len(res.peaks)), key=lambda q: abs(res.peaks[q].apex_rt - src["rt"]))
                 if abs(res.peaks[j].apex_rt - src["rt"]) < 0.05:
@@ -866,6 +878,10 @@ class DuplicatePage(QWidget):
         if abs(new - DV.limits(self.ws)[0]) < 1e-9:
             return
         q = copy.deepcopy(self.ws.quant)
+        if q.get("mode") == "hs_screening":
+            q.setdefault("hs", {})["duplicate_max_reldiff"] = new
+            self.ws.push_quant(f"HS duplicate difference limit = {new:g} %", q)
+            return
         s = make_settings(q.get("settings"))
         s.duplicate_max_reldiff = new
         q["settings"] = settings_dict(s)
