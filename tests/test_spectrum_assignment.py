@@ -170,3 +170,30 @@ def test_name_transfer_matches_component_times_and_does_not_transfer_mixtures():
     assert [(i.peak_id, i.name) for _, i in transferred] == [('fid:0', '0'), ('fid:1', '1')]
     mixed, counts = transfer_names(ws, 'run', [(10.01, Identification(10.01, name='mixed'))])
     assert not mixed and counts['unmatched'] == 1
+
+
+@pytest.mark.parametrize('key', ['FID', 'TIC'])
+def test_real_11870_plan_fits_the_trace_and_skips_weak_components(run07, key):
+    from gcws.integration.method import default_for
+    from gcws.ms.peak_split import plan_split
+    delay = .0066
+    shift = delay if key == 'FID' else 0.
+    sig = run07.signal(key)
+    method = nias_fid_method() if key == 'FID' else default_for('TIC')
+    before = integrate(sig, method, t_min=5.5 if key == 'FID' else None)
+    parent = min(before.peaks, key=lambda p: abs(p.apex_rt - shift - 11.865))
+    comps = D.deconvolute_window(run07.ms, parent.apex_rt - shift).components
+    plan = plan_split(sig, parent, key, delay, comps)
+    assert plan.ok and plan.basis == 'fit', plan.problem
+    assert plan.fit.r2 > .99
+    assert [c.component.model_mz for c in plan.candidates] == [205, 191, 563, 191]
+    assert plan.checked == [0, 1]
+    assert all(not c.suggested and c.reason.startswith('S/N') for c in plan.candidates[2:])
+    assert plan.shares == pytest.approx([.466, .534], abs=.01)
+    assert parent.start < plan.points[0] < parent.end
+    result = integrate(sig, method, [plan.event()], t_min=5.5 if key == 'FID' else None)
+    parts = sorted([p for p in result.peaks if p.extra.get('deconv_component')], key=lambda p: p.start)
+    assert not result.unresolved and len(parts) == 2
+    assert math.fsum(p.area for p in parts) == parent.area
+    assert [p.extra['deconv_component']['model_mz'] for p in parts] == [205, 191]
+    assert extract(run07, parts[0], key, delay).top_ions() == [205, 220, 57]

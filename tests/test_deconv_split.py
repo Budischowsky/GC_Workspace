@@ -141,3 +141,70 @@ def test_unresolvable_allocation_is_atomic():
     result = integrate(sig, m, [changed])
     assert result.digest == original.digest and result.unresolved[0][0] == changed.uid
     assert not any(p.extra.get('deconv_component') for p in result.peaks)
+
+
+def test_v3_payload_keeps_weights_basis_fit_and_profiles():
+    peak = SimpleNamespace(start=10.10, end=10.20, apex_rt=10.14)
+    items = components()
+    profiles = [[[10.00, 0.], [10.02, 1.], [10.04, 0.]], [[10.06, 0.], [10.08, 1.], [10.10, 0.]]]
+    fit = {'shift': 0.105, 'stretch': 0.9, 'r2': 0.995}
+    original = create_event(peak, items, delay=0.1, weights=[4., 6.], points=[10.16], fit=fit,
+                            basis='fit', profiles=profiles)
+    restored = ManualEvent.from_dict(json.loads(json.dumps(original.to_dict())))
+    payload = decode(restored)
+    assert payload['version'] == 3 and payload['basis'] == 'fit' and payload['fit'] == fit
+    assert [c['weight'] for c in payload['components']] == [4., 6.]
+    assert [c['area'] for c in payload['components']] == [30., 70.]
+    assert payload['components'][0]['profile'] == profiles[0]
+    assert payload['points'] == [10.16]
+    assert 'fitted FID signal' in original.comment
+    # the legacy call keeps MS weights and midpoint cuts
+    legacy = decode(event())
+    assert legacy['basis'] == 'ms' and legacy['fit'] is None
+    assert [c['weight'] for c in legacy['components']] == [30., 70.]
+
+
+@pytest.mark.parametrize('change', [
+    {'basis': 'guess'}, {'basis': 'fit', 'fit': None}, {'fit': {'shift': 0.1, 'stretch': 0, 'r2': 1}},
+    {'fit': {'shift': 0.1}},
+])
+def test_v3_rejects_invalid_basis_and_fit(change):
+    payload = decode(event())
+    payload.update(change)
+    with pytest.raises(ValueError):
+        decode(event().with_(option=PREFIX + json.dumps(payload)))
+
+
+def test_v3_rejects_invalid_weights_and_profiles():
+    peak = SimpleNamespace(start=10.10, end=10.20, apex_rt=10.14)
+    with pytest.raises(ValueError):
+        create_event(peak, components(), delay=0.1, weights=[0., 1.])
+    with pytest.raises(ValueError):
+        create_event(peak, components(), delay=0.1, profiles=[[[10., 1.], [9.9, 0.]], None])
+    with pytest.raises(ValueError):
+        create_event(peak, components(), delay=0.1, weights=[1.])
+
+
+def test_version_two_payload_replays_with_ms_weights():
+    from test_integration import make, method, by_rt
+    from gcws.integration.engine import integrate
+    sig = make([(3, 0.02, 800)])
+    m = method()
+    peak = by_rt(integrate(sig, m), 3)
+    items = [SimpleNamespace(rt=rt, model_mz=mz, purity=.8, area=area)
+             for rt, mz, area in [(2.98, 57, 25), (3.02, 91, 75)]]
+    action = create_event(peak, items)
+    payload = decode(action)
+    payload['version'] = 2
+    for key in ('basis', 'fit'):
+        payload.pop(key)
+    for c in payload['components']:
+        c.pop('weight')
+    old = action.with_(option=PREFIX + json.dumps(payload))
+    result = integrate(sig, m, [old])
+    parts = sorted([p for p in result.peaks if p.origin == 'deconvoluted'], key=lambda p: p.start)
+    assert not result.unresolved
+    np.testing.assert_allclose([p.area / peak.area for p in parts], [.25, .75], rtol=1e-13)
+    assert all('basis' not in p.extra['deconv_component'] for p in parts)
+    assert all('Allocation estimated from MS component proportions' in p.extra['area_note'] for p in parts)
+    assert integrate(sig, m, [action]).digest == result.digest

@@ -577,13 +577,20 @@ def _finalise(sig: WorkSignal, peaks: list[WP], res: Resolved, method: Integrati
             pk.extra["spectrum_id"] = p.spectrum_id
         if p.deconv_component:
             from gcws.core.keys import base_key
-            pk.extra["deconv_component"] = dict(p.deconv_component)
-            pk.extra["area_note"] = (
-                f"Modeled {base_key(p.deconv_component.get('signal_key', 'FID'))} area from MS deconvolution: "
-                f"{p.deconv_component['weight']:.2%} "
-                f"of the original peak; component {p.deconv_component['rt']:.4f} min (MS), "
-                f"model m/z {p.deconv_component['model_mz']}. "
-                "Allocation estimated from MS component proportions.")
+            dc = p.deconv_component
+            name = base_key(dc.get("signal_key", "FID"))
+            pk.extra["deconv_component"] = dict(dc)
+            if dc.get("basis") == "fit":
+                pk.extra["area_note"] = (
+                    f"Modeled {name} area from deconvolution: {dc['weight']:.2%} of the original peak, "
+                    f"fitted to the {name} signal (R² {dc['fit']['r2']:.3f}); component {dc['rt']:.4f} min "
+                    f"(MS), model m/z {dc['model_mz']}.")
+            else:
+                pk.extra["area_note"] = (
+                    f"Modeled {name} area from MS deconvolution: {dc['weight']:.2%} "
+                    f"of the original peak; component {dc['rt']:.4f} min (MS), "
+                    f"model m/z {dc['model_mz']}. "
+                    "Allocation estimated from MS component proportions.")
         out.append(pk)
     h = hashlib.sha1()
     h.update(str(gcws.INTEGRATOR_VERSION).encode())

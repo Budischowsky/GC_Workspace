@@ -119,9 +119,10 @@ def _split_by_components(peaks, sig, event, payload):
     if not np.isfinite(total) or total <= 0:
         return "the original peak area must be positive for a deconvolution split"
     components = payload["components"]
-    weights = [c["area"] for c in components]
+    weights = [c["weight"] for c in components]
     areas = share_exactly(total, weights)
     fractions = share_exactly(1.0, weights)
+    modeled = {"basis": payload["basis"], "fit": payload["fit"], "parent_span": [p.t0, p.t1]}
     fragments = []
     for i, (lo, hi, component, area, fraction) in enumerate(
             zip(bounds, bounds[1:], components, areas, fractions)):
@@ -135,6 +136,8 @@ def _split_by_components(peaks, sig, event, payload):
         frag.spectrum_id = f"{event.uid}:{i}"
         frag.deconv_component = {**component, "weight": fraction, "id": frag.spectrum_id,
                                  "signal_key": payload["signal_key"], "delay": payload["delay"]}
+        if payload["version"] >= 3:
+            frag.deconv_component.update(modeled)
         fragments.append(frag)
     # Commit only after every validation and allocation succeeded.
     for child in p.children:

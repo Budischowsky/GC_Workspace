@@ -54,10 +54,11 @@ class WP:
     # measured
     area_raw: float = 0.0
     height: float = 0.0
-    # Deconvolution allocates the measured parent area by MS component weights.
+    # A deconvolution split allocates the measured parent area by component weights
+    # (fitted trace areas or MS component areas, see gcws.integration.deconv_split).
     # These values are rebuilt from manual events, never stored as cached results.
     allocated_area_raw: Optional[float] = None
-    area_allocation: Optional[tuple] = None  # (parent raw area, MS weights, component index)
+    area_allocation: Optional[tuple] = None  # (parent raw area, weights, component index)
     deconv_component: dict = field(default_factory=dict)
     spectrum_id: str = ""
 
