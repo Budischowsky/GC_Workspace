@@ -5,6 +5,9 @@ r"""Deconvolution benchmark against the AMDIS result of run 07 (ELU file).
 Prints recall (AMDIS components found with match factor >= 800 within
 +-0.015 min) and the median match factor for the vendored NIAS engine
 (gc_deconv) and the GC Workspace engine (gcws.ms.deconv).
+
+``--split`` also reports the peak splits of the reference peaks 11.865 and
+13.41 min (MS time) on FID and TIC: fit R2, basis and relative areas.
 """
 from __future__ import annotations
 
@@ -39,10 +42,32 @@ def engines(run):
     return out
 
 
+def split_report(run, delay: float = 0.0066) -> None:
+    from gcws.integration.engine import integrate
+    from gcws.integration.method import default_for, nias_fid_method
+    from gcws.ms import deconv as D
+    from gcws.ms.peak_split import plan_split
+    print(f"Peak splits (fit to the trace; FID-MS delay {delay:.4f} min):")
+    for key in ("FID", "TIC"):
+        sig = run.signal(key)
+        method = nias_fid_method() if key == "FID" else default_for("TIC")
+        res = integrate(sig, method, t_min=5.5 if key == "FID" else None)
+        shift = delay if key == "FID" else 0.0
+        for target in (11.865, 13.41):
+            parent = min(res.peaks, key=lambda p: abs(p.apex_rt - shift - target))
+            comps = D.deconvolute_window(run.ms, parent.apex_rt - shift, D.DeconvSettings()).components
+            plan = plan_split(sig, parent, key, delay, comps)
+            r2 = f"R2 {plan.fit.r2:.4f}" if plan.fit is not None else "no fit"
+            shares = " / ".join(f"{100 * s:.1f} %" for s in plan.shares) if plan.ok else plan.problem
+            print(f"  {key} {parent.apex_rt:7.3f} min  {r2}  basis {plan.basis:3s}  "
+                  f"{len(plan.checked)} of {len(plan.candidates)} components  {shares}")
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--samples", default=str(DEFAULT))
     ap.add_argument("--details", action="store_true")
+    ap.add_argument("--split", action="store_true", help="also report the reference peak splits")
     a = ap.parse_args(argv)
     from gcws.io.run_loader import load_run
     from gcws.ms.amdis_elu import benchmark, read_elu
@@ -61,6 +86,8 @@ def main(argv=None):
                 drt = "" if row["drt"] is None else f"{row['drt']:+.4f}"
                 print(f"    scan {row['scan']:5d} rt {row['rt']:.4f} model {row['model']!s:>4} ions {row['ions']:3d} "
                       f"S/N {row['sn'] or 0:5.0f}  MF {row['mf']:5.0f} {drt}")
+    if a.split:
+        split_report(run)
 
 
 if __name__ == "__main__":

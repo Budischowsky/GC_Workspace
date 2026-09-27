@@ -235,7 +235,7 @@ class ChromPanel(QWidget):
         ws.runChanged.connect(lambda *_: (self.sync_header(), self.refresh()))
         ws.activeRunChanged.connect(lambda *_: (self.sync_header(), self.refresh(), self._auto_fit()))
         ws.panelsChanged.connect(self._panels_changed)
-        ws.signalKeyChanged.connect(lambda *_: (self.sync_header(), self.refresh_active()))
+        ws.signalKeyChanged.connect(lambda *_: (self.sync_header(), self.refresh_active(), self.refresh_markers()))
         ws.resultChanged.connect(self._on_result)
         ws.identsChanged.connect(lambda *_: self.refresh_labels())
         ws.selectionChanged.connect(lambda *_: self.refresh_active())
@@ -458,6 +458,8 @@ class ChromPanel(QWidget):
             self.refresh_events()
         elif key == self.ws.active_key:
             self.refresh_active()            # the selection maps onto the table's peaks
+        if key == self.ws.signal_key:
+            self.refresh_markers()           # components without a peak of the table's signal
 
     def _theme_changed(self):
         """Dark / light switch: the items that took their colours when made, then a redraw."""

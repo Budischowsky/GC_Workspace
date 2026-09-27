@@ -1503,6 +1503,7 @@ class MainWindow(QMainWindow):
         lines = [f"{key:>6}   {label}" for name, label, key, tip in TOOLS]
         lines += ["", "    F5   Integrate active", "Shift+F5   Integrate all", "Ctrl+F   Library search",
                   "Ctrl+E   EI Atlas hit list", "Ctrl+N   NIST search", "Ctrl+I   Extracted ion chromatogram",
+                  "Ctrl+K   Deconvolution: split the selected peak into its components",
                   "Ctrl+Z / Ctrl+Y   Undo / Redo", "",
                   "Mouse in a chromatogram:",
                   "  right-click              mass spectrum at that time",

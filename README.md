@@ -181,25 +181,37 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
 
      Laboratory rules and substances can be added in `data/interpret_rules.json` (same format as
      `gcws/ms/knowledge.py`). The optional peak-table column *Class hint* shows the class for every peak.
-   - **Deconvolution** (Identify menu): around the selected peak, over the visible range, or for the whole run.
-     - Uses the original conservative NIAS engine: five-point smoothing, one-scan minimum separation,
-       and the original noise estimation, grouping and spectrum purification. There is no residual search.
-     - Settings saved by the superseded engine start at NIAS defaults (shape correlation 0.90,
-       apex tolerance 0.5 scans). NIAS settings saved subsequently are retained.
-     - Check the components to include in **Split the peak**. The preview shows their MS times,
-       model ions, proportions and allocated areas. FID and TIC splits (including blank-subtracted
-       traces) preserve the original total and allocate it in proportion to the checked MS components.
-       FID shares are estimates based on MS response, labelled in area tooltips and report review notes.
-       EIC/BPC proportional splits are disabled because they need signal-specific weights.
-     - Each fragment retains its component spectrum for default display, library search and export,
-       including after undo/redo, reintegration and project reload. Raw blank counts are not
-       subtracted from normalized component spectra. Parent identifications remain unassigned and
-       available for undo; hover over the table's orphaned-ID count to review them.
-     - The split completion message reports fragments hidden by table filters. Calculations run in
-       the background with cancellation; changed settings or samples invalidate obsolete results.
-       Components can also be added as peaks or have their spectrum pinned to the selected peak.
-     - *Save as default* makes the settings apply to the "deconvoluted" spectrum mode and the library search.
-     - After a whole-run deconvolution, components without an integrated peak are marked in the chromatogram.
+   - **Deconvolution** (*Identify > Deconvolution...*, **Ctrl+K**, or *Split by deconvolution...* in the
+     right-click menu of *Peaks / substances*) opens on the selected peak.
+     - The window shows the peak's trace (FID or TIC, also "- Blank") with the fitted curve of every
+       deconvoluted component, the cut points and each component's share of the peak area. The spectrum and
+       interpretation of the selected component are on the right.
+     - **How a peak is split.** The MS deconvolution (the original, conservative NIAS engine) finds the
+       components and their elution profiles. These shapes are fitted to the trace itself with one common time
+       shift (it refines the FID-MS delay), one common width factor and non-negative amplitudes. The fitted
+       areas are the relative areas: for a FID peak they come from the FID signal, not from the MS response.
+       The parent's measured area is allocated in these proportions and its total is kept exactly. The cuts
+       lie where neighbouring fitted curves cross.
+     - If the fit explains less than 97 % of the trace (R² < 0.97), or two components cannot be told apart in
+       the trace, the split uses the MS component proportions instead; the status line says why.
+     - Components with S/N < 20 or less than 1 % of the fitted signal (column bleed, noise) are listed but not
+       checked. Checking or unchecking a component refits the peak at once. **Split into N peaks** replaces
+       the peak by one fragment per checked component (undoable; replayed on re-integration and project
+       reload).
+     - In the chromatograms each fragment of a split peak is drawn as its modeled curve; the area of the curve
+       is the area reported. Area tooltips and NIAS review notes name the basis ("fitted to the FID signal"
+       or "MS component proportions").
+     - Each fragment keeps its component spectrum for display, library search and export, also after
+       undo/redo, re-integration and reload. Raw blank counts are not subtracted from normalized component
+       spectra. Parent identifications remain unassigned; hover over the table's orphaned-ID count to review
+       them. The completion message reports fragments hidden by table filters.
+     - *Visible range* and *Whole run* list the components of that stretch (background, with Cancel). After a
+       whole-run deconvolution, components without an integrated peak are marked in the chromatograms. Any
+       component can be added as a peak, its spectrum can be used for the selected peak (*Use for peak
+       spectrum*), or searched with *Library hits...*.
+     - *Settings*: presets for resolution, sensitivity and shape, and the NIAS parameters. *Save as default*
+       makes them apply to the "deconvoluted" spectrum mode and the library search.
+     - Splits saved by earlier versions replay unchanged (MS component proportions).
 6. **Edit library** (*Identify > Edit library...*, or *Add to library...* in the spectrum panel, the hit list
    and the unknown register) stores a spectrum in one of your libraries, as in ChemStation. The window stays
    open while you work: a new entry gets its spectrum with **Take current spectrum** (select a peak or
@@ -333,6 +345,7 @@ are recomputed on opening, and a changed result is reported. An autosave runs ev
 .venv\Scripts\python tools\oracle_report.py   # integrator vs. former ChemStation integration
 .venv\Scripts\python tools\check_vendor.py    # drift of the vendored NIAS modules and EI Atlas engine
 .venv\Scripts\python tools\deconv_benchmark.py   # deconvolution vs. the AMDIS result of run 07
+.venv\Scripts\python tools\deconv_benchmark.py --split   # plus the reference peak splits (fit R², relative areas)
 ```
 
 Install `requirements-dev.txt` for the tests (pytest, pytest-qt, hypothesis).

@@ -334,3 +334,31 @@ def test_entry_points_pin_and_library_hits(qtbot, win, samples, monkeypatch):
     second.pin()
     assert override_for(ws.active, ws.active_key, ws.selected_peak())['component']['model_mz'] == comp.model_mz
     second.close()
+
+
+def test_split_peaks_are_drawn_as_their_curves_and_markers_follow_integration(qtbot, win, samples):
+    from types import SimpleNamespace
+    from gcws.core.events import ManualEvent, ManualKind as K
+    from gcws.ms import deconv_cache as DC
+    from gcws.ui.undo import ManualEventsCommand
+    ws, st, dlg = _open(qtbot, win, samples, 'FID', 11.865, prefixes=('07_',))
+    dlg.split()
+    parts = {i: p for i, p in enumerate(ws.active_result().peaks) if p.extra.get('deconv_component')}
+    item = win.chrom.peaks
+    assert sorted(i for i, *_ in item.modeled) == sorted(parts) and len(item.modeled_paths) == 2
+    for i, t, top, base in item.modeled:
+        assert float(np.trapezoid(top - base, t * 60)) == pytest.approx(parts[i].area_raw, rel=2e-3)
+        span = parts[i].extra['deconv_component']['parent_span']
+        assert t[0] == span[0] and t[-1] == span[1]
+    # Markers of components without a peak follow a re-integration of the table's signal.
+    res = ws.active_result()
+    gaps = [(a.end + b.start) / 2 for a, b in zip(res.peaks, res.peaks[1:]) if b.start - a.end > .05]
+    comps = [SimpleNamespace(rt=t - st.delay_value, model_mz=57, purity=.9) for t in gaps[5:7]]
+    DC.store_whole_run(st, DC.settings_of(ws), comps)
+    ws.deconvChanged.emit(st.id)
+    tic_panel = win.chroms[1]
+    assert len(tic_panel._markers.points()) == 2
+    t = gaps[5]
+    events = list(st.events('FID')) + [ManualEvent(K.ADD_PEAK, t - .01, t + .01)]
+    st.undo.push(ManualEventsCommand(ws, st.id, 'FID', events, 'add a peak at a hidden component'))
+    assert len(tic_panel._markers.points()) == 1

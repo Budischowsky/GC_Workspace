@@ -23,7 +23,11 @@ def _poly(path: QPainterPath, xs, ys, close_to=None):
 
 
 class PeaksItem(pg.GraphicsObject):
-    """Filled peak areas, baselines, drop lines and bound ticks for one run."""
+    """Filled peak areas, baselines, drop lines and bound ticks for one run.
+
+    A fragment of a deconvolution split is drawn as its modeled component curve
+    above the baseline (its area is the area reported), not as the trace above it.
+    """
 
     def __init__(self):
         super().__init__()
@@ -33,6 +37,8 @@ class PeaksItem(pg.GraphicsObject):
         self.fill_muted = QPainterPath()
         self.base = QPainterPath()
         self.drops = QPainterPath()
+        self.modeled: list[tuple] = []    # (peak index, t, curve top, baseline) in data units, per fragment
+        self.modeled_paths: list[tuple] = []   # (selected, fill, outline) in display units
         self.color = QColor("#1f77b4")
         self._rect = QRectF()
         self.pen_scale = 1.0              # line widths x this (picture export at a higher resolution)
@@ -51,6 +57,8 @@ class PeaksItem(pg.GraphicsObject):
         self.fill_muted = QPainterPath()
         self.base = QPainterPath()
         self.drops = QPainterPath()
+        self.modeled = []
+        self.modeled_paths = []
         sc, off = transform if transform else (1.0, 0.0)
         xmin = ymin = np.inf
         xmax = ymax = -np.inf
@@ -63,9 +71,21 @@ class PeaksItem(pg.GraphicsObject):
             ys = ys * sc + off
             bl = bl * sc + off
             ts = ts + dx
-            target = self.fill_sel if i == selected else (
-                self.fill_muted if i in muted else (self.fill_manual if "M" in p.flags else self.fill))
-            _poly(target, ts, ys, (ts, bl))
+            curve = _modeled(p)
+            if curve is not None:
+                tc, top, base = curve
+                self.modeled.append((i, tc, top, base))
+                top, base, tc = top * sc + off, base * sc + off, tc + dx
+                fill, outline = QPainterPath(), QPainterPath()
+                _poly(fill, tc, top, (tc, base))
+                _poly(outline, tc, top)
+                self.modeled_paths.append((i == selected, fill, outline))
+                xmin, xmax = min(xmin, tc[0]), max(xmax, tc[-1])
+                ymin, ymax = min(ymin, base.min()), max(ymax, top.max())
+            else:
+                target = self.fill_sel if i == selected else (
+                    self.fill_muted if i in muted else (self.fill_manual if "M" in p.flags else self.fill))
+                _poly(target, ts, ys, (ts, bl))
             self.base.moveTo(float(ts[0]), float(bl[0]))
             self.base.lineTo(float(ts[-1]), float(bl[-1]))
             for t, yb, ysig in ((ts[0], bl[0], ys[0]), (ts[-1], bl[-1], ys[-1])):
@@ -80,6 +100,7 @@ class PeaksItem(pg.GraphicsObject):
         return self._rect
 
     def paint(self, p, *args):
+        self._paint_modeled(p)
         c = self.color
         p.setPen(Qt.NoPen)
         p.setBrush(QBrush(QColor(c.red(), c.green(), c.blue(), 55)))
@@ -101,6 +122,35 @@ class PeaksItem(pg.GraphicsObject):
         pen2.setWidthF(1.0 * self.pen_scale)
         p.setPen(pen2)
         p.drawPath(self.drops)
+
+    def _paint_modeled(self, p):
+        """Each fragment's curve separately, so overlapping components stay filled."""
+        c = self.color
+        for selected, fill, outline in self.modeled_paths:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(QColor(c.red(), c.green(), c.blue(), 130 if selected else 50)))
+            p.drawPath(fill)
+            pen = QPen(QColor(c.red(), c.green(), c.blue(), 230))
+            pen.setCosmetic(True)
+            pen.setWidthF((1.8 if selected else 1.1) * self.pen_scale)
+            p.setBrush(Qt.NoBrush)
+            p.setPen(pen)
+            p.drawPath(outline)
+
+
+def _modeled(peak, n: int = 240):
+    """``(t, baseline + curve, baseline)`` of a deconvoluted fragment, or None."""
+    dc = (getattr(peak, "extra", None) or {}).get("deconv_component")
+    if not dc or not dc.get("profile") or not dc.get("parent_span"):
+        return None
+    from gcws.integration.deconv_split import fragment_curve
+    lo, hi = (float(v) for v in dc["parent_span"])
+    t = np.linspace(lo, hi, n)
+    curve = fragment_curve(peak, t)
+    if curve is None:
+        return None
+    base = peak.baseline.eval(t)
+    return t, base + curve, base
 
 
 class LabelsItem(pg.GraphicsObject):
