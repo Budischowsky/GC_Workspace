@@ -6,7 +6,6 @@ import numpy as np
 import pytest
 
 from test_ui import win, _load
-from gcws.ms.display import visible_ions
 from gcws.ms.spectra import ScanRequest, subtract
 from gcws.quant.service import rrt_rows
 
@@ -21,35 +20,41 @@ def qgd_run():
 
 
 @pytest.mark.parametrize("rt,scan,count", [(5.465, 594, 24), (6.275, 756, 35)])
-def test_screenshot_noise(qgd_run, rt, scan, count):
+def test_qgd_detector_offset_removed(qgd_run, rt, scan, count):
+    """Shimadzu scans store every mass on a ~500-count offset; loaded, they read like Agilent data."""
     ms = qgd_run.ms
     i = ms.scan_at_rt(rt)
     assert i + 1 == scan
     mz, ab = ms.nominal_spectrum_arrays([i])
-    original = ab.copy()
-    mask = visible_ions(mz, ab)
-    assert mask.sum() == count
-    assert mask[ab.argmax()]
-    np.testing.assert_array_equal(ab, original)
-    assert visible_ions(mz, ab, False).sum() == 316
+    assert mz.size == count and (ab > 0).all()
+    # The chromatogram keeps the instrument's TIC (HS areas unchanged); the points are offset-free.
+    np.testing.assert_array_equal(qgd_run.signal("TIC").y, ms.stored_tic)
+    assert ms.instrument_tic and ms.tic()[i] < ms.stored_tic[i]
 
 
-def test_sparse_empty_and_noise_only():
-    assert visible_ions([], []).size == 0
-    assert visible_ions([43, 45, 61, 88], [100, 10, 2, 1]).all()
-    assert visible_ions(np.arange(40) * 10, np.ones(40)).all()
-    assert not visible_ions(np.arange(40), np.ones(40)).any()
+def test_remove_offset_flat_floor_and_sparse():
+    from gcws.io.shimadzu import remove_offset
+    rng = np.random.default_rng(1)
+    mz = np.arange(35., 351.)
+    ab = 500 + rng.uniform(-10, 10, mz.size)                    # bounded: no 3σ outliers
+    ab[[5, 9, 25]] += (1200, 800, 300)                        # m/z 40, 44, 60
+    cmz, cab = remove_offset(mz, ab)
+    assert cmz.tolist() == [40, 44, 60]
+    assert cab == pytest.approx([1200, 800, 300], abs=40)
+    sparse = (np.array([43., 57.]), np.array([12., 99.]))
+    out = remove_offset(*sparse)                                # already thresholded: untouched
+    assert out[0] is sparse[0] and out[1] is sparse[1]
 
 
-def test_noise_only_plot_and_persistent_toggle(qtbot, win):
-    from gcws.ui.docks.spectrum import StickPlot
+def test_spectrum_plot_shows_all_ions_and_menus(qtbot, win):
     win.spectrum.plot.show_spectrum(np.arange(40), np.ones(40))
-    assert not win.spectrum.plot._mz.size
-    win.spectrum.noise_action.setChecked(False)
     assert win.spectrum.plot._mz.size == 40
-    another = StickPlot()
-    qtbot.addWidget(another)
-    assert not another.hide_noise
+    removed = {"Hide noise", "Previous scan [←]", "Next scan [→]", "Back to peak [Esc]", "Clear background",
+               "Spectrum mode", "subtract blank"}
+    for menu in (win.ms_menu, win.spectrum.context_menu):
+        texts = {a.text() for a in menu.actions()} | {a.menu().title() for a in menu.actions() if a.menu()}
+        assert not texts & removed
+        assert "Library hits" in texts and "Own library selection and options" in texts
 
 
 def test_noise_plot_and_subtraction(qtbot, win, qgd_run):
@@ -59,12 +64,7 @@ def test_noise_plot_and_subtraction(qtbot, win, qgd_run):
     ws.add_run(qgd_run)
     st = ws.active
     sp.show_range(ScanRequest(st.id, 5.465, 5.465))
-    raw_points = sp.points()
-    assert len(sp.plot._mz) == 24 and len(raw_points) == 316
-    sp.noise_action.setChecked(False)
-    assert len(sp.plot._mz) == 316 and sp.points() == raw_points
-    sp.noise_action.setChecked(True)
-    assert sp.points() == raw_points
+    assert len(sp.plot._mz) == 24 and len(sp.points()) == 24
     sp.bg_range = (4., 4.1)
     before = copy.deepcopy(st.spectrum_overrides)
     win.a_subtract.trigger()

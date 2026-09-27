@@ -198,7 +198,8 @@ class Run:
             sig = self.fid
         elif self.ms is not None:
             if kind == TIC:
-                sig = Signal(TIC, self.ms.rt, self.ms.tic(), source="MS", label="TIC", y_unit="counts")
+                y = self.ms.stored_tic if self.ms.instrument_tic else self.ms.tic()
+                sig = Signal(TIC, self.ms.rt, y, source="MS", label="TIC", y_unit="counts")
             elif kind == BPC:
                 sig = Signal(BPC, self.ms.rt, self.ms.bpc(), source="MS", label="BPC", y_unit="counts")
             elif kind == EIC and masses:

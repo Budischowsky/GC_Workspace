@@ -16,8 +16,8 @@ from __future__ import annotations
 import numpy as np
 import hashlib
 import pyqtgraph as pg
-from PySide6.QtCore import QSettings, QSignalBlocker, Qt, Signal as QtSignal
-from PySide6.QtGui import QAction, QActionGroup, QColor, QGuiApplication
+from PySide6.QtCore import QSettings, Qt, Signal as QtSignal
+from PySide6.QtGui import QAction, QColor, QGuiApplication
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QHeaderView,
                                QMenu, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget,
                                QVBoxLayout, QWidget)
@@ -43,7 +43,6 @@ class StickPlot(pg.PlotWidget):
         self.setToolTip("Click an ion to show its extracted ion chromatogram; drag to zoom, double-click resets")
         self.texts = []
         self._mz = np.zeros(0)
-        self.hide_noise = QSettings().value("spectrum/hide_noise", True, type=bool)
         self.embedded_title = embedded_title
         if embedded_title:
             from gcws.ui.plot.overlay import ElidedLabel, PlotOverlay
@@ -89,8 +88,7 @@ class StickPlot(pg.PlotWidget):
         mz = np.asarray(mz, float)
         ab = np.asarray(ab, float)
         rel = ab / ab.max() * 100.0
-        from gcws.ms.display import visible_ions
-        keep = visible_ions(mz, ab, self.hide_noise)
+        keep = np.isfinite(ab) & (ab > 0)
         full_mz = mz
         mz, rel = mz[keep], rel[keep]
         self._mz = mz
@@ -165,23 +163,10 @@ class SpectrumDock(QWidget):
         self.mode.currentIndexChanged.connect(lambda *_: self.refresh())
         self.mode.setParent(self)
         self.mode.hide()
+        # Not offered in the menus: follows the working signal (a blank trace brings blank spectra).
         self.minus_blank = QCheckBox("subtract blank", self)
         self.minus_blank.hide()
         self.minus_blank.toggled.connect(lambda *_: self.refresh())
-        self.mode_menu = QMenu("Spectrum mode", self)
-        self.mode_group = QActionGroup(self)
-        for i in range(self.mode.count()):
-            action = self.mode_menu.addAction(self.mode.itemText(i))
-            action.setCheckable(True)
-            action.setData(i)
-            self.mode_group.addAction(action)
-            action.triggered.connect(lambda _=False, n=i: self.mode.setCurrentIndex(n))
-        self.mode_group.actions()[0].setChecked(True)
-        self.mode.currentIndexChanged.connect(self._sync_actions)
-        self.blank_action = QAction("subtract blank", self)
-        self.blank_action.setCheckable(True)
-        self.blank_action.toggled.connect(self.minus_blank.setChecked)
-        self.minus_blank.toggled.connect(self._sync_actions)
         self.own_menu = QMenu("Own library selection and options", self)
         self.own_menu.aboutToShow.connect(self._fill_own_menu)
         self.spectrum_actions = []
@@ -266,23 +251,9 @@ class SpectrumDock(QWidget):
         split.setCollapsible(1, True)
         split.setSizes([420, 0])
         self.details_height = QSettings().value("window/ms_details_height", 200, type=int)
-        # Navigation belongs in the menu, never on top of spectrum bars.
+        # Scan navigation is on the keyboard ([←]/[→], [Esc]), never on top of spectrum bars.
         self.info.setParent(self)
         self.info.hide()
-        self.noise_action = QAction("Hide noise", self)
-        self.noise_action.setCheckable(True)
-        self.noise_action.setChecked(self.plot.hide_noise)
-        self.noise_action.setToolTip("Hide ions at the estimated noise floor in the plot only. "
-                                    "Analytical data, searches and spectral exports are unchanged.")
-        self.noise_action.toggled.connect(self._set_hide_noise)
-        self.navigation_actions = []
-        for text, slot in (("Previous scan [←]", lambda: self.step(-1)),
-                           ("Next scan [→]", lambda: self.step(1)),
-                           ("Back to peak [Esc]", self.back_to_peak),
-                           ("Clear background", self.clear_background)):
-            action = QAction(text, self)
-            action.triggered.connect(slot)
-            self.navigation_actions.append(action)
         split.splitterMoved.connect(self._remember_details_height)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -301,12 +272,6 @@ class SpectrumDock(QWidget):
 
     def populate_menu(self, menu):
         menu.setToolTipsVisible(True)
-        menu.addAction(self.noise_action)
-        menu.addActions(self.navigation_actions)
-        menu.addSeparator()
-        menu.addMenu(self.mode_menu)
-        menu.addAction(self.blank_action)
-        menu.addSeparator()
         for action in self.spectrum_actions:
             menu.addAction(action)
             if action.text() == "Own library":
@@ -318,32 +283,13 @@ class SpectrumDock(QWidget):
         self.context_menu.popup(pos.toPoint())
 
     def _sync_actions(self, *_):
-        if not hasattr(self, "blank_action"):
+        if not hasattr(self, "use_scans"):
             return
-        with QSignalBlocker(self.blank_action):
-            self.blank_action.setChecked(self.minus_blank.isChecked())
-        st = self.ws.active
-        self.blank_action.setEnabled(bool(st and st.run.ms is not None and self.ws.blank_ids(st)))
-        if self.subtraction_state != "off":
-            self.blank_action.setEnabled(False)
         self.use_scans.setEnabled(self.subtraction_state == "off")
         self.auto_scans.setEnabled(self.subtraction_state == "off")
-        for action in self.mode_group.actions():
-            with QSignalBlocker(action):
-                action.setChecked(action.data() == self.mode.currentIndex())
         for action in self.spectrum_actions:
             action.setEnabled(bool(self.spec is not None and self.spec.ab.size))
-        if hasattr(self, "navigation_actions"):
-            for action in self.navigation_actions[:2]:
-                action.setEnabled(self.source == "scan" and self.subtraction_state == "off")
-            self.navigation_actions[2].setEnabled(self.source != "peak" or self.subtraction_state != "off")
-            self.navigation_actions[3].setEnabled(self.bg_range is not None)
         self._update_caption_tip()
-
-    def _set_hide_noise(self, enabled):
-        self.plot.hide_noise = enabled
-        QSettings().setValue("spectrum/hide_noise", enabled)
-        self.plot._redraw()
 
     def _update_caption_tip(self):
         detail = self.plot.caption.text() + ("\n" + self.info.text() if self.info.text() else "")
@@ -423,7 +369,9 @@ class SpectrumDock(QWidget):
         self.refresh()
 
     def back_to_peak(self):
-        self._reset_subtraction()
+        if self.subtraction_state == "off":
+            self.bg_range = None                 # a Shift+right-drag background ends here; a cancelled
+        self._reset_subtraction()                # baseline subtraction keeps it
         self.source = "peak"
         self.refresh()
 
@@ -490,10 +438,6 @@ class SpectrumDock(QWidget):
         self._sync_actions()
         self._show_scan_trace(st, self.spec)
         self._spectrum_changed()
-
-    def clear_background(self):
-        self.bg_range = None
-        self.refresh()
 
     def step(self, delta: int) -> None:
         """Move a scan spectrum by ``delta`` scans (a range keeps its width)."""
@@ -678,10 +622,7 @@ class SpectrumDock(QWidget):
 
     def _sync_blank_box(self):
         from gcws.core.keys import is_derived
-        st = self.ws.active
-        has = bool(st is not None and st.run.ms is not None and self.ws.blank_ids(st))
         self.minus_blank.blockSignals(True)
-        self.blank_action.setEnabled(has)
         if self.ws.signal_key != self._last_key:          # a blank trace brings blank spectra with it
             self.minus_blank.setChecked(is_derived(self.ws.signal_key))
             self._last_key = self.ws.signal_key

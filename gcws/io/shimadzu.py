@@ -4,6 +4,11 @@ QGD stores scan offsets, millisecond retention times and spectra in OLE streams.
 Layout reference: https://github.com/scisciuro/shimadzu-qgd2csv
 Each spectrum is checked against its index boundary, RT and stored TIC. Unknown
 layouts fail explicitly instead of silently dropping scans or inventing data.
+
+Unlike Agilent data.ms (thresholded at acquisition), a QGD scan stores every
+mass of the scan range on a detector offset of ~500 counts. The offset is
+removed after validation (:func:`remove_offset`) so spectra, EIC/BPC and
+deconvolution see centroid-like data; the stored TIC is kept as it is.
 """
 from __future__ import annotations
 
@@ -43,7 +48,19 @@ def decode_scan(block: bytes, rt_ms: int) -> tuple[np.ndarray, np.ndarray]:
     return mz, ab.astype(float)
 
 
+def remove_offset(mz: np.ndarray, ab: np.ndarray, k: float = 3.0) -> tuple[np.ndarray, np.ndarray]:
+    """The scan without its detector offset: ions more than ``k`` robust sigmas above the
+    scan's median, minus that median. Sparse scans (already thresholded) are returned as they are."""
+    if ab.size < 32:
+        return mz, ab
+    floor = float(np.median(ab))
+    sigma = 1.4826 * float(np.median(np.abs(ab - floor)))
+    keep = ab - floor > k * sigma
+    return mz[keep], ab[keep] - floor
+
+
 class QGDSource:
+    offset_removed = True                       # spectra are offset-free; ``tic`` is the stored TIC
     def __init__(self, path: Path):
         try:
             from olefile import OleFileIO
@@ -75,7 +92,7 @@ class QGDSource:
                 mz, ab = decode_scan(raw[int(start):int(end)], int(rt_ms[i]))
                 if abs(float(ab.sum()) - self.tic[i]) > 0.5:
                     raise ValueError("decoded spectrum sum disagrees with the stored TIC")
-                self._spectra.append((mz, ab))
+                self._spectra.append(remove_offset(mz, ab))
             except ValueError as exc:
                 raise ValueError(f"QGD scan {i + 1}: {exc}") from exc
 

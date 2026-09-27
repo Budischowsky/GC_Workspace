@@ -99,7 +99,7 @@ def test_actual_qgd_sample():
     assert run.fid is None and run.role == "sample"
     assert run.ms.n_scans == 4420
     assert run.ms.rt[[0, -1]].tolist() == pytest.approx([2.5, 24.595])
-    assert np.array_equal(run.ms.tic(), run.ms.stored_tic)
+    assert np.array_equal(run.signal("TIC").y, run.ms.stored_tic)      # the instrument TIC
     assert p in list_runs(p.parent)
     assert sources(p) == {"MS": p.name}
 

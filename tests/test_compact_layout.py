@@ -92,15 +92,13 @@ def test_ms_shared_actions_scan_overlay_and_details(qtbot, win, samples):
     assert sp.spec is not None and sp.source == "scan"
     assert not hasattr(sp, "source_bar")
     assert sp.info.isHidden() and not hasattr(sp, "source_text") and not hasattr(sp, "b_back")
-    assert all(a in sp.context_menu.actions() for a in sp.navigation_actions)
+    assert not any(a.text().startswith(("Previous scan", "Next scan", "Back to peak", "Hide noise"))
+                   for a in sp.context_menu.actions() + win.ms_menu.actions())
     from PySide6.QtWidgets import QLabel, QToolButton
     assert not any(b.text() == "Details" for b in sp.plot.findChildren(QToolButton))
     assert not any(label.text().lower() == "scan spectrum" for label in sp.plot.findChildren(QLabel))
-    for action in sp.spectrum_actions + [sp.blank_action]:
+    for action in sp.spectrum_actions:
         assert action in win.ms_menu.actions() and action in sp.context_menu.actions()
-    mode = sp.mode_group.actions()[1]
-    mode.trigger()
-    assert sp.mode.currentIndex() == 1
     old = sp.spec.apex_scans[0]
     sp.step(1)
     assert sp.spec.apex_scans[0] == old + 1

@@ -24,6 +24,9 @@ libraries are no longer copied from `..\NIAS Working`. The unknown register is k
 
 Shimadzu full-scan `.qgd` files can be loaded from the folder tree or **File > Load Shimadzu QGD files**.
 The reader validates scan boundaries, retention times and spectrum sums against the stored TIC.
+Shimadzu scans store every mass on a detector offset (~500 counts); after validation the offset is
+removed per scan (ions more than 3 robust σ above the scan median are kept), so HS spectra read like
+thresholded Agilent spectra. The TIC chromatogram and HS areas use the stored instrument TIC.
 Unsupported layouts are rejected with an import error; the acquisition file remains unchanged.
 
 ## HS-Screening
@@ -127,10 +130,8 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
      mean spectrum over a range, Shift+right-drag to set a background range that is subtracted. In the
      spectrum panel ← / → step one scan and Esc returns to the selected peak. Clicking an ion in a spectrum
      shows its EIC in the MS chromatogram panel.
-   - **Hide noise**, enabled by default in the Mass Spectrum menu, hides background-level ions in dense
-     spectra using median + 3 × 1.4826 × MAD. It only changes plotted bars and labels; raw values,
-     searches and MSP exports remain intact. Navigation and background controls are in the spectrum
-     context menu; detailed scan notes appear on hover over the single caption.
+   - Scan navigation is on the keyboard only; a plain return to the peak (Esc) also ends a background
+     range. Detailed scan notes appear on hover over the single caption.
    - **Subtract baseline**, beside Library search, starts a two-scan selection: right-click the apex,
      then a different baseline scan in a chromatogram. The displayed difference spectrum is used by
      spectrum searches and MSP export. Click the button again or press Escape to clear it. Sample
@@ -191,10 +192,9 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
        FID shares are estimates based on MS response, labelled in area tooltips and report review notes.
        EIC/BPC proportional splits are disabled because they need signal-specific weights.
      - Each fragment retains its component spectrum for default display, library search and export,
-       including after undo/redo, reintegration and project reload. **Raw scans** spectrum modes let
-       you inspect measured spectra explicitly. Raw blank counts are not subtracted from normalized
-       component spectra. Parent identifications remain unassigned and available for undo; hover over
-       the table's orphaned-ID count to review them.
+       including after undo/redo, reintegration and project reload. Raw blank counts are not
+       subtracted from normalized component spectra. Parent identifications remain unassigned and
+       available for undo; hover over the table's orphaned-ID count to review them.
      - The split completion message reports fragments hidden by table filters. Calculations run in
        the background with cancellation; changed settings or samples invalidate obsolete results.
        Components can also be added as peaks or have their spectrum pinned to the selected peak.

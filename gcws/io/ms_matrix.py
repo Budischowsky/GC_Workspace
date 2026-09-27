@@ -28,6 +28,7 @@ class MSMatrix:
     mz: np.ndarray        # float64
     ab: np.ndarray        # float64
     nom: np.ndarray       # nominal m/z per point (int64)
+    instrument_tic: bool = False   # the TIC chromatogram is ``stored_tic`` (points were offset-corrected)
 
     @property
     def n_scans(self) -> int:
@@ -41,7 +42,9 @@ class MSMatrix:
             return cls._from_datams(src)
         if hasattr(src, "arrays"):
             parts = [src.arrays(i) for i in range(src.n_scans)]
-            return cls._build(src.rt, src.tic, [p[0] for p in parts], [p[1] for p in parts])
+            m = cls._build(src.rt, src.tic, [p[0] for p in parts], [p[1] for p in parts])
+            m.instrument_tic = bool(getattr(src, "offset_removed", False))
+            return m
         parts = [src.spectrum(i) for i in range(src.n_scans)]
         mzs = [np.array([p[0] for p in s], float) for s in parts]
         abs_ = [np.array([p[1] for p in s], float) for s in parts]
