@@ -472,6 +472,58 @@ def test_deconvolution_dialog_whole_run_and_markers(qtbot, win, samples):
     win.spectrum.mode.setCurrentIndex(0)
 
 
+def test_quant_on_tic(qtbot, win, samples):
+    """The Detector choice runs the same modes on the TIC peaks (FID time axis inside)."""
+    _load(qtbot, win, samples, ["07_"])
+    ws, qd = win.ws, win.quant
+    rid, st = ws.active_id, ws.active
+    win._show_dock("quant")
+    assert qd.detector.isVisibleTo(qd) and qd.detector.currentData() == "FID"
+    # area % on TIC: the TIC peaks' own area %
+    qd.mode.setCurrentIndex(qd.mode.findData("area_pct"))
+    qd.mode.activated.emit(qd.mode.currentIndex())
+    qd.detector.setCurrentIndex(qd.detector.findData("TIC"))
+    qd.detector.activated.emit(qd.detector.currentIndex())
+    assert ws.quant["detector"] == "TIC" and ws.quant["mode"] == "area_pct"
+    ws.recompute_quant()
+    tic = ws.result(rid, "TIC")
+    rows = ws.quant_result.rows[rid]
+    assert rows and ws.quant_result.samples[rid].meta["detector"] == "TIC"
+    for i, r in rows.items():
+        assert r["conc"] == pytest.approx(tic.peaks[i].area_pct)
+        assert r["raw_area"] == pytest.approx(tic.peaks[i].area)
+    assert any(v.get("conc") for v in ws.quant_rows(rid, "TIC").values())
+    assert not any(v.get("conc") for v in ws.quant_rows(rid, "FID").values())    # other detector: RRT only
+    # ISTD concentration on TIC: ISTDs found on the TIC, their RTs kept in FID time
+    qd.mode.setCurrentIndex(qd.mode.findData("istd_conc"))
+    qd.mode.activated.emit(qd.mode.currentIndex())
+    qd.istd_conc.setValue(10.0)
+    qd.istd_conc.editingFinished.emit()
+    assert ws.quant["detector"] == "TIC" and ws.quant["istd_conc_value"] == 10.0
+    ws.recompute_quant()
+    found = [s for s in ws.quant_result.samples[rid].standards if s.get("row_id") is not None]
+    assert found
+    for s in found:
+        assert any(abs(p.apex_rt + st.delay_value - s["fid_rt"]) < 1e-6 for p in tic.peaks)
+    assert sum(1 for r in ws.quant_result.rows[rid].values() if r["conc"]) > 10
+    # a peak bound from the TIC is stored in FID time
+    ws.set_signal_key("TIC")
+    code = qd.bind_box.currentData()
+    ws.select_peak(max(range(len(tic.peaks)), key=lambda k: tic.peaks[k].area))
+    qd._bind_selected()
+    assert ws.quant["istd_bindings"][rid][code] == pytest.approx(
+        round(ws.selected_peak().apex_rt + st.delay_value, 4))
+    # Undo reaches FID again; the selector is hidden in HS mode
+    for _ in range(10):
+        if ws.quant.get("detector", "FID") == "FID":
+            break
+        win.a_undo.trigger()
+    assert ws.quant.get("detector", "FID") == "FID" and qd.detector.currentData() == "FID"
+    qd.mode.setCurrentIndex(qd.mode.findData("hs_screening"))
+    qd.mode.activated.emit(qd.mode.currentIndex())
+    assert not qd.detector.isVisibleTo(qd)
+
+
 def test_quant_panel_istd_concentration_mode(qtbot, win, samples):
     _load(qtbot, win, samples, ["07_"])
     ws, qd = win.ws, win.quant

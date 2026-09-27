@@ -105,3 +105,10 @@ def test_replicates_n3():
     conflict = combine([[_peak(10.0, "A", 1.0, "1-1-1")], [_peak(10.0, "X", 1.0, "2-2-2")],
                         [_peak(10.0, "A", 1.0, "1-1-1")]], 0.035)
     assert len(conflict) == 1 and conflict[0]["status"].startswith("Identification conflict")
+
+
+def test_quant_detector():
+    from gcws.quant.service import quant_detector
+    assert quant_detector({}) == "FID"
+    assert quant_detector({"mode": "nias_mgkg", "detector": "TIC"}) == "TIC"
+    assert quant_detector({"mode": "hs_screening", "detector": "FID"}) == "TIC"

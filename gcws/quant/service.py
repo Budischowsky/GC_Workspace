@@ -1,11 +1,11 @@
-"""Quantification of all loaded sample runs (FID), in the selected mode."""
+"""Quantification of all loaded sample runs (FID or TIC), in the selected mode."""
 from __future__ import annotations
 
 import logging
 import math
 from typing import Any, Optional
 
-from gcws.core.model import FID
+from gcws.core.model import FID, TIC
 from gcws.io.sequence import BLANK, BLANK_ISTD, LADDER, SAMPLE, STANDARD
 from gcws.quant import nias_bridge as NB
 
@@ -18,6 +18,17 @@ MODES = {
 }
 UNITS = ["µg/L", "mg/L", "mg/mL", "µg/mL", "ng/mL", "mg/kg", "µg/g", "%"]
 log = logging.getLogger(__name__)
+
+
+DETECTORS = {FID: "FID", TIC: "TIC (MS)"}
+
+
+def quant_detector(quant: dict) -> str:
+    """Signal the quantities are computed from: TIC for HS-Screening, else the panel's choice."""
+    quant = quant or {}
+    if quant.get("mode") == "hs_screening":
+        return TIC
+    return TIC if quant.get("detector") == TIC else FID
 
 
 def mode_unit(quant: dict) -> str:
@@ -122,17 +133,18 @@ def compute(ws) -> QuantResult:
         gc_fid.default_istd_defs(settings)
     options = gc_fid.normalise_istd_options(quant.get("istd_options") or {})
     mode = quant.get("mode", "nias_mgkg")
+    key = quant_detector(quant)
     lookup = cas_lookup() if mode == "nias_mgkg" else {}
     dets: dict[str, Any] = {}
 
     def det_of(rid):
         if rid not in dets:
             st = ws.runs.get(rid)
-            dets[rid] = NB.convert(st) if st is not None and FID in st.results else None
+            dets[rid] = NB.convert(st, key) if st is not None and key in st.results else None
         return dets[rid]
 
     for st in ws.states():
-        if st.role not in (SAMPLE, STANDARD) or FID not in st.results:
+        if st.role not in (SAMPLE, STANDARD) or key not in st.results:
             continue
         try:
             det = det_of(st.id)
@@ -144,6 +156,7 @@ def compute(ws) -> QuantResult:
             bindings = (quant.get("istd_bindings") or {}).get(st.id) or {}
             sample = NB.build_sample(st, det, result, settings, istd_defs=defs, istd_options=options,
                                      cas_lookup=lookup, istd_bindings=bindings)
+            sample.meta["detector"] = key
             ladder = {int(k): float(v) for k, v in ((quant.get("ri") or {}).get("ladder") or {}).items()}
             if ladder:
                 import gc_qc
@@ -196,7 +209,7 @@ def rows_for(sample, st, mode, quant, settings, defs, options) -> dict[int, dict
             c_istd = None
         mean_area = istd_reference_area(sample, options)
     out = {}
-    res = st.results.get(FID)
+    res = st.results.get(quant_detector(quant))
     for row in sample.rows:
         idx = row.derived.get("gcws_index")
         if idx is None:

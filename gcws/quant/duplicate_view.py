@@ -163,9 +163,9 @@ def suggest_partner(ws, run_id: str) -> str | None:
 
 def member_problems(ws, members: list[str]) -> list[str]:
     """Why determinations cannot be compared, one line per run (empty list: fine)."""
-    from gcws.core.model import FID
     from gcws.io.sequence import ROLE_LABELS
-    key = "TIC" if ws.quant.get("mode") == "hs_screening" else FID
+    from gcws.quant.service import quant_detector
+    key = quant_detector(ws.quant)
     out = []
     for m in members:
         st = ws.runs.get(m)
@@ -188,7 +188,8 @@ def compute(ws, members: list[str], policy: str = "all"):
     from gcws.quant.nias_bridge import make_settings
     from gcws.quant.replicates import combine, engine_peaks
     members = [m for m in members if m in ws.runs]
-    key = "TIC" if ws.quant.get("mode") == "hs_screening" else "FID"
+    from gcws.quant.service import quant_detector
+    key = quant_detector(ws.quant)
     if ws.quant_result is None or any(m not in ws.quant_result.samples
                                       and key in ws.runs[m].results
                                       and ws.runs[m].role in ("sample", "standard")
@@ -197,7 +198,7 @@ def compute(ws, members: list[str], policy: str = "all"):
     problems = member_problems(ws, members)
     samples = [ws.nias_sample(m) for m in members]
     if problems or not samples or any(s is None for s in samples):
-        return [], problems or ["every determination needs role Sample and an FID integration"]
+        return [], problems or [f"every determination needs role Sample and an {key} integration"]
     mode = ws.quant.get("mode", "nias_mgkg")
     lists = []
     for m, s in zip(members, samples):

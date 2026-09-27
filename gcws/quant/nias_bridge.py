@@ -57,16 +57,23 @@ class Determination:
     peaks: dict                      # peak number -> our Peak
     index: dict                      # peak number -> index in the result
     spectra_scans: dict = field(default_factory=dict)
+    key: str = FID                   # signal the peaks come from (FID or TIC)
 
 
 def convert(st, key: str = FID) -> Optional[Determination]:
-    """FID peaks + identifications of one run as AutoLib objects."""
+    """FID (or TIC) peaks + identifications of one run as AutoLib objects.
+
+    The engine works in FID time (ISTD target RTs, bindings, solvent end), so TIC peaks enter
+    it shifted by the FID-MS delay (FID time = MS time + delay)."""
+    from gcws.core.keys import is_fid
     res = st.results.get(key)
     if res is None:
         return None
     eng = engine()
     idents, _ = st.ident_set(key).bind(res.peaks)
     delay = st.delay_value
+    fid_axis = is_fid(key)
+    shift = 0.0 if fid_axis else delay
     ms_start = float(st.run.ms.rt[0]) if st.run.ms is not None and st.run.ms.n_scans else None
     ms_end = float(st.run.ms.rt[-1]) if st.run.ms is not None and st.run.ms.n_scans else None
     fid, pbm, id_map, peaks, index = [], {}, {}, {}, {}
@@ -74,15 +81,15 @@ def convert(st, key: str = FID) -> Optional[Determination]:
         if p.negative:
             continue
         n = i + 1
-        fid.append(eng.FIDPeak(peak=n, rt=float(p.apex_rt), start=float(p.start), end=float(p.end),
-                               pk_type=(p.type_start + p.type_end), height=float(p.height),
-                               area=float(p.area)))
+        fid.append(eng.FIDPeak(peak=n, rt=float(p.apex_rt) + shift, start=float(p.start) + shift,
+                               end=float(p.end) + shift, pk_type=(p.type_start + p.type_end),
+                               height=float(p.height), area=float(p.area)))
         peaks[n] = p
         index[n] = i
         ident = idents.get(i)
         component = p.extra.get("deconv_component")
-        ms_rt = component["rt"] if component else p.apex_rt - delay
-        has_ms = ms_start is not None and ms_start <= ms_rt <= ms_end
+        ms_rt = component["rt"] if component else (p.apex_rt - delay if fid_axis else p.apex_rt)
+        has_ms = (not fid_axis) or (ms_start is not None and ms_start <= ms_rt <= ms_end)
         if ident is not None:
             id_map[n] = ident
         if ident is not None and ident.name:
@@ -99,7 +106,7 @@ def convert(st, key: str = FID) -> Optional[Determination]:
             pbm[n] = eng.PBMPeak(n, float(ms_rt), float(p.area_pct), hits)
         elif has_ms:
             pbm[n] = eng.PBMPeak(n, float(ms_rt), float(p.area_pct), [])
-    return Determination(st.id, fid, pbm, delay, id_map, peaks, index)
+    return Determination(st.id, fid, pbm, delay, id_map, peaks, index, key=key)
 
 
 def assigned_rows(det: Determination, settings) -> tuple[list, list]:
@@ -199,8 +206,11 @@ def build_sample(st, det: Determination, result: dict, settings, *, label: str =
     """A ``gc_fid.NiasSample`` exactly as ``load_determination`` would build it."""
     import gc_fid
     import gc_model as M
+    from gcws.core.keys import is_fid
     ids = M.allocate_ids()
     rows = []
+    fid_axis = is_fid(det.key)
+    shift = 0.0 if fid_axis else det.delay          # bounds in FID time, like the RT
     for peak in sorted(result["peaks"], key=lambda x: x["rt"]):
         n = peak["fid_peak"]
         ours = det.peaks[n]
@@ -218,11 +228,11 @@ def build_sample(st, det: Determination, result: dict, settings, *, label: str =
         if name is None:
             name = M.UNKNOWN_DISPLAY_NAME
             status = M.ID_UNKNOWN
-        row = M.PeakRow(row_id=next(ids), peak_no=0, source="FID+PBM", rt=float(peak["rt"]),
-                        area=peak.get("area"), name=name, cas=M.clean_cas(cas) or "0",
-                        si=peak.get("quality"))
+        row = M.PeakRow(row_id=next(ids), peak_no=0, source="FID+PBM" if fid_axis else "TIC",
+                        rt=float(peak["rt"]), area=peak.get("area"), name=name,
+                        cas=M.clean_cas(cas) or "0", si=peak.get("quality"))
         row.height = float(ours.height)
-        row.fid_start, row.fid_end = float(ours.start), float(ours.end)
+        row.fid_start, row.fid_end = float(ours.start) + shift, float(ours.end) + shift
         row.fid_pk_ty = ours.type_code
         row.fid_baseline = M.BASELINE_DROP if ours.type_start == "V" or ours.type_end == "V" else M.BASELINE_ENDPOINT
         row.integration_origin = _origin(ours)

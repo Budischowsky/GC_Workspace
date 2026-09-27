@@ -343,7 +343,8 @@ class DuplicatePage(QWidget):
         return "hs_edits:" + self.ws.quant_unit() if self.ws.quant.get("mode") == "hs_screening" else "edits"
 
     def quant_signal(self):
-        return "TIC" if self.ws.quant.get("mode") == "hs_screening" else FID
+        from gcws.quant.service import quant_detector
+        return quant_detector(self.ws.quant)
 
     def compare(self, sync: bool = False):
         key = self.quant_signal()
@@ -751,6 +752,9 @@ class DuplicatePage(QWidget):
     def _draw_mirror(self):
         self.mirror.clear()
         self._traces, self._marks = [], []
+        det = self.quant_signal()
+        self.mirror.setLabel("bottom", f"RT ({det})", units="min")
+        self.mirror.setLabel("left", f"A  ↑   {det}   ↓  B")
         self.mirror.addItem(self.cursor, ignoreBounds=True)
         traces = [self._trace(m) for m in self.members[:2]]
         for sign, tr in zip((1, -1), traces):

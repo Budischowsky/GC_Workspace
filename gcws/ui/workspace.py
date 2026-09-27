@@ -482,20 +482,21 @@ class Workspace(QObject):
     def quant_rows(self, run_id: str, key: Optional[str] = None) -> dict:
         """``{peak index: quantification values}`` of ``key``'s peaks (default: working signal).
 
-        The quantification is computed on the raw FID. A blank-subtracted FID trace shows the
-        values of the FID peak with the nearest apex (one-to-one, within the RT tolerance);
-        NIAS MS traces receive RRT only; HS quantities use TIC peaks."""
+        The quantification is computed on the raw quantification detector (FID or TIC, see
+        :func:`gcws.quant.service.quant_detector`). A blank-subtracted trace of it shows the
+        values of the peak with the nearest apex (one-to-one, within the RT tolerance); traces
+        of the other detector receive RRT only; HS quantities use TIC peaks."""
         st = self.runs.get(run_id)
         key = self.effective_key(st, key or self.signal_key)
         hs = self.quant.get("mode") == "hs_screening"
-        detector = TIC if hs else FID
+        from gcws.quant.service import quant_detector, rrt_rows
+        detector = quant_detector(self.quant)
         if self.quant_result is None or st is None:
             return {}
         res = self.result(run_id, key)
-        from gcws.quant.service import rrt_rows
         rrt = rrt_rows(self.quant_result.samples.get(run_id), self.quant, st,
                        res.peaks if res is not None else [], key)
-        if not (base_key(key) == TIC if hs else is_fid(key)):
+        if not (base_key(key) == TIC if detector == TIC else is_fid(key)):
             return rrt
         rows = self.quant_result.rows.get(run_id, {})
         if key == detector or not rows:
@@ -569,7 +570,7 @@ class Workspace(QObject):
                     for key in keys[st.id]:
                         if is_derived(key) == derived:
                             self.integrate(st.id, key)
-        if hs_changed or any((old or {}).get(k) != (new or {}).get(k) for k in ("blank_sub", "istd_defs", "istd_bindings", "hs")):
+        if hs_changed or any((old or {}).get(k) != (new or {}).get(k) for k in ("blank_sub", "istd_defs", "istd_bindings", "hs", "detector")):
             self.invalidate_blank(None)             # the ISTD windows are kept out of the subtraction
         if cut_changed or (old or {}).get("deconv") != (new or {}).get("deconv"):
             for st in self.states():

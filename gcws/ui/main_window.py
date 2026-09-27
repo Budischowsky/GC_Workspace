@@ -1025,12 +1025,13 @@ class MainWindow(QMainWindow):
         m = self.istd_menu
         m.clear()
         p = self.ws.selected_peak()
-        _hs, codes, bound = self._istd_choices()
+        hs, codes, bound = self._istd_choices()
+        apex = None if p is None else (p.apex_rt if hs else self.quant.binding_rt(p))   # binding axis
         for code, name in codes:
             a = m.addAction(f"{code}  {name}".rstrip())
             rt = bound.get(code)
             a.setCheckable(True)
-            a.setChecked(p is not None and rt is not None and abs(float(rt) - p.apex_rt) <= self.ws.ISTD_BOUND_TOL)
+            a.setChecked(apex is not None and rt is not None and abs(float(rt) - apex) <= self.ws.ISTD_BOUND_TOL)
             if rt is not None and not a.isChecked():
                 a.setToolTip(f"now bound to {float(rt):.3f} min")
             a.setEnabled(p is not None)
@@ -1051,7 +1052,7 @@ class MainWindow(QMainWindow):
             if not self.quant.hs_panel.bind(code):
                 return
         else:
-            self.quant._set_binding(code, round(p.apex_rt, 4))
+            self.quant._set_binding(code, self.quant.binding_rt(p))
         self.statusBar().showMessage(f"Peak {p.apex_rt:.3f} min set as {code}", 6000)
 
     def open_register(self):
@@ -1129,7 +1130,9 @@ class MainWindow(QMainWindow):
                 return
         if not samples or any(s is None for s in samples):
             errs = [self.ws.quant_result.errors.get(m, "") for m in members]
-            QMessageBox.warning(self, "Report", "Every determination needs role Sample and an " + ("TIC" if hs else "FID") + " integration.\n"
+            from gcws.quant.service import quant_detector
+            QMessageBox.warning(self, "Report", "Every determination needs role Sample and an "
+                                + quant_detector(self.ws.quant) + " integration.\n"
                                 + "\n".join(e for e in errs if e))
             return
         if kind == "nias" and not any(s.mean_factor for s in samples):

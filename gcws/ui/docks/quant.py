@@ -8,7 +8,8 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
                                QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton,
                                QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
-from gcws.quant.service import MODES, UNITS
+from gcws.core.keys import is_fid
+from gcws.quant.service import DETECTORS, MODES, UNITS, quant_detector
 from gcws.ui.undo import ValueCommand
 
 
@@ -36,6 +37,13 @@ class QuantDock(QScrollArea):
         for k, v in MODES.items():
             self.mode.addItem(v, k)
         self.mode.activated.connect(self._mode_changed)
+        self.detector = QComboBox()
+        for k, v in DETECTORS.items():
+            self.detector.addItem(v, k)
+        self.detector.setToolTip("Peaks the quantities are computed from: the FID trace or the MS total "
+                                 "ion current (TIC). ISTDs, blanks and identifications are taken from the "
+                                 "same detector.")
+        self.detector.activated.connect(self._mode_changed)
         # the unit and ISTD concentration only exist for the "Internal standard concentration" mode;
         # the other modes have a fixed unit (shown read-only)
         self.unit = QComboBox()
@@ -52,6 +60,7 @@ class QuantDock(QScrollArea):
         self.mode_note.setObjectName("hint")
         self.mode_note.setTextFormat(Qt.RichText)
         f.addRow("Mode", self.mode)
+        f.addRow("Detector", self.detector)
         f.addRow("ISTD concentration", self.istd_conc)
         f.addRow("Unit", self.unit)
         f.addRow("Result unit", self.result_unit)
@@ -183,6 +192,9 @@ class QuantDock(QScrollArea):
         for group in self.legacy_groups:
             group.setVisible(not hs)
         self.hs_panel.setVisible(hs)
+        self.mode_form.setRowVisible(self.detector, not hs)
+        det = quant_detector(q)
+        self.detector.setCurrentIndex(max(0, self.detector.findData(det)))
         own = mode == "istd_conc"
         self.mode_form.setRowVisible(self.unit, own)
         self.mode_form.setRowVisible(self.istd_conc, own)
@@ -200,7 +212,7 @@ class QuantDock(QScrollArea):
             "hs_screening": "<b>HS-Screening:</b> MS-only quantification from TIC peak areas. "
                             "Configure the seven HS standards and sample amount below.",
             "nias_mgkg": "<b>What it computes:</b> mg/kg food simulant.<br>"
-                         "mg/dm² = blank-corrected FID area × mean ISTD factor; mg/kg = mg/dm² × O/V.<br>"
+                         f"mg/dm² = blank-corrected {det} area × mean ISTD factor; mg/kg = mg/dm² × O/V.<br>"
                          "The factor comes from the Internal standards table (concentration, area) and the "
                          "migration conditions (cell area, coverage, O/V). Blank correction: the larger of "
                          "the Blank / Blank+ISTD areas.",
@@ -213,9 +225,11 @@ class QuantDock(QScrollArea):
             "total_ugl": "<b>What it computes:</b> µg/L in the extract (total extraction).<br>"
                          "c = corrected area ÷ mean ISTD area × c(ISTD in the extract), where c(ISTD) follows "
                          "from the ISTD amount and the extract volume of the NIAS parameters.",
-            "area_pct": "<b>What it computes:</b> the area % of every peak among all integrated peaks "
-                        "(solvent excluded). No ISTD needed.",
-        }[mode])
+            "area_pct": f"<b>What it computes:</b> the area % of every {det} peak among all integrated "
+                        "peaks (solvent excluded). No ISTD needed.",
+        }[mode] + ("" if hs or det != "TIC" else
+                   "<br><b>TIC:</b> areas, ISTDs, blanks and names come from the TIC peaks; RTs in the "
+                   "ISTD table, the bindings and the solvent end stay in FID time (TIC + FID-MS offset)."))
         if hs:
             self.hs_panel.refresh()
             self._loading = False
@@ -278,14 +292,16 @@ class QuantDock(QScrollArea):
         self.bound.setRowCount(0)
         st = self.ws.active
         sample = self.ws.quant_result.samples.get(st.id) if (st and self.ws.quant_result) else None
+        det = quant_detector(self.ws.quant)
         if sample is None:
-            self.factor.setText("Quantification applies to chromatograms with role Sample (FID).")
+            self.factor.setText(f"Quantification applies to chromatograms with role Sample ({det}).")
             return
+        shift = 0.0 if is_fid(det) else -st.delay_value      # bindings are kept in FID time
         for std in sample.standards:
             r = self.bound.rowCount()
             self.bound.insertRow(r)
             dev = std.get("deviation")
-            vals = (std.get("code"), std.get("name"), f"{std['fid_rt']:.3f}" if std.get("fid_rt") else "",
+            vals = (std.get("code"), std.get("name"), f"{std['fid_rt'] + shift:.3f}" if std.get("fid_rt") else "",
                     f"{std['fid_area']:,.0f}" if std.get("fid_area") else "",
                     f"{dev:+.1f}" if dev is not None else "", std.get("status", ""))
             for c, v in enumerate(vals):
@@ -314,11 +330,16 @@ class QuantDock(QScrollArea):
         if q["mode"] != "hs_screening":
             q["unit"] = self.unit.currentText().strip() or UNITS[0]
             q["istd_conc_value"] = self.istd_conc.value()
+            det = self.detector.currentData()
+            if det != q.get("detector", "FID"):
+                q["detector"] = det
         if q == self.ws.quant:
             return
         old = self.ws.quant
         if q["mode"] != old.get("mode"):
             text = f"quantification mode {MODES[q['mode']]}"
+        elif q.get("detector", "FID") != old.get("detector", "FID"):
+            text = f"quantification detector {q['detector']}"
         else:
             text = f"ISTD concentration {q['istd_conc_value']:g} {q['unit']}"
         self._push_quant(text, q)
@@ -400,7 +421,13 @@ class QuantDock(QScrollArea):
         if p is None:
             QMessageBox.information(self, "ISTD", "Select the ISTD peak in the chromatogram or table first.")
             return
-        self._set_binding(self.bind_box.currentData(), round(p.apex_rt, 4))
+        self._set_binding(self.bind_box.currentData(), self.binding_rt(p))
+
+    def binding_rt(self, p) -> float:
+        """Apex of the selected peak in FID time, the axis the ISTD bindings are kept on."""
+        st = self.ws.active
+        shift = 0.0 if st is None or is_fid(self.ws.signal_key) else st.delay_value
+        return round(p.apex_rt + shift, 4)
 
     def _unbind(self):
         self._set_binding(self.bind_box.currentData(), None)
