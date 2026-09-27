@@ -338,8 +338,10 @@ reshuffle it.
   dock it there. Drag a plot title over the centre of another panel to tab the panels together.
 - *Layout* menu: presets (Chromatogram top, Table left (classic), Integration, Review, Dual monitor), saved
   named layouts, and a switch to lock the panels.
-- **Dark mode**: *View > Dark mode* (Ctrl+Shift+D) switches between the light and the dark look at once and is
-  remembered. Plots, icons and run colours follow; exported pictures and reports stay on white paper.
+- **Themes**: *Layout > Light Mode / Dark Mode / Dark Mode - Neon* switches the look at once and is remembered;
+  Ctrl+Shift+D steps to the next theme. *Dark Mode - Neon* is black and dark grey with neon cyan accents; the
+  chromatograms are drawn in neon colours with a soft glow. Plots, icons and run colours follow every theme;
+  exported pictures and reports stay on white paper with the light run colours.
 
 ## Projects
 

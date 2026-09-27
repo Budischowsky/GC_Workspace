@@ -34,7 +34,7 @@ def _pen(color="#303030", w=2.0, style=Qt.SolidLine):
 
 ACCENT = "#1F6F8B"          # the light theme's accent; icons asking for it follow the current theme
 
-#: current colours, set by ``theme.set_mode`` (outline, fill, accent)
+#: current colours, set by ``theme.set_theme`` (outline, fill, accent)
 INK, PAPER, CURRENT_ACCENT = "#33424D", "#FFFFFF", ACCENT
 
 

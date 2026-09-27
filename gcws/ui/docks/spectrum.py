@@ -441,7 +441,8 @@ class SpectrumDock(QWidget):
         theme.register_plot(self.scan_plot, self._scan_theme)
         self.apex_reg = pg.LinearRegionItem(brush=pg.mkBrush(theme.qcolor(theme.PLOT["apex_region"], 50)))
         self.bg_reg = pg.LinearRegionItem(brush=pg.mkBrush(theme.qcolor(theme.PLOT["bg_region"], 40)))
-        self.scan_curve = pg.PlotDataItem(pen=pg.mkPen(theme.PLOT["secondary"]))
+        self.scan_curve = pg.PlotDataItem(pen=pg.mkPen(theme.PLOT["secondary"]),
+                                          shadowPen=theme.glow_pen(theme.PLOT["secondary"]))
         for it in (self.scan_curve, self.apex_reg, self.bg_reg):
             self.scan_plot.addItem(it)
         use = self.use_scans = QPushButton("Use these scans")
@@ -1102,6 +1103,7 @@ class SpectrumDock(QWidget):
         self.apex_reg.setBrush(pg.mkBrush(theme.qcolor(theme.PLOT["apex_region"], 50)))
         self.bg_reg.setBrush(pg.mkBrush(theme.qcolor(theme.PLOT["bg_region"], 40)))
         self.scan_curve.setPen(pg.mkPen(theme.PLOT["secondary"]))
+        self.scan_curve.setShadowPen(theme.glow_pen(theme.PLOT["secondary"]))
 
     def _emit(self, signal):
         pts = self.points()

@@ -1211,23 +1211,50 @@ def _contrast(a, b) -> float:
     return (hi + 0.05) / (lo + 0.05)
 
 
-def test_dark_mode(qtbot, win, samples, tmp_path):
+def test_theme_menu(win):
+    """The themes live in the Layout menu (one checked at a time), no longer in View."""
+    from gcws.ui import theme
+    layout = next(a.menu() for a in win.menuBar().actions() if a.text() == "&Layout")
+    labels = [a.text() for a in layout.actions()]
+    assert all(label in labels for label in ("Light Mode", "Dark Mode", "Dark Mode - Neon"))
+    assert not any("dark" in a.text().lower() for a in win.view_menu.actions())
+    assert win.theme_group.isExclusive() and win.theme_actions[theme.MODE].isChecked()
+    assert win.a_next_theme.shortcut().toString() == "Ctrl+Shift+D"
+
+
+def test_saved_theme_reads_the_old_dark_switch(win):
+    from PySide6.QtCore import QSettings
+    from gcws.ui import theme
+    s = QSettings()
+    assert theme.saved_theme() == "light"
+    s.setValue("prefs/dark_mode", True)                 # set by earlier versions
+    assert theme.saved_theme() == "dark"
+    s.setValue("prefs/theme", "neon")
+    assert theme.saved_theme() == "neon"
+    s.setValue("prefs/theme", "no such theme")
+    assert theme.saved_theme() == "dark"
+
+
+@pytest.mark.parametrize("name", ["dark", "neon"])
+def test_dark_mode(qtbot, win, samples, tmp_path, name):
     from PySide6.QtCore import QSettings, QSize
-    from PySide6.QtGui import QImage, QPalette
+    from PySide6.QtGui import QColor, QImage, QPalette
     from PySide6.QtWidgets import QApplication
     from gcws.ui import icons, theme
     from gcws.ui.dialogs import export_chrom as E
     app = QApplication.instance()
+    tokens = theme.THEMES[name]
     _load(qtbot, win, samples, ["07_"])
     st = win.ws.active
     light_color = st.color
     before = icons.icon("zoom").pixmap(QSize(32, 32)).toImage()
     try:
-        win.a_dark.setChecked(True)
-        assert theme.is_dark() and QSettings().value("prefs/dark_mode", False, type=bool)
+        win.theme_actions[name].trigger()
+        assert theme.MODE == name and theme.is_dark() and QSettings().value("prefs/theme") == name
+        assert win.theme_actions[name].isChecked() and not win.theme_actions["light"].isChecked()
         pal = app.palette()
-        assert pal.color(QPalette.Window).name().lower() == theme.DARK["BG"].lower()
-        assert theme.DARK["ACCENT"].lower() in app.styleSheet().lower()
+        assert pal.color(QPalette.Window).name().lower() == tokens["BG"].lower()
+        assert tokens["ACCENT"].lower() in app.styleSheet().lower()
         # every text stays readable, buttons included (WCAG AA: 4.5:1)
         for fg, bg in ((theme.TEXT, theme.BG), (theme.TEXT, theme.SURFACE), (theme.TEXT, theme.SURFACE_ALT),
                        (theme.MUTED, theme.BG), (theme.MUTED, theme.SURFACE), (theme.ACCENT_TEXT, theme.ACCENT_SOFT),
@@ -1239,19 +1266,38 @@ def test_dark_mode(qtbot, win, samples, tmp_path):
             fg, soft = theme.LEVELS[level]
             assert _contrast(fg, soft) >= 4.5 and _contrast(fg, theme.SURFACE) >= 4.5, level
         assert _contrast(theme.BORDER_STRONG, theme.SURFACE) >= 1.8          # button outlines are visible
-        # plots, icons and run colours follow
-        assert win.chrom.plot.backgroundBrush().color().name().lower() == theme.DARK["PLOT"]["bg"].lower()
-        assert st.color == theme.DARK["RUN_COLORS"][theme.LIGHT["RUN_COLORS"].index(light_color)]
+        # plots, icons and run colours follow; only the neon chromatograms glow
+        assert win.chrom.plot.backgroundBrush().color().name().lower() == tokens["PLOT"]["bg"].lower()
+        assert st.color == tokens["RUN_COLORS"][theme.LIGHT["RUN_COLORS"].index(light_color)]
         assert icons.icon("zoom").pixmap(QSize(32, 32)).toImage() != before
-        # a picture for a report stays white
-        out = E.export([win.chrom], tmp_path / "dark.png", 600, 200)
+        curve = win.chrom.curves[st.id]
+        assert curve.opts["pen"].color().name().lower() == st.color.lower()
+        shadow = curve.opts.get("shadowPen")
+        if name == "neon":
+            assert shadow is not None and shadow.color().name().lower() == st.color.lower()
+            assert shadow.widthF() > curve.opts["pen"].widthF()
+        else:
+            assert shadow is None
+        # a picture for a report stays white, its traces in the light colours without the halo
+        out = E.export([win.chrom], tmp_path / f"{name}.png", 600, 200)
         img = QImage(str(out))
         assert img.pixelColor(3, img.height() - 3).lightness() > 240
-        assert theme.is_dark() and win.chrom.plot.backgroundBrush().color().name().lower() == \
-            theme.DARK["PLOT"]["bg"].lower()
+        themed, paper = QColor(st.color), QColor(light_color)
+
+        def near(c, ref):
+            return abs(c.red() - ref.red()) + abs(c.green() - ref.green()) + abs(c.blue() - ref.blue()) < 12
+        pixels = [img.pixelColor(x, y) for x in range(img.width()) for y in range(img.height())]
+        assert sum(near(c, paper) for c in pixels) > 5 * sum(near(c, themed) for c in pixels) + 50
+        if name == "neon":                  # no blend of the light trace comes near a neon colour
+            assert not any(near(c, themed) for c in pixels)
+        assert theme.MODE == name and win.chrom.plot.backgroundBrush().color().name().lower() == \
+            tokens["PLOT"]["bg"].lower()
+        assert curve.opts["pen"].color().name().lower() == st.color.lower()       # restored after the export
+        assert (curve.opts.get("shadowPen") is not None) == (name == "neon")
     finally:
-        win.a_dark.setChecked(False)
+        win.theme_actions["light"].trigger()
     assert not theme.is_dark() and st.color == light_color
+    assert win.chrom.curves[st.id].opts.get("shadowPen") is None
     assert app.palette().color(QPalette.Window).name().lower() == theme.LIGHT["BG"].lower()
     for fg, bg in ((theme.TEXT, theme.SURFACE), (theme.ACCENT_TEXT, theme.ACCENT_SOFT), (theme.ON_ACCENT, theme.ACCENT)):
         assert _contrast(fg, bg) >= 4.5

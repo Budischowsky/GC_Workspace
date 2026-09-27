@@ -1,4 +1,4 @@
-"""The application look: a light and a dark theme with a single calm accent.
+"""The application look: a light, a dark and a neon theme, each with a single accent.
 
 Everything that has a colour takes it from here: the Qt palette and style
 sheet, the plots, status colours in tables and the run colours. Widgets mark
@@ -8,12 +8,14 @@ muted helper text with ``setObjectName("hint")`` and primary actions with
 from __future__ import annotations
 
 from PySide6.QtCore import QObject, Qt, Signal as QtSignal
-from PySide6.QtGui import QBrush, QColor, QPalette
+from PySide6.QtGui import QBrush, QColor, QPalette, QPen
 from PySide6.QtWidgets import QApplication, QDockWidget, QLabel
 
 # -- tokens --------------------------------------------------------------------
-# Two sets with the same names: LIGHT (default) and DARK. ``set_mode`` loads one into the
-# module names below, so ``theme.ACCENT`` etc. always give the colour of the current mode.
+# Sets with the same names: LIGHT (default), DARK and NEON. ``set_theme`` loads one into the
+# module names below, so ``theme.ACCENT`` etc. always give the colour of the current theme.
+# The run colours of all sets correspond by position (same hue family), so a switch keeps
+# each chromatogram recognisable.
 
 LIGHT = {
     "ACCENT": "#1F6F8B", "ACCENT_HOVER": "#185A71", "ACCENT_PRESSED": "#124658",
@@ -38,7 +40,7 @@ LIGHT = {
         "blank_fill": (140, 150, 160, 70), "label": "#33424D", "label_selected": "#124658", "event": "#7E57C2",
         "off_region": (120, 130, 140, 26), "spectrum": "#1F6F8B", "reference": "#C0392B",
         "apex_region": "#1F6F8B", "bg_region": "#C0392B", "secondary": "#46555F", "band": (31, 111, 139, 45),
-        "band_bg": (192, 57, 43, 45),
+        "band_bg": (192, 57, 43, 45), "glow": False,
     },
 }
 
@@ -63,9 +65,40 @@ DARK = {
         "blank_fill": (150, 162, 172, 70), "label": "#D3DDE3", "label_selected": "#A6E1F0", "event": "#B79CFF",
         "off_region": (200, 210, 220, 22), "spectrum": "#4DB6D0", "reference": "#FF7A6B",
         "apex_region": "#4DB6D0", "bg_region": "#FF7A6B", "secondary": "#B9C6CE", "band": (77, 182, 208, 55),
-        "band_bg": (242, 118, 106, 55),
+        "band_bg": (242, 118, 106, 55), "glow": False,
     },
 }
+
+#: black and dark grey with neon cyan as the accent; chromatograms glow in neon colours
+NEON = {
+    "ACCENT": "#00E5FF", "ACCENT_HOVER": "#5CF0FF", "ACCENT_PRESSED": "#00B8D4",
+    "ACCENT_SOFT": "#062A30", "ACCENT_SOFT2": "#0B3F48",
+    "ACCENT_TEXT": "#7DF9FF", "ON_ACCENT": "#00161A",
+    "BG": "#08080A", "SURFACE": "#111114", "SURFACE_ALT": "#18181D",
+    "BORDER": "#26262E", "BORDER_STRONG": "#42424F",
+    "TEXT": "#ECECF4", "MUTED": "#A4A4B8", "FAINT": "#666676",
+    "OK": "#39FF14", "OK_SOFT": "#0D2A08", "WARN": "#FFE600", "WARN_SOFT": "#2D2904",
+    "BAD": "#FF3B6B", "BAD_SOFT": "#361019", "INFO": "#4DA3FF", "INFO_SOFT": "#0C1C35",
+    "NEUTRAL": "#B4B4C8", "NEUTRAL_SOFT": "#222229", "ORANGE_SOFT": "#35200A",
+    "INK": "#DCDCE8", "PAPER": "#1C1C22",
+    "CHEVRON": "-dark", "CLOSE_ICON": "-dark",
+    #: neon versions of the same hues, in the same order
+    "RUN_COLORS": ["#00E5FF", "#FF7A1A", "#39FF14", "#FF2BD6", "#FFE600", "#6CCBFF", "#FF8A66", "#B967FF",
+                   "#FFB300", "#FF4FA3", "#5C7CFF", "#00FFB3", "#D4FF3A", "#E07BFF", "#2FA8FF", "#E6F2FF"],
+    "PLOT": {
+        "bg": "#050506", "fg": "#AEAEC2", "grid_alpha": 0.14, "cursor": "#FF2BD6", "cursor_text": "#FF7AE6",
+        "baseline": "#FF3B6B", "drop": (200, 200, 220, 150), "manual_fill": (255, 122, 26, 90),
+        "blank_fill": (160, 160, 180, 70), "label": "#E6E6F0", "label_selected": "#00E5FF", "event": "#B967FF",
+        "off_region": (190, 190, 220, 20), "spectrum": "#00E5FF", "reference": "#FF2BD6",
+        "apex_region": "#00E5FF", "bg_region": "#FF2BD6", "secondary": "#D4FF3A", "band": (0, 229, 255, 50),
+        "band_bg": (255, 43, 214, 50),
+        "glow": True,                  # traces get a soft halo of their own colour
+    },
+}
+
+THEMES = {"light": LIGHT, "dark": DARK, "neon": NEON}
+#: menu names (Layout menu)
+THEME_LABELS = {"light": "Light Mode", "dark": "Dark Mode", "neon": "Dark Mode - Neon"}
 
 MODE = "light"
 RUN_COLORS: list = []
@@ -96,7 +129,21 @@ _load(LIGHT)
 
 
 def is_dark() -> bool:
-    return MODE == "dark"
+    """True for every theme on a dark background (Dark Mode and Dark Mode - Neon)."""
+    return MODE != "light"
+
+
+def paper_color(color) -> QColor:
+    """``color`` for a picture on white paper: a run colour of the current theme becomes the
+    light theme's colour at the same place (alpha kept); any other colour stays as it is."""
+    c = QColor(color)
+    names = [n.lower() for n in RUN_COLORS]
+    name = c.name().lower()
+    if MODE == "light" or name not in names:
+        return c
+    out = QColor(LIGHT["RUN_COLORS"][names.index(name)])
+    out.setAlpha(c.alpha())
+    return out
 
 
 def qcolor(value, alpha: int | None = None) -> QColor:
@@ -104,6 +151,17 @@ def qcolor(value, alpha: int | None = None) -> QColor:
     if alpha is not None:
         c.setAlpha(alpha)
     return c
+
+
+def glow_pen(color, width: float = 4.0, alpha: int = 50) -> QPen | None:
+    """The halo drawn behind a trace (a wide, faint pen of its colour) in a theme whose traces
+    glow (Dark Mode - Neon), else None - for pyqtgraph's ``shadowPen``."""
+    if not PLOT["glow"]:
+        return None
+    pen = QPen(qcolor(color, alpha))
+    pen.setWidthF(width)
+    pen.setCosmetic(True)
+    return pen
 
 
 def status_brush(level: str) -> QBrush:
@@ -357,18 +415,26 @@ class ActiveDockTracker(QObject):
         self._current = dock
 
 
+def saved_theme() -> str:
+    """The theme chosen last (``prefs/theme``); the older on/off dark mode setting still counts."""
+    from PySide6.QtCore import QSettings
+    s = QSettings()
+    name = s.value("prefs/theme", "", type=str)
+    if name in THEMES:
+        return name
+    return "dark" if s.value("prefs/dark_mode", False, type=bool) else "light"
+
+
 def apply(app=None) -> None:
-    """Apply the theme to ``app`` (idempotent); the mode is the saved preference."""
+    """Apply the theme to ``app`` (idempotent); the theme is the saved preference."""
     app = app or QApplication.instance()
     if app is None:
         return
     if app.property("gcws_theme"):
         configure_plots()
         return
-    from PySide6.QtCore import QSettings
-    dark = QSettings().value("prefs/dark_mode", False, type=bool)
     app.setStyle("Fusion")
-    set_mode(dark, app)
+    set_theme(saved_theme(), app)
     app._gcws_dock_tracker = ActiveDockTracker(app)
     app.setProperty("gcws_theme", True)
 
@@ -377,10 +443,10 @@ def ensure_applied() -> None:
     apply(QApplication.instance())
 
 
-# -- switching the mode --------------------------------------------------------
+# -- switching the theme -------------------------------------------------------
 
 class _Notifier(QObject):
-    changed = QtSignal(bool)                    # dark
+    changed = QtSignal(str)                     # theme name
 
 
 _notifier = None
@@ -394,22 +460,24 @@ def notifier() -> _Notifier:
     return _notifier
 
 
-def set_mode(dark: bool, app=None) -> None:
-    """Switch between the light and the dark look, live: palette, style sheet, plots, icons."""
+def set_theme(name: str, app=None) -> None:
+    """Switch to the theme ``name`` (a key of THEMES), live: palette, style sheet, plots, icons."""
     global MODE
-    _load(DARK if dark else LIGHT)
-    MODE = "dark" if dark else "light"
+    if name not in THEMES:
+        name = "light"
+    _load(THEMES[name])
+    MODE = name
     configure_plots()
     app = app or QApplication.instance()
     if app is not None:
         try:
-            app.styleHints().setColorScheme(Qt.ColorScheme.Dark if dark else Qt.ColorScheme.Light)
+            app.styleHints().setColorScheme(Qt.ColorScheme.Dark if is_dark() else Qt.ColorScheme.Light)
         except (AttributeError, TypeError):
             pass
         app.setPalette(palette())
         app.setStyleSheet(qss())
     _restyle_plots()
-    notifier().changed.emit(dark)
+    notifier().changed.emit(name)
 
 
 def register_plot(widget, on_change=None) -> None:
@@ -454,14 +522,14 @@ class light_plots:
     """``with theme.light_plots():`` - pictures for reports and exports are always light."""
 
     def __enter__(self):
-        self.dark = is_dark()
-        if self.dark:                             # colours only: the items read them when painted
+        self.mode = MODE
+        if self.mode != "light":                  # colours only: the items read them when painted
             _load(LIGHT)
             _restyle_plots(callbacks=False)
         return self
 
     def __exit__(self, *exc):
-        if self.dark:
-            _load(DARK)
+        if self.mode != "light":
+            _load(THEMES[self.mode])
             _restyle_plots(callbacks=False)
         return False

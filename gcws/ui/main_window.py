@@ -276,14 +276,6 @@ class MainWindow(QMainWindow):
             self.view_menu.addAction(d.toggleViewAction())
         self.view_menu.addSeparator()
         self.view_menu.addAction(self.a_eic)
-        self.view_menu.addSeparator()
-        self.a_dark = self.view_menu.addAction("Dark mode")
-        self.a_dark.setCheckable(True)
-        self.a_dark.setShortcut("Ctrl+Shift+D")
-        self.a_dark.setToolTip("Switch between the light and the dark look (remembered)")
-        from gcws.ui import theme as _theme
-        self.a_dark.setChecked(_theme.is_dark())
-        self.a_dark.toggled.connect(self.set_dark_mode)
 
         from gcws.ui.layout.plot_menus import ChromatogramMenu
         self.chrom_menu = ChromatogramMenu(self)
@@ -364,6 +356,19 @@ class MainWindow(QMainWindow):
         a = m.addAction("Lock panels")
         a.setCheckable(True)
         a.toggled.connect(self._lock)
+        m.addSeparator()
+        from gcws.ui import theme
+        self.theme_group = QActionGroup(self)          # exclusive: one look at a time
+        self.theme_actions = {}
+        for name, label in theme.THEME_LABELS.items():
+            a = m.addAction(label)
+            a.setCheckable(True)
+            a.setChecked(name == theme.MODE)
+            self.theme_group.addAction(a)
+            a.triggered.connect(lambda _=False, n=name: self.set_theme(n))
+            self.theme_actions[name] = a
+        self.a_next_theme = m.addAction("Next theme", self.next_theme)
+        self.a_next_theme.setShortcut("Ctrl+Shift+D")
 
         m = mb.addMenu("&Help")
         m.addAction("Keyboard shortcuts", self.show_shortcuts)
@@ -770,26 +775,34 @@ class MainWindow(QMainWindow):
 
     # -- look ------------------------------------------------------------------------------
 
-    def set_dark_mode(self, on: bool):
-        """View > Dark mode: switch live; run colours follow (same hue, visible on the new background)."""
+    def set_theme(self, name: str):
+        """Layout > Light Mode / Dark Mode / Dark Mode - Neon: switch live and remember it; run
+        colours follow (the same place in the new theme's palette, visible on its background)."""
         from gcws.ui import theme
-        if on == theme.is_dark():
+        if name not in theme.THEMES:
             return
-        old = list(theme.RUN_COLORS)
-        theme.set_mode(on)
-        QSettings().setValue("prefs/dark_mode", on)
-        for st in self.ws.states():
-            if st.color in old:
-                st.color = theme.RUN_COLORS[old.index(st.color)]
-        for panel in (self.chrom, self.chrom2):
-            panel.refresh()
-        self.table.reload()
-        self.spectrum.refresh()
-        self.replicates.duplicate._reapply()
-        self._refresh_run_chips()
-        self.loaded_samples.sync()
-        if self.a_dark.isChecked() != on:
-            self.a_dark.setChecked(on)
+        if name != theme.MODE:
+            old = list(theme.RUN_COLORS)
+            theme.set_theme(name)
+            QSettings().setValue("prefs/theme", name)
+            for st in self.ws.states():
+                if st.color in old:
+                    st.color = theme.RUN_COLORS[old.index(st.color)]
+            for panel in (self.chrom, self.chrom2):
+                panel.refresh()
+            self.table.reload()
+            self.spectrum.refresh()
+            self.replicates.duplicate._reapply()
+            self._refresh_run_chips()
+            self.loaded_samples.sync()
+        if not self.theme_actions[name].isChecked():
+            self.theme_actions[name].setChecked(True)
+
+    def next_theme(self):
+        """Ctrl+Shift+D: Light -> Dark -> Neon -> Light."""
+        from gcws.ui import theme
+        names = list(theme.THEMES)
+        self.set_theme(names[(names.index(theme.MODE) + 1) % len(names)])
 
     # -- processing methods --------------------------------------------------------------
 
@@ -1506,7 +1519,8 @@ class MainWindow(QMainWindow):
         lines += ["", "    F5   Integrate active", "Shift+F5   Integrate all", "Ctrl+F   Library search",
                   "Ctrl+E   EI Atlas hit list", "Ctrl+N   NIST search", "Ctrl+I   Extracted ion chromatogram",
                   "Ctrl+K   Deconvolution: split the selected peak into its components",
-                  "Ctrl+Z / Ctrl+Y   Undo / Redo", "",
+                  "Ctrl+Z / Ctrl+Y   Undo / Redo",
+                  "Ctrl+Shift+D   Next theme (Light / Dark / Neon)", "",
                   "Mouse in a chromatogram:",
                   "  right-click              mass spectrum at that time",
                   "  right-drag               mean spectrum over the range",

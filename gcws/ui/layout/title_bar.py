@@ -106,7 +106,7 @@ class DockTitleBar(QWidget):
             w.style().polish(w)
         self.update_buttons()
 
-    def _theme_changed(self, _dark: bool = False) -> None:
+    def _theme_changed(self, _name: str = "") -> None:
         try:
             self.update_buttons()
         except RuntimeError:                  # the dock is already gone
