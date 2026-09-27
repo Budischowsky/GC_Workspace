@@ -155,6 +155,12 @@ def _render(name: str, color: str, ink: str, paper: str) -> QPixmap:
             f.setPixelSize(12)
             qp.setFont(f)
             qp.drawText(QRectF(14, 0, 18, 14), Qt.AlignCenter, "A")
+    elif name == "subtract":
+        qp.setPen(_pen(dark, 1.6))
+        for x, h in ((5, 12), (10, 20), (15, 9), (20, 15)):
+            qp.drawLine(QPointF(x, 28), QPointF(x, 28 - h))
+        qp.setPen(_pen(color, 2.6))
+        qp.drawLine(QPointF(19, 7), QPointF(29, 7))
     elif name == "search":
         qp.setPen(_pen(dark, 1.6))
         for x, h in ((7, 10), (12, 18), (17, 7), (22, 14)):

@@ -384,8 +384,8 @@ class PeakTable(QWidget):
                     sub.addAction(label).triggered.connect(lambda _=False, hit=h, r=rows[0]: self._use_hit(r, hit))
             for act in self.context_actions:
                 m.addAction(act)
-        m.addSeparator()
-        m.addAction("Choose columns...").triggered.connect(self.choose_columns)
+        if m.isEmpty():
+            return
         m.exec(self.view.viewport().mapToGlobal(pos))
 
     def _hide_blank_toggled(self, on):

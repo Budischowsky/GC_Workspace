@@ -6,7 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import QByteArray, QSettings, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QDockWidget, QFileDialog, QInputDialog, QLabel,
-                               QMainWindow, QMessageBox, QProgressBar, QPushButton, QToolBar, QWidget)
+                               QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QToolBar, QWidget)
 
 import gcws
 from gcws.core import project as P
@@ -183,7 +183,7 @@ class MainWindow(QMainWindow):
         self.a_search = A("Library search...", self.library_search, "Ctrl+F", icon("search"),
                           "Automatic library search of all integrated peaks (your libraries)")
         self.a_search_method = A("Search methods...", self.edit_search_methods)
-        self.a_subtract = A("Subtract baseline", self.spectrum.toggle_subtraction,
+        self.a_subtract = A("Subtract baseline", self.spectrum.toggle_subtraction, None, icon("subtract"),
                             tip="Right-click the apex, then the baseline in a chromatogram", checkable=True)
         self.a_cancel_subtract = A("Cancel baseline subtraction", self.spectrum.back_to_peak, "Escape")
         self.a_cancel_subtract.setEnabled(False)
@@ -195,7 +195,9 @@ class MainWindow(QMainWindow):
         self.spectrumSearchNistAction = A("Search selected peak in NIST", self.nist_selected, "Ctrl+N")
         self.atlasResearchAction = A("Investigate selected peak in EI Atlas...", self.atlas_research, "Ctrl+Shift+E")
         self.a_eic = A("Extracted ion chromatogram...", self.ask_eic, "Ctrl+I")
-        self.setIstdAction = A("Set selected peak as ISTD...", self.set_istd_selected)
+        self.istd_menu = QMenu("Set selected peak as ISTD", self)
+        self.istd_menu.setToolTip("Bind the selected peak to an internal standard of the active sample")
+        self.istd_menu.aboutToShow.connect(self._fill_istd_menu)
         self.registerUnknownAction = A("Register selected peak as unknown...", self.register_unknown)
         self.tool_actions = {}
         group = QActionGroup(self)
@@ -221,7 +223,7 @@ class MainWindow(QMainWindow):
         tb.addAction(self.a_search)
         tb.addAction(self.a_subtract)
         from gcws.ui import theme
-        for a in (self.a_integrate, self.a_search):
+        for a in (self.a_integrate, self.a_search, self.a_subtract):
             theme.set_primary(tb.widgetForAction(a))
         self.addToolBar(Qt.TopToolBarArea, tb)
 
@@ -318,7 +320,7 @@ class MainWindow(QMainWindow):
             roles.addAction(label, lambda r=role: self.ws.active_id and self.set_role(self.ws.active_id, r))
         self.quant_menu.addAction("Assign blanks...", lambda: self.ws.active_id and self.assign_blanks(self.ws.active_id))
         self.quant_menu.addAction("Blank subtraction settings...", self.edit_blank_options)
-        self.quant_menu.addAction(self.setIstdAction)
+        self.quant_menu.addMenu(self.istd_menu)
         self.quant_menu.addSeparator()
         self.quant_menu.addAction("Quantification panel", lambda: self._show_dock("quant"))
         self.quant_menu.addAction("Double determination...", lambda: self.open_double_determination())
@@ -402,7 +404,7 @@ class MainWindow(QMainWindow):
         self.props.assignBlanksRequested.connect(self.assign_blanks)
         self.props.roleRequested.connect(self.set_role)
         self.table.set_context_actions([self.spectrumSearchNistAction, self.spectrumSearchAtlasAction,
-                                        self.registerUnknownAction, self.setIstdAction])
+                                        self.registerUnknownAction, self.istd_menu.menuAction()])
         self.table.searchRequested.connect(self.library_search)
         self.table.integrateRequested.connect(self.integrate)
         for plot in self.chroms:
@@ -1004,13 +1006,33 @@ class MainWindow(QMainWindow):
 
     # -- quantification helpers --------------------------------------------------------
 
-    def set_istd_selected(self):
+    def _istd_defs(self):
+        """The standards the selected peak can be bound to, in the current quantification mode."""
+        if self.ws.quant.get("mode") == "hs_screening":
+            from gcws.quant.hs import default_defs
+            return self.ws.quant.get("hs", {}).get("istd_defs") or default_defs()
+        return self.quant._defs()
+
+    def _fill_istd_menu(self):
+        self.istd_menu.clear()
+        defs = [d for d in self._istd_defs() if d.get("code")]
+        for d in defs:
+            name = str(d.get("name") or "").strip()
+            self.istd_menu.addAction(f"{d['code']}  {name}" if name else d["code"],
+                                     lambda _=False, c=d["code"]: self.set_istd_selected(c))
+        if not defs:
+            self.istd_menu.addAction("No internal standards defined").setEnabled(False)
+
+    def set_istd_selected(self, code):
+        """Bind the selected peak to ``code`` in the active sample (undoable); no panel is opened."""
         p = self.ws.selected_peak()
         if p is None or self.ws.active is None:
             QMessageBox.information(self, "ISTD", "Select a peak first.")
             return
-        self._show_dock("quant")
-        self.quant._bind_selected()
+        if self.ws.quant.get("mode") == "hs_screening":
+            self.quant.hs_panel.bind(code)
+        else:
+            self.quant._set_binding(code, round(p.apex_rt, 4))
 
     def open_register(self):
         from gcws.ui.dialogs.register import RegisterWindow
@@ -1465,7 +1487,7 @@ class MainWindow(QMainWindow):
                   "  a peak picked in the table zooms both chromatograms to it",
                   "",
                   "Panels: double-click a title to maximize the panel, again to restore the layout.",
-                  "Spectrum panel: ← / → step one scan, Esc returns to the peak."]
+                  "Spectrum panel: ← / → step one scan, Esc returns to the peak and clears the background range."]
         QMessageBox.information(self, "Keyboard shortcuts", "\n".join(lines))
 
     def about(self):

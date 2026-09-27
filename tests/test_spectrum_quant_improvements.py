@@ -6,7 +6,6 @@ import numpy as np
 import pytest
 
 from test_ui import win, _load
-from gcws.ms.display import visible_ions
 from gcws.ms.spectra import ScanRequest, subtract
 from gcws.quant.service import rrt_rows
 
@@ -20,36 +19,47 @@ def qgd_run():
     return load_run(path)
 
 
-@pytest.mark.parametrize("rt,scan,count", [(5.465, 594, 24), (6.275, 756, 35)])
-def test_screenshot_noise(qgd_run, rt, scan, count):
-    ms = qgd_run.ms
-    i = ms.scan_at_rt(rt)
-    assert i + 1 == scan
-    mz, ab = ms.nominal_spectrum_arrays([i])
-    original = ab.copy()
-    mask = visible_ions(mz, ab)
-    assert mask.sum() == count
-    assert mask[ab.argmax()]
-    np.testing.assert_array_equal(ab, original)
-    assert visible_ions(mz, ab, False).sum() == 316
-
-
-def test_sparse_empty_and_noise_only():
-    assert visible_ions([], []).size == 0
-    assert visible_ions([43, 45, 61, 88], [100, 10, 2, 1]).all()
-    assert visible_ions(np.arange(40) * 10, np.ones(40)).all()
-    assert not visible_ions(np.arange(40), np.ones(40)).any()
-
-
-def test_noise_only_plot_and_persistent_toggle(qtbot, win):
-    from gcws.ui.docks.spectrum import StickPlot
+def test_every_positive_ion_is_plotted(qtbot, win):
     win.spectrum.plot.show_spectrum(np.arange(40), np.ones(40))
-    assert not win.spectrum.plot._mz.size
-    win.spectrum.noise_action.setChecked(False)
     assert win.spectrum.plot._mz.size == 40
-    another = StickPlot()
-    qtbot.addWidget(another)
-    assert not another.hide_noise
+    win.spectrum.plot.show_spectrum(np.array([43, 57, 71]), np.array([100., 0., 5.]))
+    assert win.spectrum.plot._mz.tolist() == [43, 71]
+    assert not hasattr(win.spectrum, "noise_action") and not hasattr(win.spectrum.plot, "hide_noise")
+
+
+def test_ms_menus_hold_only_spectrum_actions(qtbot, win):
+    sp = win.spectrum
+    removed = {"hide noise", "previous scan", "next scan", "back to peak", "clear background",
+               "spectrum mode", "subtract blank"}
+    for menu in (win.ms_menu, sp.context_menu):
+        texts = [a.text().lower() for a in menu.actions()]
+        assert not any(t.startswith(r) for t in texts for r in removed), texts
+        assert all(a in menu.actions() for a in sp.spectrum_actions)
+    assert sp.current_mode() == "average_bg"
+
+
+def test_subtract_baseline_button_matches_toolbar(qtbot, win):
+    from PySide6.QtWidgets import QToolBar
+    tb = next(t for t in win.findChildren(QToolBar) if t.objectName() == "tb.main")
+    button = tb.widgetForAction(win.a_subtract)
+    assert not win.a_subtract.icon().isNull()
+    assert button.property("primary") == tb.widgetForAction(win.a_search).property("primary") is True
+
+
+def test_subtraction_click_on_another_overlaid_run():
+    from gcws.ui.docks.spectrum import SpectrumDock
+    own = SimpleNamespace(id="own", delay_value=0.2, run=SimpleNamespace(ms=object()))
+    other = SimpleNamespace(id="other", delay_value=0.3, run=SimpleNamespace(ms=object()))
+    dock = SimpleNamespace(ws=SimpleNamespace(runs={"own": own, "other": other}), subtraction_run="own")
+    # FID axis at 10.0 min: the other run's MS time is 9.7, the subtraction run's is 9.8
+    req = SpectrumDock._on_subtraction_run(dock, ScanRequest("other", 9.7, 9.7, None, "FID"))
+    assert req.run_id == "own" and req.t0 == pytest.approx(9.8) and req.t1 == pytest.approx(9.8)
+    req = SpectrumDock._on_subtraction_run(dock, ScanRequest("other", 9.7, 9.7, None, "TIC"))
+    assert req.run_id == "own" and req.t0 == pytest.approx(9.7)
+    same = ScanRequest("own", 5., 5.)
+    assert SpectrumDock._on_subtraction_run(dock, same) is same
+    del dock.ws.runs["own"]
+    assert SpectrumDock._on_subtraction_run(dock, ScanRequest("other", 1., 1.)) is None
 
 
 def test_noise_plot_and_subtraction(qtbot, win, qgd_run):
@@ -60,11 +70,7 @@ def test_noise_plot_and_subtraction(qtbot, win, qgd_run):
     st = ws.active
     sp.show_range(ScanRequest(st.id, 5.465, 5.465))
     raw_points = sp.points()
-    assert len(sp.plot._mz) == 24 and len(raw_points) == 316
-    sp.noise_action.setChecked(False)
-    assert len(sp.plot._mz) == 316 and sp.points() == raw_points
-    sp.noise_action.setChecked(True)
-    assert sp.points() == raw_points
+    assert len(sp.plot._mz) == 316 and len(raw_points) == 316
     sp.bg_range = (4., 4.1)
     before = copy.deepcopy(st.spectrum_overrides)
     win.a_subtract.trigger()

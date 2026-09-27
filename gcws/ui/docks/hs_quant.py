@@ -148,7 +148,7 @@ class HSQuantPanel(QWidget):
         cfg["istd_defs"] = defs
         self.push(cfg, "HS internal standards")
 
-    def bind(self):
+    def bind(self, code=None):
         from gcws.core.keys import base_key
         p = self.ws.selected_peak()
         if p is None or base_key(self.ws.signal_key) != "TIC":
@@ -160,15 +160,17 @@ class HSQuantPanel(QWidget):
                 QMessageBox.information(self, "HS standard", "Select this standard in the raw TIC to bind it.")
                 return
             p = self.ws.result(self.ws.active_id, "TIC").peaks[i]
-        self.binding(p.apex_rt)
+        self.binding(p.apex_rt, code)
 
-    def binding(self, rt):
-        if self.ws.active is None:
+    def binding(self, rt, code=None):
+        """``code`` defaults to the standard chosen in this panel."""
+        code = code or self.codes.currentData()
+        if self.ws.active is None or not code:
             return
         cfg = copy.deepcopy(self.config())
         bindings = cfg.setdefault("istd_bindings", {}).setdefault(self.ws.active.id, {})
         if rt is ...:
-            bindings.pop(self.codes.currentData(), None)
+            bindings.pop(code, None)
         else:
-            bindings[self.codes.currentData()] = rt
+            bindings[code] = rt
         self.push(cfg, "HS internal standard binding")

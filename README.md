@@ -33,7 +33,8 @@ HS has its own seven internal standards, sample amounts, bindings and solvent cu
 calculations retain their previous behavior. Save a project to retain sample-specific values; save a
 processing method to reuse the HS standard definitions.
 
-1. Enter the seven standard names and target retention times, or bind selected TIC peaks. The initial
+1. Enter the seven standard names and target retention times, or bind selected TIC peaks (also with
+   **Set selected peak as ISTD > HS1–HS7** in the peak table's right-click menu). The initial
    amounts are **1 µg per headspace vial**; names and retention times are deliberately left unset.
 2. Activate the standards to use. Keep **Use mean of activated ISTD areas** checked for averaging,
    or uncheck it and activate exactly one standard. Missing activated standards prevent quantification.
@@ -125,15 +126,15 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
    at that time.
    - **Spectra by time**: right-click any chromatogram for the mass spectrum at that time, right-drag for the
      mean spectrum over a range, Shift+right-drag to set a background range that is subtracted. In the
-     spectrum panel ← / → step one scan and Esc returns to the selected peak. Clicking an ion in a spectrum
-     shows its EIC in the MS chromatogram panel.
-   - **Hide noise**, enabled by default in the Mass Spectrum menu, hides background-level ions in dense
-     spectra using median + 3 × 1.4826 × MAD. It only changes plotted bars and labels; raw values,
-     searches and MSP exports remain intact. Navigation and background controls are in the spectrum
-     context menu; detailed scan notes appear on hover over the single caption.
+     spectrum panel ← / → step one scan and Esc returns to the selected peak and clears the background
+     range (keyboard only; these are not in the menus). Clicking an ion in a spectrum shows its EIC in the
+     MS chromatogram panel. Every ion is plotted. The Mass Spectrum menu and the spectrum's right-click
+     menu hold the spectrum actions only (library hits, own library, NIST, MSP, register, add to library);
+     detailed scan notes appear on hover over the single caption.
    - **Subtract baseline**, beside Library search, starts a two-scan selection: right-click the apex,
      then a different baseline scan in a chromatogram. The displayed difference spectrum is used by
-     spectrum searches and MSP export. Click the button again or press Escape to clear it. Sample
+     spectrum searches and MSP export. Click the button again or press Escape to clear it. In overlaid
+     views a click near another sample's curve still picks the scan of the sample being subtracted. Sample
      changes cancel it; existing peak assignments and background ranges are preserved.
    - **Export chromatogram** (*File* menu or the panel's *Export...*):
      - one chromatogram or both stacked, as PNG, JPEG, TIFF, BMP, SVG or PDF;
@@ -253,6 +254,10 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
    - **Area %**.
 
    Edits of the Internal standards table apply at once and can be undone.
+
+   **Set selected peak as ISTD** (*Quantify* menu and the peak table's right-click menu) lists the standard
+   codes of the current mode (NIAS codes, or HS1–HS7 in HS-Screening). Choosing one binds the selected peak
+   in the active sample at once, as one undoable step, without opening the Quantification panel.
 
    **Migration conditions** (inside the NIAS Quantification panel): analyst, simulant (EtOH 95 %, 50 %, 20 %,
    Tenax, or *Other...* to type one), temperature, duration, cell area, coverage factor, volume and

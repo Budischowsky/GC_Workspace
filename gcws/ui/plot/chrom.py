@@ -594,7 +594,7 @@ class ChromPanel(QWidget):
         frame, d = self.frame_key(), st.delay_value
         conv = lambda t: None if t is None else to_ms(t, frame, d)
         bg_ms = (conv(bg[0]), conv(bg[1])) if bg is not None else None
-        self.spectrumRequested.emit(ScanRequest(st.id, conv(t0), conv(t1), bg_ms))
+        self.spectrumRequested.emit(ScanRequest(st.id, conv(t0), conv(t1), bg_ms, frame))
 
     def set_ms_regions(self, regions):
         """Shaded apex/background scan ranges: [(t0, t1, colour)] on the MS time axis."""

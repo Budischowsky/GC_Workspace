@@ -55,6 +55,7 @@ class ScanRequest:
     t0: float | None
     t1: float | None
     bg: tuple[float, float] | None = None
+    frame: str | None = None                   # signal key of the clicked axis (None: the MS axis)
 
 
 def to_ms(t: float, key: str, delay: float) -> float:
