@@ -194,6 +194,8 @@ class MSMatrix:
         return v
 
     def mass_range(self) -> tuple[int, int]:
-        if self.nom.size == 0:
-            return (0, 0)
-        return int(self.nom.min()), int(self.nom.max())
+        v = getattr(self, "_mass_range", None)
+        if v is None:
+            v = (0, 0) if self.nom.size == 0 else (int(self.nom.min()), int(self.nom.max()))
+            self._mass_range = v
+        return v

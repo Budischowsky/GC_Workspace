@@ -202,6 +202,7 @@ QToolButton#segment:hover:!checked {{ background: {ACCENT_SOFT}; }}
 QToolButton[primary="true"] {{ background: {ACCENT_SOFT}; border: 1px solid {ACCENT_SOFT2}; color: {ACCENT_TEXT};
     font-weight: 600; }}
 QToolButton[primary="true"]:hover {{ background: {ACCENT_SOFT2}; border-color: {ACCENT}; }}
+QToolButton[primary="true"]:checked {{ background: {ACCENT}; border-color: {ACCENT_PRESSED}; color: {ON_ACCENT}; }}
 
 QMenuBar {{ background: {SURFACE}; border-bottom: 1px solid {BORDER}; }}
 QMenuBar::item {{ padding: 4px 9px; background: transparent; }}

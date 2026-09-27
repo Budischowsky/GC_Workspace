@@ -6,7 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import QByteArray, QSettings, Qt, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QDockWidget, QFileDialog, QInputDialog, QLabel,
-                               QMainWindow, QMessageBox, QProgressBar, QPushButton, QToolBar, QWidget)
+                               QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QToolBar, QWidget)
 
 import gcws
 from gcws.core import project as P
@@ -183,8 +183,9 @@ class MainWindow(QMainWindow):
         self.a_search = A("Library search...", self.library_search, "Ctrl+F", icon("search"),
                           "Automatic library search of all integrated peaks (your libraries)")
         self.a_search_method = A("Search methods...", self.edit_search_methods)
-        self.a_subtract = A("Subtract baseline", self.spectrum.toggle_subtraction,
-                            tip="Right-click the apex, then the baseline in a chromatogram", checkable=True)
+        self.a_subtract = A("Subtract baseline", self.spectrum.toggle_subtraction, None, icon("subtract"),
+                            "Mass spectrum minus a baseline scan: click, then right-click the apex and then "
+                            "the baseline in a chromatogram (Escape clears)", True)
         self.a_cancel_subtract = A("Cancel baseline subtraction", self.spectrum.back_to_peak, "Escape")
         self.a_cancel_subtract.setEnabled(False)
         self.addAction(self.a_cancel_subtract)
@@ -195,7 +196,10 @@ class MainWindow(QMainWindow):
         self.spectrumSearchNistAction = A("Search selected peak in NIST", self.nist_selected, "Ctrl+N")
         self.atlasResearchAction = A("Investigate selected peak in EI Atlas...", self.atlas_research, "Ctrl+Shift+E")
         self.a_eic = A("Extracted ion chromatogram...", self.ask_eic, "Ctrl+I")
-        self.setIstdAction = A("Set selected peak as ISTD...", self.set_istd_selected)
+        self.istd_menu = QMenu("Set selected peak as ISTD", self)     # IS1, IS2, ... filled on opening
+        self.istd_menu.setToolTipsVisible(True)
+        self.istd_menu.aboutToShow.connect(self._fill_istd_menu)
+        self.setIstdAction = self.istd_menu.menuAction()
         self.registerUnknownAction = A("Register selected peak as unknown...", self.register_unknown)
         self.tool_actions = {}
         group = QActionGroup(self)
@@ -221,7 +225,7 @@ class MainWindow(QMainWindow):
         tb.addAction(self.a_search)
         tb.addAction(self.a_subtract)
         from gcws.ui import theme
-        for a in (self.a_integrate, self.a_search):
+        for a in (self.a_integrate, self.a_search, self.a_subtract):
             theme.set_primary(tb.widgetForAction(a))
         self.addToolBar(Qt.TopToolBarArea, tb)
 
@@ -1004,13 +1008,51 @@ class MainWindow(QMainWindow):
 
     # -- quantification helpers --------------------------------------------------------
 
-    def set_istd_selected(self):
+    def _istd_choices(self) -> tuple[bool, list[tuple[str, str]], dict]:
+        """(HS screening?, [(code, name)], {code: bound RT} of the active run) for the ISTD menu."""
+        q = self.ws.quant
+        hs = q.get("mode") == "hs_screening"
+        st = self.ws.active
+        if hs:
+            codes = self.quant.hs_panel.istd_codes()
+            bound = (q.get("hs") or {}).get("istd_bindings", {})
+        else:
+            codes = [(d["code"], d.get("name") or "") for d in self.quant._defs()]
+            bound = q.get("istd_bindings") or {}
+        return hs, codes, (bound.get(st.id) or {}) if st is not None else {}
+
+    def _fill_istd_menu(self):
+        m = self.istd_menu
+        m.clear()
+        p = self.ws.selected_peak()
+        _hs, codes, bound = self._istd_choices()
+        for code, name in codes:
+            a = m.addAction(f"{code}  {name}".rstrip())
+            rt = bound.get(code)
+            a.setCheckable(True)
+            a.setChecked(p is not None and rt is not None and abs(float(rt) - p.apex_rt) <= self.ws.ISTD_BOUND_TOL)
+            if rt is not None and not a.isChecked():
+                a.setToolTip(f"now bound to {float(rt):.3f} min")
+            a.setEnabled(p is not None)
+            a.triggered.connect(lambda _=False, c=code: self.set_istd_selected(c))
+        if not codes:
+            m.addAction("No internal standards defined").setEnabled(False)
+
+    def set_istd_selected(self, code: str):
+        """Bind the selected peak as internal standard ``code`` (IS1, IS2, ...) of the active run.
+
+        The Quantification panel takes the binding over; it is not opened."""
         p = self.ws.selected_peak()
         if p is None or self.ws.active is None:
             QMessageBox.information(self, "ISTD", "Select a peak first.")
             return
-        self._show_dock("quant")
-        self.quant._bind_selected()
+        hs, _codes, _bound = self._istd_choices()
+        if hs:
+            if not self.quant.hs_panel.bind(code):
+                return
+        else:
+            self.quant._set_binding(code, round(p.apex_rt, 4))
+        self.statusBar().showMessage(f"Peak {p.apex_rt:.3f} min set as {code}", 6000)
 
     def open_register(self):
         from gcws.ui.dialogs.register import RegisterWindow

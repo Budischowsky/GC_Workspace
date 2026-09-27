@@ -370,6 +370,12 @@ class PeakTable(QWidget):
         self.ws.undo_group.activeStack().push(cmd)
 
     def _menu(self, pos):
+        m = self.build_menu()
+        if not m.isEmpty():
+            m.exec(self.view.viewport().mapToGlobal(pos))
+
+    def build_menu(self) -> QMenu:
+        """The right-click menu of the selected rows (columns are chosen on the header / toolbar)."""
         rows = self.selected_rows()
         m = QMenu(self)
         if rows:
@@ -384,9 +390,7 @@ class PeakTable(QWidget):
                     sub.addAction(label).triggered.connect(lambda _=False, hit=h, r=rows[0]: self._use_hit(r, hit))
             for act in self.context_actions:
                 m.addAction(act)
-        m.addSeparator()
-        m.addAction("Choose columns...").triggered.connect(self.choose_columns)
-        m.exec(self.view.viewport().mapToGlobal(pos))
+        return m
 
     def _hide_blank_toggled(self, on):
         if on:

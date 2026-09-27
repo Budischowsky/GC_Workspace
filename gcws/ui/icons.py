@@ -162,6 +162,12 @@ def _render(name: str, color: str, ink: str, paper: str) -> QPixmap:
         qp.setPen(_pen(color, 2.4))
         qp.drawEllipse(QRectF(15, 3, 11, 11))
         qp.drawLine(QPointF(24, 12), QPointF(29, 17))
+    elif name == "subtract":                    # spectrum sticks minus a baseline scan
+        qp.setPen(_pen(dark, 1.6))
+        for x, h in ((5, 12), (10, 20), (15, 8), (20, 15)):
+            qp.drawLine(QPointF(x, 28), QPointF(x, 28 - h))
+        qp.setPen(_pen(color, 2.6))
+        qp.drawLine(QPointF(19, 6), QPointF(29, 6))
     elif name == "folder":
         qp.setPen(_pen("#9a7b2f", 1.4))
         qp.setBrush(QColor("#f2cf6b"))

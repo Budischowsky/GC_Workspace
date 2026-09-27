@@ -49,6 +49,9 @@ class StickPlot(pg.PlotWidget):
             self.caption = ElidedLabel()
             self.caption_overlay = PlotOverlay(self, [self.caption])
         self._last = None                           # the last drawing, redrawn on a theme switch
+        #: callable -> (lo, hi) m/z axis kept for every spectrum, or None: fitted to each spectrum
+        self.range_provider = None
+        self._home_range = None                     # ((x_lo, x_hi), (y_lo, y_hi)) of the last drawing
         self.scene().sigMouseClicked.connect(self._clicked)
         theme.register_plot(self, self._redraw)
 
@@ -64,7 +67,7 @@ class StickPlot(pg.PlotWidget):
             return
         if ev.button() != Qt.LeftButton or ev.double() or self._mz.size == 0:
             if ev.double():
-                self.getPlotItem().getViewBox().autoRange()
+                self._home()
             return
         x = self.getPlotItem().getViewBox().mapSceneToView(ev.scenePos()).x()
         i = int(np.argmin(np.abs(self._mz - x)))
@@ -101,7 +104,8 @@ class StickPlot(pg.PlotWidget):
             self.addItem(t)
             self.texts.append(t)
         lookup = {int(m): r for m, r in zip(mz, rel)}
-        x_lo, x_hi = float(min(full_mz)) - 5, float(max(full_mz)) + 5
+        fixed = self.range_provider() if self.range_provider is not None else None
+        x_lo, x_hi = (fixed[0] - 3, fixed[1] + 3) if fixed else (float(min(full_mz)) - 5, float(max(full_mz)) + 5)
         for m, (label, level) in marks.items():
             if int(m) not in lookup:
                 continue
@@ -127,9 +131,16 @@ class StickPlot(pg.PlotWidget):
                     self.addItem(t)
                     self.texts.append(t)
         self.setTitle(None if self.embedded_title else title, size="9pt")
-        vb = self.getPlotItem().getViewBox()
-        vb.setRange(xRange=(x_lo, x_hi),
-                    yRange=(-118 if ref else 0, 118), padding=0)
+        self._home_range = ((x_lo, x_hi), (-118 if ref else 0, 118))
+        self._home()
+
+    def _home(self):
+        """The whole spectrum on its axis (after drawing, and on a double-click after zooming)."""
+        if self._home_range is None:
+            self.getPlotItem().getViewBox().autoRange()
+            return
+        x, y = self._home_range
+        self.getPlotItem().getViewBox().setRange(xRange=x, yRange=y, padding=0)
 
 
 class SpectrumDock(QWidget):
@@ -185,6 +196,7 @@ class SpectrumDock(QWidget):
 
         from gcws.ui.plot.overlay import ElidedLabel
         self.plot = StickPlot(embedded_title=True)
+        self.plot.range_provider = self.mz_axis_range
         self.plot.ionClicked.connect(self.ionClicked.emit)
         self.context_menu = QMenu(self.plot)
         self.plot.contextRequested.connect(self._context_menu)
@@ -486,6 +498,24 @@ class SpectrumDock(QWidget):
         return st, res.peak_at(t)
 
     # -- data -----------------------------------------------------------------
+
+    #: m/z axis when the run's scan range is unknown: the Agilent default scan range
+    DEFAULT_MZ_AXIS = (50.0, 550.0)
+
+    def mz_axis_range(self) -> tuple[float, float]:
+        """The m/z axis every spectrum of a run is drawn on (as in Agilent Enhanced Data Analysis):
+        the run's acquired scan range, rounded outward to tens - never fitted to one spectrum."""
+        rid = self.ws.active_id
+        if self.source in ("scan", "subtraction") and self.scan_req is not None:
+            rid = self.scan_req.run_id
+        elif self.source == "component" and self.component is not None:
+            rid = self.component[0]
+        st = self.ws.runs.get(rid) if rid else None
+        ms = st.run.ms if st is not None else None
+        lo, hi = ms.mass_range() if ms is not None and ms.n_scans else (0, 0)
+        if hi <= lo:
+            return self.DEFAULT_MZ_AXIS
+        return float(lo // 10 * 10), float(-(-hi // 10) * 10)
 
     def current_mode(self) -> str:
         return self.mode.currentData()

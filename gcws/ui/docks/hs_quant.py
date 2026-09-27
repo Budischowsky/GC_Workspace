@@ -54,7 +54,7 @@ class HSQuantPanel(QWidget):
         row = QHBoxLayout()
         self.codes = QComboBox()
         row.addWidget(self.codes)
-        for label, fn in (("Bind selected TIC peak", self.bind), ("Unbind", lambda: self.binding(None)),
+        for label, fn in (("Bind selected TIC peak", lambda: self.bind()), ("Unbind", lambda: self.binding(None)),
                           ("Automatic", lambda: self.binding(...))):
             button = QPushButton(label)
             button.clicked.connect(fn)
@@ -148,27 +148,34 @@ class HSQuantPanel(QWidget):
         cfg["istd_defs"] = defs
         self.push(cfg, "HS internal standards")
 
-    def bind(self):
+    def istd_codes(self) -> list[tuple[str, str]]:
+        """(code, name) of the HS standards, in table order."""
+        return [(d["code"], d.get("name") or "") for d in self.config().get("istd_defs", default_defs())]
+
+    def bind(self, code=None) -> bool:
+        """Bind the selected TIC peak to ``code`` (default: the code chosen in the panel)."""
         from gcws.core.keys import base_key
         p = self.ws.selected_peak()
         if p is None or base_key(self.ws.signal_key) != "TIC":
             QMessageBox.information(self, "HS standard", "Select an integrated TIC peak first.")
-            return
+            return False
         if self.ws.signal_key != "TIC":
             i = self.ws.base_peak_index(self.ws.active_id, self.ws.signal_key, self.ws.selected)
             if i < 0:
                 QMessageBox.information(self, "HS standard", "Select this standard in the raw TIC to bind it.")
-                return
+                return False
             p = self.ws.result(self.ws.active_id, "TIC").peaks[i]
-        self.binding(p.apex_rt)
+        self.binding(p.apex_rt, code)
+        return True
 
-    def binding(self, rt):
-        if self.ws.active is None:
+    def binding(self, rt, code=None):
+        code = code or self.codes.currentData()
+        if self.ws.active is None or not code:
             return
         cfg = copy.deepcopy(self.config())
         bindings = cfg.setdefault("istd_bindings", {}).setdefault(self.ws.active.id, {})
         if rt is ...:
-            bindings.pop(self.codes.currentData(), None)
+            bindings.pop(code, None)
         else:
-            bindings[self.codes.currentData()] = rt
+            bindings[code] = rt
         self.push(cfg, "HS internal standard binding")
