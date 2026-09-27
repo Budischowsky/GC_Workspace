@@ -81,6 +81,18 @@ class SplitPlan:
             return self.areas[self.checked.index(index)]
         return None
 
+    def dense(self, n: int = 600):
+        """``(t, fitted, first)`` on a fine time grid, for drawing: the fitted curves of the checked
+        candidates ({candidate: curve}) and the first fit's curves of all candidates."""
+        t = np.linspace(float(self.t[0]), float(self.t[-1]), n) if self.t.size else np.empty(0)
+
+        def curves(fit, indices):
+            if fit is None:
+                return {}
+            return {i: a * F.curve(self.candidates[i].shape, t, fit.shift, fit.stretch)
+                    for i, a in zip(indices, fit.amplitudes)}
+        return t, curves(self.fit, self.checked), curves(self.first, range(len(self.candidates)))
+
     def summary(self) -> str:
         if self.fit is not None:
             text = f"Fit to {self.signal_name}: R² {self.fit.r2:.3f}"

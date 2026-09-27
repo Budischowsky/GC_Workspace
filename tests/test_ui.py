@@ -438,7 +438,7 @@ def test_deconvolution_dialog_whole_run_and_markers(qtbot, win, samples):
     dlg = DeconvolutionDialog(win, "peak")
     qtbot.addWidget(dlg)
     qtbot.waitUntil(lambda: not dlg._busy, timeout=30000)
-    assert dlg.comps and dlg.table.rowCount() == len(dlg.comps)
+    assert dlg.comps and dlg.model.rowCount() == len(dlg.plan.candidates)
     assert any(abs(c.rt - 13.409) < 0.01 for c in dlg.comps)
     import gc_deconv
     from gcws.ms.spectra import ms_times

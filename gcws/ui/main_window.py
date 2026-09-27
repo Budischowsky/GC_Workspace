@@ -201,6 +201,11 @@ class MainWindow(QMainWindow):
         self.istd_menu.aboutToShow.connect(self._fill_istd_menu)
         self.setIstdAction = self.istd_menu.menuAction()
         self.registerUnknownAction = A("Register selected peak as unknown...", self.register_unknown)
+        self.a_deconv = A("Deconvolution...", lambda: self.deconvolution("peak"), "Ctrl+K", None,
+                          "Split the selected FID or TIC peak into its deconvoluted components, or list the "
+                          "components of the visible range or the whole run")
+        self.splitDeconvAction = A("Split by deconvolution...", lambda: self.deconvolution("peak"), None, None,
+                                   "Fit the deconvoluted components to the peak and split it into them")
         self.tool_actions = {}
         group = QActionGroup(self)
         group.setExclusive(True)
@@ -312,7 +317,7 @@ class MainWindow(QMainWindow):
         m.addAction("Add current spectrum to library...", lambda: self.edit_library(True))
         m.addSeparator()
         m.addAction("Retention index (alkane ladder)...", self.retention_index)
-        m.addAction("Deconvolution of selected peak...", lambda: self.deconvolution("peak"))
+        m.addAction(self.a_deconv)
         m.addAction("Deconvolution of the whole run...", lambda: self.deconvolution("run"))
         self.identify_menu = m
 
@@ -406,7 +411,7 @@ class MainWindow(QMainWindow):
         self.props.assignBlanksRequested.connect(self.assign_blanks)
         self.props.roleRequested.connect(self.set_role)
         self.table.set_context_actions([self.spectrumSearchNistAction, self.spectrumSearchAtlasAction,
-                                        self.registerUnknownAction, self.setIstdAction])
+                                        self.registerUnknownAction, self.setIstdAction, self.splitDeconvAction])
         self.table.searchRequested.connect(self.library_search)
         self.table.integrateRequested.connect(self.integrate)
         for plot in self.chroms:
@@ -1073,7 +1078,14 @@ class MainWindow(QMainWindow):
             return
         if scope == "peak" and self.ws.selected_peak() is None:
             scope = "run"
-        dlg = DeconvolutionDialog(self, scope)
+        old = getattr(self, "_deconv_dialog", None)
+        if old is not None:
+            try:
+                old.close()          # one deconvolution window: an older one would be stale
+            except RuntimeError:
+                pass
+        self._deconv_dialog = dlg = DeconvolutionDialog(self, scope)
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
         dlg.show()
 
     def register_unknown(self):

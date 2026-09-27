@@ -36,14 +36,26 @@ def store_whole_run(st, settings: D.DeconvSettings, comps: list) -> None:
     st.deconv[("run", _skey(settings))] = comps
 
 
+def _window_key(rt_ms: float, settings: D.DeconvSettings) -> tuple:
+    return ("win", round(rt_ms, 3), _skey(settings))
+
+
+def cached_window(st, rt_ms: float, settings: D.DeconvSettings):
+    """The cached window result around ``rt_ms`` or None (safe to call from a worker)."""
+    return (getattr(st, "deconv", None) or {}).get(_window_key(rt_ms, settings))
+
+
+def store_window(st, rt_ms: float, settings: D.DeconvSettings, res: D.DeconvResult) -> None:
+    if len(st.deconv) > 400:
+        st.deconv = {k: v for k, v in st.deconv.items() if k[0] == "run"}
+    st.deconv[_window_key(rt_ms, settings)] = res
+
+
 def window(st, rt_ms: float, settings: D.DeconvSettings) -> D.DeconvResult:
-    key = ("win", round(rt_ms, 3), _skey(settings))
-    res = st.deconv.get(key)
+    res = cached_window(st, rt_ms, settings)
     if res is None:
         res = D.deconvolute_window(st.run.ms, rt_ms, settings)
-        if len(st.deconv) > 400:
-            st.deconv = {k: v for k, v in st.deconv.items() if k[0] == "run"}
-        st.deconv[key] = res
+        store_window(st, rt_ms, settings, res)
     return res
 
 
