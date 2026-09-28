@@ -725,7 +725,7 @@ def test_library_search_on_tic_copies_names_to_fid(qtbot, win, samples):
     assert dlg.target_tic.isChecked() and dlg.transfer.isChecked()
     v = dlg.values()
     assert v["target"] == "TIC" and v["transfer"] and win.search_key("TIC") == "TIC"
-    # a TIC search (EI Atlas replaced by fixed hits on the five largest TIC peaks)
+    # a TIC search (SpectrAtlas replaced by fixed hits on the five largest TIC peaks)
     items, _ = build_items(ws, [st.id], "TIC", "average_bg")
     items = sorted(items, key=lambda it: -ws.result(st.id, "TIC").peaks[it.peak_index].area)[:5]
     for n, it in enumerate(items):
@@ -1085,7 +1085,7 @@ def test_edit_library_new_entry_takes_a_spectrum(qtbot, win, samples, tmp_path, 
     dlg = EditLibraryDialog(win, {})
     qtbot.addWidget(dlg)
     assert dlg.current_library() is None and not dlg.add_btn.isEnabled()
-    # a new MSP library (no EI Atlas, no Lib2NIST needed)
+    # a new MSP library (no SpectrAtlas, no Lib2NIST needed)
     from PySide6.QtWidgets import QInputDialog
     with monkeypatch.context() as m:
         m.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("My spectra", True)))

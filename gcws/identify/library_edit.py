@@ -7,7 +7,7 @@ Where entries can go:
   converter Lib2NIST: the library is exported to MSP, the entries are added,
   edited or deleted there, a new library is built next to it in a temporary
   folder and checked by exporting it again. Only then is the original copied
-  to a backup (``<data>/library_backups``) and replaced. EI Atlas and NIST MS
+  to a backup (``<data>/library_backups``) and replaced. SpectrAtlas and NIST MS
   Search read the result like any user library.
 * **MSP files** (created here when no Lib2NIST is available); the built-in
   search reads them like any library.
@@ -209,7 +209,7 @@ class LibraryInfo:
 
     @property
     def label(self) -> str:
-        """The name EI Atlas reports for it (path relative to the Atlas folder)."""
+        """The name SpectrAtlas reports for it (path relative to the Atlas folder)."""
         try:
             return str(self.path.relative_to(self.root)) if self.root else self.name
         except ValueError:
@@ -220,7 +220,7 @@ def atlas_root() -> Optional[Path]:
     try:
         import gc_atlas
         return Path(gc_atlas.atlas_root())
-    except Exception:  # noqa: BLE001 - EI Atlas not installed / not configured
+    except Exception:  # noqa: BLE001 - SpectrAtlas not installed / not configured
         return None
 
 
@@ -232,7 +232,7 @@ def _files_lower(folder: Path) -> set[str]:
 
 
 def list_libraries(root: Optional[Path] = None) -> list[LibraryInfo]:
-    """The libraries of EI Atlas that can take own entries (and the read-only Agilent ones)."""
+    """The libraries of SpectrAtlas that can take own entries (and the read-only Agilent ones)."""
     root = Path(root) if root is not None else atlas_root()
     if root is None:
         return []
@@ -250,7 +250,7 @@ def list_libraries(root: Optional[Path] = None) -> list[LibraryInfo]:
     own = root / "libraries" / "gcws"
     if own.is_dir():
         for f in sorted(own.glob("*.msp")):
-            out.append(LibraryInfo(f.stem, f, "msp", True, "GC Workspace MSP library (EI Atlas references)", root))
+            out.append(LibraryInfo(f.stem, f, "msp", True, "GC Workspace MSP library (SpectrAtlas references)", root))
     return out
 
 
@@ -322,7 +322,7 @@ def default_library(libs: list[LibraryInfo], remembered: str = "") -> Optional[L
 
 
 def find_lib2nist(root: Optional[Path] = None, configured: str = "") -> Optional[Path]:
-    """NIST's converter: the configured path, the MS Search folder next to the EI Atlas
+    """NIST's converter: the configured path, the MS Search folder next to the SpectrAtlas
     libraries, or an installed NIST MS Search."""
     cands = []
     if configured:
@@ -554,18 +554,18 @@ def library_changed() -> str:
 
 
 def rescan_atlas() -> str:
-    """Ask a running EI Atlas to read its libraries again ("" = done or not running)."""
+    """Ask a running SpectrAtlas to read its libraries again ("" = done or not running)."""
     try:
         import gc_atlas
         for base, _status in gc_atlas.running_servers():
             gc_atlas.request(base, "/api/library/rescan", {}, timeout=10)
     except Exception as exc:  # noqa: BLE001 - the library is saved; the next start rescans anyway
-        return f"EI Atlas will see the change after its next start ({exc})"
+        return f"SpectrAtlas will see the change after its next start ({exc})"
     return ""
 
 
 def enable_in_search_methods(label: str) -> None:
-    """A new library is searched by every library-search method (EI Atlas adds new ones off)."""
+    """A new library is searched by every library-search method (SpectrAtlas adds new ones off)."""
     import gc_search_method as SM
     store = SM.MethodStore()
     changed = False

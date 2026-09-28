@@ -1,4 +1,4 @@
-"""Built-in library search: the analyst's libraries, no EI Atlas."""
+"""Built-in library search: the analyst's libraries, no SpectrAtlas."""
 import pytest
 
 from gcws import paths
@@ -81,7 +81,7 @@ def test_batch_search_needs_no_ei_atlas(data, monkeypatch):
     store.save(store.discover(_msp(data / "Own.msp")))
 
     def no_atlas(*a, **k):
-        raise AssertionError("EI Atlas must not be started")
+        raise AssertionError("SpectrAtlas must not be started")
     monkeypatch.setattr(gc_atlas, "ensure_server", no_atlas)
     monkeypatch.setattr(gc_atlas, "request", no_atlas)
     jobs = [GI.PeakJob(label="s", row_id=i, peak_no=i, rt=5.0 + i, before=("", "", None), spectrum=sp)

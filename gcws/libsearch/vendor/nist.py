@@ -70,7 +70,7 @@ class NistLibrary:
         names = {p.name.lower(): p for p in self.folder.iterdir() if p.is_file()}
         tandem = sorted(set(TANDEM_FILES) & set(names))
         if tandem:
-            raise ValueError('Tandem-MS library; EI Atlas evaluates 70 eV EI spectra only.')
+            raise ValueError('Tandem-MS library; SpectrAtlas evaluates 70 eV EI spectra only.')
         readme = names.get('readme')
         if readme and 'Retention Index Library' in readme.read_text(errors='replace'):
             raise ValueError('Retention-index metadata only; no EI spectra.')

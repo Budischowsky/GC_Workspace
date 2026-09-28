@@ -1,6 +1,6 @@
 """Fast search: the library search of many peaks at once, with the standard search's hits.
 
-The standard search (EI Atlas's ``Engine.analyze``, vendored) handles one spectrum at a time:
+The standard search (SpectrAtlas's ``Engine.analyze``, vendored) handles one spectrum at a time:
 
 1. *Prefilter.* A forward and a reverse weighted cosine against every reference spectrum
    (inverted index; the whole library is read for every peak). The best ``PRESEARCH`` of each
@@ -48,7 +48,7 @@ from typing import Callable, Optional
 import numpy as np
 
 import gcws.libsearch  # noqa: F401  (vendor on sys.path)
-import engine as _atlas_engine        # vendored EI Atlas modules
+import engine as _atlas_engine        # vendored SpectrAtlas modules
 import search_options
 from msp import nominal_peaks
 from pbm import (DEVIATION_PENALTY, FORWARD_WINDOW, MIN_ABUNDANCE, SIGNIFICANT_PEAKS, UNIQUENESS_WEIGHT, WINDOW,

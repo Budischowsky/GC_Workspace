@@ -9,7 +9,7 @@ Kept in ``DATA/libraries.json``. A library is one of
 * ``msp``      - an ``.msp`` text library.
 
 ``discover`` finds every library below a folder, so pointing at a whole library
-folder (or an EI Atlas ``Library`` folder) adds all of them at once.
+folder (or a SpectrAtlas ``Library`` folder) adds all of them at once.
 """
 from __future__ import annotations
 
@@ -160,9 +160,9 @@ def add(libs: list[LibrarySpec], new: list[LibrarySpec]) -> list[LibrarySpec]:
 
 
 def atlas_libraries() -> list[LibrarySpec]:
-    """The libraries an EI Atlas installation searches (one-off import; EI Atlas is not needed later).
+    """The libraries a SpectrAtlas installation searches (one-off import; SpectrAtlas is not needed later).
 
-    Named as EI Atlas names them (``Library\\NIST17.L``), so existing search methods keep
+    Named as SpectrAtlas names them (``Library\\NIST17.L``), so existing search methods keep
     their library choices."""
     try:
         import gc_atlas

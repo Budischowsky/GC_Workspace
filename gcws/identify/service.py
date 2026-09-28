@@ -218,7 +218,7 @@ def identification_from_hits(item: SearchItem, hits: list[dict], chosen: Optiona
 def adapt_library_names(method, names) -> None:
     """Keep a method's library choices when a library is now listed under another name.
 
-    EI Atlas named libraries by their path in its folder (``Library\\NIST17.L``); libraries
+    SpectrAtlas (formerly EI Atlas) named libraries by their path in its folder (``Library\\NIST17.L``); libraries
     added here are named by their folder or file (``NIST17.L``). A method entry that no
     longer exists takes the library with the same last path part."""
     from pathlib import PureWindowsPath
@@ -273,7 +273,7 @@ def search_one(job, method, rng) -> list[dict]:
 
 
 class LocalBatchSearch:
-    """``gc_identify.BatchSearch`` on the built-in engine: same messages, no EI Atlas.
+    """``gc_identify.BatchSearch`` on the built-in engine: same messages, no SpectrAtlas.
 
     ``("status", text)``, ``("hit", index)``, ``("error", text)``, finally ``("done", cancelled)``.
     """
@@ -395,5 +395,5 @@ class LibrarySearchWorker(QObject):
 
 
 def _english(text: str) -> str:
-    return (text.replace("EI Atlas wird gestartet (ohne Fenster)", "Starting EI Atlas (no window)")
+    return (text.replace("EI Atlas wird gestartet (ohne Fenster)", "Starting SpectrAtlas (no window)")
                 .replace("Suche ", "Searching ").replace("Peak ", "peak "))

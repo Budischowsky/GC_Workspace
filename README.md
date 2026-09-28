@@ -15,8 +15,8 @@ The setup ends with a list of optional features. The report preview needs Micros
 Pillow; the last three come with `requirements.txt`.
 
 **Libraries**: GC Workspace searches its own list of libraries; add the ones on your PC in *Identify >
-Libraries...* (see below). EI Atlas (`..\UnknownEvaluation`) is not needed for searching; it is only used by
-*Investigate*, and *Libraries... > Take over from EI Atlas* adds its libraries once. Search methods and
+Libraries...* (see below). SpectrAtlas (formerly EI Atlas, `..\UnknownEvaluation`) is not needed for searching; it is only used by
+*Investigate*, and *Libraries... > Take over from SpectrAtlas* adds its libraries once. Search methods and
 libraries are no longer copied from `..\NIAS Working`. The unknown register is kept separate unless you choose
 *Share the NIAS register* in the preferences.
 
@@ -169,7 +169,7 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
      a folder holding several libraries: all of them are added). Libraries can be switched off or removed; the
      files are never changed. *Load / check* reads them now: the first time builds a search index in
      `data/libcache` (NIST17.L: about 35 s), later starts read it in a fraction of a second. The search
-     (PBM or NIST-style similarity) is EI Atlas's own engine, built into GC Workspace; about 0.6 s per peak
+     (PBM or NIST-style similarity) is SpectrAtlas's own engine, built into GC Workspace; about 0.6 s per peak
      against NIST17.
    - It searches the **TIC peaks** by default. Every name found is also given to the FID peak at the same
      delay-corrected time (within 0.03 min), so the quantification and the NIAS report get it. FID names set by
@@ -182,7 +182,7 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
    - For the displayed spectrum, the *Mass Spectrum* menu and the spectrum right-click menu provide
      *Library hits* (default search method), **Own library** (search one chosen library), and
      **Own library selection and options** (library, algorithm,
-     minimum score, hits, m/z range, threshold), *Investigate* (EI Atlas window, optional), *NIST*, MSP
+     minimum score, hits, m/z range, threshold), *Investigate* (SpectrAtlas window, optional), *NIST*, MSP
      copy/save and *Register unknown*. The own-library options are also in *Identify > Own library search
      options...*.
    - The Interpretation, Library hits, m/z table and Scans tabs stay visible below the spectrum.
@@ -366,12 +366,12 @@ are recomputed on opening, and a changed result is reported. An autosave runs ev
 ```
 .venv\Scripts\python -m pytest            # all tests (the sample batch is read from ..\NIAS Working\samples)
 .venv\Scripts\python tools\oracle_report.py   # integrator vs. former ChemStation integration
-.venv\Scripts\python tools\check_vendor.py    # drift of the vendored NIAS modules and EI Atlas engine
+.venv\Scripts\python tools\check_vendor.py    # drift of the vendored NIAS modules and SpectrAtlas engine
 .venv\Scripts\python tools\deconv_benchmark.py   # deconvolution vs. the AMDIS result of run 07
 .venv\Scripts\python tools\deconv_benchmark.py --split   # plus the reference peak splits (fit R², relative areas)
 ```
 
 Install `requirements-dev.txt` for the tests (pytest, pytest-qt, hypothesis).
 
-The NIAS modules the reports and quantification rely on are vendored in `gcws/nias_legacy`, EI Atlas's library
+The NIAS modules the reports and quantification rely on are vendored in `gcws/nias_legacy`, SpectrAtlas's library
 readers and search engine in `gcws/libsearch/vendor` (see `VENDORED.md`). Patches are marked `GCWS-PATCH`.

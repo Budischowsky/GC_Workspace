@@ -1,6 +1,6 @@
-"""Built-in EI library search: GC Workspace searches its own libraries, no EI Atlas needed.
+"""Built-in EI library search: GC Workspace searches its own libraries, no SpectrAtlas needed.
 
-The readers and the scoring (PBM, NIST-style similarity) are EI Atlas's own code, copied
+The readers and the scoring (PBM, NIST-style similarity) are SpectrAtlas's own code, copied
 unchanged into ``vendor`` (see VENDORED.md); they import each other by flat names, so the
 folder goes on ``sys.path`` like the vendored NIAS modules.
 """

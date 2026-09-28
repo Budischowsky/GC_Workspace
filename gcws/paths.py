@@ -40,7 +40,7 @@ def import_nias_settings() -> list[str]:
     if not src.is_dir():
         return done
     # Search methods and libraries are GC Workspace's own (Identify > Libraries...); they are
-    # no longer copied from NIAS / EI Atlas.
+    # no longer copied from NIAS / SpectrAtlas.
     target = DATA / "settings.json"
     if (src / "settings.json").exists() and not target.exists():
         try:

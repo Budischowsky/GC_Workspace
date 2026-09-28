@@ -4,7 +4,7 @@ Usage: python tools/check_vendor.py [--write]
   --write   regenerate VENDORED.md from the current vendored files
 Files carrying a ``GCWS-PATCH`` marker are expected to differ.
 
-Two sets are vendored: the NIAS modules (from ``NIAS Working``) and EI Atlas's library
+Two sets are vendored: the NIAS modules (from ``NIAS Working``) and SpectrAtlas's library
 readers and search engine (from ``UnknownEvaluation``), which the built-in library
 search uses unchanged.
 """
@@ -19,11 +19,11 @@ SETS = [
     ("NIAS modules", ROOT / "gcws" / "nias_legacy", ROOT.parent / "NIAS Working",
      "Copied from `NIAS Working` so GC Workspace runs on its own. Only files marked *patched* were\n"
      "changed; every change carries a `GCWS-PATCH` comment."),
-    ("EI Atlas search engine", ROOT / "gcws" / "libsearch" / "vendor", ROOT.parent / "UnknownEvaluation",
-     "EI Atlas's library readers (Agilent .L, NIST MS Search, Wiley/Shimadzu .lib, MSP), its search index\n"
+    ("SpectrAtlas search engine", ROOT / "gcws" / "libsearch" / "vendor", ROOT.parent / "UnknownEvaluation",
+     "SpectrAtlas's library readers (Agilent .L, NIST MS Search, Wiley/Shimadzu .lib, MSP), its search index\n"
      "and scoring (PBM, NIST-style similarity), copied unchanged from `UnknownEvaluation` (working tree of\n"
      "2026-09-26) into `gcws/libsearch/vendor`. `gcws/libsearch/service.py` subclasses `Engine` to load an\n"
-     "explicit list of libraries (Identify > Libraries...), so EI Atlas itself is not needed for searching."),
+     "explicit list of libraries (Identify > Libraries...), so SpectrAtlas itself is not needed for searching."),
 ]
 
 

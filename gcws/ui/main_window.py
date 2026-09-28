@@ -194,7 +194,7 @@ class MainWindow(QMainWindow):
         self.spectrumSearchAtlasAction = A("Library hit list (selected peak)", self.atlas_selected, "Ctrl+E")
         self.a_libraries = A("Libraries...", self.manage_libraries)
         self.spectrumSearchNistAction = A("Search selected peak in NIST", self.nist_selected, "Ctrl+N")
-        self.atlasResearchAction = A("Investigate selected peak in EI Atlas...", self.atlas_research, "Ctrl+Shift+E")
+        self.atlasResearchAction = A("Investigate selected peak in SpectrAtlas...", self.atlas_research, "Ctrl+Shift+E")
         self.a_eic = A("Extracted ion chromatogram...", self.ask_eic, "Ctrl+I")
         self.istd_menu = QMenu("Set selected peak as ISTD", self)     # IS1, IS2, ... filled on opening
         self.istd_menu.setToolTipsVisible(True)
@@ -982,13 +982,13 @@ class MainWindow(QMainWindow):
         dlg.show()
 
     def atlas_research(self):
-        """The full EI Atlas investigation (native window, research tab)."""
+        """The full SpectrAtlas investigation (native window, research tab)."""
         from gcws.identify.atlas_bridge import AtlasBridge
         from gcws.ui.dialogs.register import db_path
         st, peak = self.spectrum.target_peak()
         points = self.spectrum.points()
         if st is None or not points:
-            QMessageBox.information(self, "EI Atlas", "Select a peak with a mass spectrum (or right-click a "
+            QMessageBox.information(self, "SpectrAtlas", "Select a peak with a mass spectrum (or right-click a "
                                                       "chromatogram) first.")
             return
         spec = self.spectrum.spec
@@ -1006,16 +1006,17 @@ class MainWindow(QMainWindow):
                    "method": "GC Workspace", "tic": ([float(x) for x in ms.rt[sl]], [int(v) for v in ms.stored_tic[sl]])}
         bridge = AtlasBridge.instance()
         if not getattr(self, "_atlas_connected", False):
-            bridge.error.connect(lambda e: QMessageBox.warning(self, "EI Atlas", e))
+            bridge.error.connect(lambda e: QMessageBox.warning(self, "SpectrAtlas", e))
             bridge.saved.connect(lambda rec: self.statusBar().showMessage(
-                f"EI Atlas investigation saved as {rec.get('unknown_id', '')}", 8000))
+                f"SpectrAtlas investigation saved as {rec.get('unknown_id', '')}", 8000))
             bridge.registerRequested.connect(lambda *_: self.open_register())
             self._atlas_connected = True
         try:
-            bridge.open_research(snapshot, context, db_path(), int(self.winId()))
-            self.statusBar().showMessage("Opening EI Atlas ...", 5000)
+            from gcws.ui import theme
+            bridge.open_research(snapshot, context, db_path(), int(self.winId()), theme.MODE)
+            self.statusBar().showMessage("Opening SpectrAtlas ...", 5000)
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "EI Atlas", str(exc))
+            QMessageBox.warning(self, "SpectrAtlas", str(exc))
 
     def nist_search(self, points, name):
         import gc_nist
@@ -1517,7 +1518,7 @@ class MainWindow(QMainWindow):
     def show_shortcuts(self):
         lines = [f"{key:>6}   {label}" for name, label, key, tip in TOOLS]
         lines += ["", "    F5   Integrate active", "Shift+F5   Integrate all", "Ctrl+F   Library search",
-                  "Ctrl+E   EI Atlas hit list", "Ctrl+N   NIST search", "Ctrl+I   Extracted ion chromatogram",
+                  "Ctrl+E   Library hit list", "Ctrl+N   NIST search", "Ctrl+I   Extracted ion chromatogram",
                   "Ctrl+K   Deconvolution: split the selected peak into its components",
                   "Ctrl+Z / Ctrl+Y   Undo / Redo",
                   "Ctrl+Shift+D   Next theme (Light / Dark / Neon)", "",
@@ -1545,7 +1546,7 @@ class MainWindow(QMainWindow):
     def about(self):
         QMessageBox.about(self, "GC Workspace",
                           f"<b>GC Workspace {gcws.__version__}</b><br>Integrator version {gcws.INTEGRATOR_VERSION}"
-                          "<br><br>Standalone GC-FID / GC-MS integration, EI Atlas / NIST identification and NIAS "
+                          "<br><br>Standalone GC-FID / GC-MS integration, SpectrAtlas / NIST identification and NIAS "
                           "reporting. Reads Agilent data.ms, *.ch and MassHunter AcqData directly.")
 
 

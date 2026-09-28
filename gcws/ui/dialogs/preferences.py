@@ -78,7 +78,7 @@ class PreferencesDialog(QDialog):
             pass
         self.nist.setPlaceholderText("automatic")
         self.lib2nist = QLineEdit(qs.value("prefs/lib2nist", "") or "")
-        self.lib2nist.setPlaceholderText("automatic (NIST MS Search / EI Atlas Library\Software)")
+        self.lib2nist.setPlaceholderText("automatic (NIST MS Search / SpectrAtlas Library\Software)")
         self.reason = QCheckBox("Ask for a reason for every manual integration (GLP)")
         self.reason.setChecked(qs.value("prefs/require_reason", False, type=bool))
         self.sticky = QCheckBox("Keep an integration tool active after use")
@@ -91,7 +91,7 @@ class PreferencesDialog(QDialog):
         f.addRow("Unknown register folder", _path_row(self.register))
         f.addRow("", reg)
         f.addRow("CAS reference (CASINFO.xlsx)", _path_row(self.cas, False, "Excel (*.xlsx)"))
-        f.addRow("EI Atlas folder", _path_row(self.atlas))
+        f.addRow("SpectrAtlas folder", _path_row(self.atlas))
         f.addRow("NIST MSSEARCH folder", _path_row(self.nist))
         f.addRow("Lib2NIST (Edit library)", _path_row(self.lib2nist, False, "lib2nist.exe (lib2nist.exe)"))
         f.addRow("", self.reason)

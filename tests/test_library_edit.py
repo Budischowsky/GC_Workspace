@@ -61,7 +61,7 @@ def _atlas_copy(tmp_path):
     exe = LE.find_lib2nist(root) if root else None
     src = root / "Library" / "CCAlu_GCMS" if root else None
     if exe is None or src is None or not src.is_dir():
-        pytest.skip("EI Atlas with CCAlu_GCMS and NIST Lib2NIST not available")
+        pytest.skip("SpectrAtlas with CCAlu_GCMS and NIST Lib2NIST not available")
     fake = tmp_path / "atlas"
     shutil.copytree(src, fake / "Library" / "CCAlu_GCMS")
     agilent = fake / "Library" / "CCALU_GCMS_1.L"

@@ -1,8 +1,8 @@
 """The search engine over the analyst's libraries, shared by every search in the app.
 
-``LocalEngine`` is EI Atlas's ``Engine`` (vendored, unchanged) loaded from an explicit
-list of libraries instead of EI Atlas's folders. ``status()`` and ``analyze()`` answer in
-the shape of EI Atlas's ``/api/status`` and ``/api/analyze``, so the search methods, the
+``LocalEngine`` is SpectrAtlas's ``Engine`` (vendored, unchanged) loaded from an explicit
+list of libraries instead of SpectrAtlas's folders. ``status()`` and ``analyze()`` answer in
+the shape of SpectrAtlas's ``/api/status`` and ``/api/analyze``, so the search methods, the
 batch search and the hit dialogs work on either.
 
 The engine is built once (the first search builds or reads each library's index under
@@ -18,7 +18,7 @@ from typing import Callable, Optional
 import gcws.libsearch  # noqa: F401  (vendor on sys.path)
 from gcws.libsearch import store
 
-import engine as _atlas_engine        # vendored EI Atlas modules
+import engine as _atlas_engine        # vendored SpectrAtlas modules
 import msp as _msp
 import msp_cache
 from agilent import AgilentLibrary
@@ -32,7 +32,7 @@ READERS = {"agilent": (AgilentLibrary, "Agilent / ChemStation EI"),
 
 
 class LocalEngine(_atlas_engine.Engine):
-    """``Engine`` over ``specs`` (native libraries first, then MSP files, as EI Atlas orders them)."""
+    """``Engine`` over ``specs`` (native libraries first, then MSP files, as SpectrAtlas orders them)."""
 
     def __init__(self, specs: list, cache: Path, progress: Callable[[str], None] = lambda t: None):
         self.root = Path(cache)
@@ -126,7 +126,7 @@ def reset() -> None:
 
 
 def status(progress: Callable[[str], None] = lambda t: None) -> dict:
-    """Like EI Atlas's ``/api/status``: ``{"libraries": [{name, count, kind, status, ...}], ...}``."""
+    """Like SpectrAtlas's ``/api/status``: ``{"libraries": [{name, count, kind, status, ...}], ...}``."""
     eng = get_engine(progress)
     return {"libraries": [dict(s) for s in eng.sources], "count": eng.count, "warnings": list(eng.library_warnings),
             "library_selection": [s["name"] for s in eng.sources if s["count"] > 0]}
@@ -134,7 +134,7 @@ def status(progress: Callable[[str], None] = lambda t: None) -> dict:
 
 def analyze(points, name: str = "unknown", settings: Optional[dict] = None,
             progress: Callable[[str], None] = lambda t: None) -> dict:
-    """Like EI Atlas's ``/api/analyze``: the hits of one spectrum ``[(m/z, abundance), ...]``."""
+    """Like SpectrAtlas's ``/api/analyze``: the hits of one spectrum ``[(m/z, abundance), ...]``."""
     peaks = [(float(m), float(i)) for m, i in points if float(i) > 0]
     if not peaks:
         raise ValueError("The spectrum has no peaks.")

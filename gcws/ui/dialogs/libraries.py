@@ -37,8 +37,8 @@ class LibraryManagerDialog(QDialog):
         add_folder.setToolTip("An Agilent .L folder, a NIST library folder (mainlib, replib, a user library) or a "
                               "folder holding several libraries: every library in it is added")
         add_folder.clicked.connect(self.add_folder)
-        atlas = QPushButton("Take over from EI Atlas")
-        atlas.setToolTip("Add the libraries of an EI Atlas installation on this PC (once; EI Atlas is not needed "
+        atlas = QPushButton("Take over from SpectrAtlas")
+        atlas.setToolTip("Add the libraries of a SpectrAtlas installation on this PC (once; SpectrAtlas is not needed "
                          "afterwards)")
         atlas.clicked.connect(self.import_atlas)
         remove = QPushButton("Remove")
@@ -144,7 +144,7 @@ class LibraryManagerDialog(QDialog):
             self._add(store.discover(path), path)
 
     def import_atlas(self):
-        self._add(store.atlas_libraries(), "the EI Atlas installation")
+        self._add(store.atlas_libraries(), "the SpectrAtlas installation")
 
     def remove(self):
         rows = sorted({i.row() for i in self.table.selectedIndexes()}, reverse=True)

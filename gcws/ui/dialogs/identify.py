@@ -300,7 +300,7 @@ class BlanksDialog(QDialog):
 
 
 class AtlasHitsDialog(QDialog):
-    """EI Atlas hit list for one spectrum, with head-to-tail plot and 'Assign hit'."""
+    """SpectrAtlas hit list for one spectrum, with head-to-tail plot and 'Assign hit'."""
 
     def __init__(self, points, name, method, parent=None, on_assign=None, on_library=None):
         super().__init__(parent)

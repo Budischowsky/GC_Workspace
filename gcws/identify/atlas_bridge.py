@@ -1,4 +1,4 @@
-"""The native EI Atlas window (research tabs), driven from Qt.
+"""The native SpectrAtlas window (research tabs), driven from Qt.
 
 Protocol as ``gc_atlas.AtlasSession``: one private ``desktop_host.py
 --research --tabs`` process; one JSON line per tab request on stdin; events
@@ -48,12 +48,14 @@ class AtlasBridge(QObject):
     def _alive(self) -> bool:
         return self.process is not None and self.process.poll() is None
 
-    def open_research(self, snapshot: dict, context: dict, db_path: Path, parent_hwnd: int = 0) -> None:
+    def open_research(self, snapshot: dict, context: dict, db_path: Path, parent_hwnd: int = 0,
+                      theme: str = "light") -> None:
+        """Open ``snapshot`` as a new tab; ``theme`` (light/dark/neon) is this window's look."""
         import gc_atlas_store as store
         store.clean_spectrum(snapshot.get("spectrum") or [])
         payload = dict(snapshot=deepcopy(snapshot), context=deepcopy(context), db_path=str(Path(db_path).resolve()),
                        entry_id=None, spectrum_id=None, initial={}, parent_hwnd=int(parent_hwnd),
-                       tab_id=uuid.uuid4().hex)
+                       tab_id=uuid.uuid4().hex, theme=str(theme))
         json.dumps(payload, allow_nan=False)
         if self.started and not self._alive() and self.process is not None:
             self.started = False
@@ -75,7 +77,7 @@ class AtlasBridge(QObject):
                 [str(p), "-c", "import webview, clr, numpy"], stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL, creationflags=flags, timeout=30).returncode == 0), None)
             if python is None:
-                raise RuntimeError("The native EI Atlas environment is missing (UnknownEvaluation "
+                raise RuntimeError("The native SpectrAtlas environment is missing (UnknownEvaluation "
                                    "requirements-desktop.txt: pywebview, pythonnet).")
             with (root / "desktop-window.log").open("ab") as log:
                 self.process = subprocess.Popen(
@@ -104,7 +106,7 @@ class AtlasBridge(QObject):
                     if isinstance(ev, dict) and "event" in ev:
                         self.events.put(ev)
                 if self.process.wait():
-                    raise RuntimeError(f"EI Atlas window ended with an error. Details: {root / 'desktop-window.log'}")
+                    raise RuntimeError(f"SpectrAtlas window ended with an error. Details: {root / 'desktop-window.log'}")
         except Exception as exc:  # noqa: BLE001 - reported on the GUI thread
             self.events.put({"event": "error", "value": str(exc)})
         finally:

@@ -61,9 +61,9 @@ def setup():
         sys.path.insert(0, str(ROOT))
         import gcws  # noqa: F401
         import gc_atlas
-        print("EI Atlas:", gc_atlas.atlas_root())
+        print("SpectrAtlas:", gc_atlas.atlas_root())
     except Exception as exc:  # noqa: BLE001
-        print("EI Atlas not found (library search unavailable until configured):", exc)
+        print("SpectrAtlas not found (library search unavailable until configured):", exc)
     print("Done. Start with 'Start GC Workspace.cmd'.")
 
 
