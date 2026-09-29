@@ -52,3 +52,32 @@ explicit list of libraries (Identify > Libraries...), so SpectrAtlas itself is n
 | search_options.py | `024aca9994dd92a3` | verbatim |
 | shimadzu.py | `7a0c0d27152b9527` | verbatim |
 | spectral_index.py | `0ab02093485b9edb` | verbatim |
+
+## Ported algorithms (mzmine)
+
+`gcws/features` re-implements in Python algorithms of mzmine (https://github.com/mzmine/mzmine,
+commit ea6ee5e of 2026-09-28): the GC aligner's row score (`align_gc/GcRowAlignScorer`,
+`align_join/RowVsRowScore`), the multi-list aligner (`align_common/BaseFeatureListAligner`), the
+consensus quantifier ion (`align_gc/GCConsensusAlignerPostProcessor`), the gap filler
+(`gapfill_peakfinder/Gap`), the spectral similarities (`util/scans/similarity`: `Weights`,
+weighted and composite cosine) and the annotation RI score (`AnnotationSummary`). Each ported
+function names its source. ADAP (dulab) and mzmine 2 (GPL) code is not used.
+
+The MIT License (MIT)
+
+Copyright (c) 2004-2025 The mzmine Development Team
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge, publish, distribute,
+sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or
+substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

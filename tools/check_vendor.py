@@ -27,6 +27,38 @@ SETS = [
 ]
 
 
+#: Algorithms re-implemented in Python from other projects (not copied files, so not checked for drift).
+PORTED = """## Ported algorithms (mzmine)
+
+`gcws/features` re-implements in Python algorithms of mzmine (https://github.com/mzmine/mzmine,
+commit ea6ee5e of 2026-09-28): the GC aligner's row score (`align_gc/GcRowAlignScorer`,
+`align_join/RowVsRowScore`), the multi-list aligner (`align_common/BaseFeatureListAligner`), the
+consensus quantifier ion (`align_gc/GCConsensusAlignerPostProcessor`), the gap filler
+(`gapfill_peakfinder/Gap`), the spectral similarities (`util/scans/similarity`: `Weights`,
+weighted and composite cosine) and the annotation RI score (`AnnotationSummary`). Each ported
+function names its source. ADAP (dulab) and mzmine 2 (GPL) code is not used.
+
+The MIT License (MIT)
+
+Copyright (c) 2004-2025 The mzmine Development Team
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction,
+including without limitation the rights to use, copy, modify, merge, publish, distribute,
+sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or
+substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT
+NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT
+OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+"""
+
+
 def sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
 
@@ -58,6 +90,7 @@ def main(argv):
         for r, h, k, s in rows:
             flag = "" if (s == "identical" and k == "verbatim") or (k == "patched") else "  <-- check"
             print(f"{r:{width}}  {h}  {k:8}  {s}{flag}")
+    lines += ["", PORTED.rstrip("\n")]
     if "--write" in argv:
         (ROOT / "VENDORED.md").write_text("\n".join(lines), encoding="utf-8")
 
