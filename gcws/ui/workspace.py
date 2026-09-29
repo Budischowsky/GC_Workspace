@@ -73,6 +73,16 @@ class RunState:
         return self.idents.setdefault(base_key(key), IdentificationSet())
 
 
+@dataclass
+class BlankCheck:
+    """Result of :meth:`Workspace.blank_readiness`."""
+    ok: bool
+    missing: list
+    assigned: dict                                    # "blank" / "blank_istd" -> run names
+    foreign: list                                     # assigned blanks from another folder
+    text: str = ""
+
+
 class Workspace(QObject):
     runAdded = QtSignal(str)
     runRemoved = QtSignal(str)
@@ -130,6 +140,8 @@ class Workspace(QObject):
         self.hints = HintCache(self, self)
         self._blank_matches: dict = {}
         self.resultChanged.connect(self._drop_matches)
+        self._seq_cache: dict = {}                    # batch folder -> (log stamp, stems)
+        self._folder_rank: dict = {}                  # batch folder -> order of first load
 
     # -- runs --------------------------------------------------------------
 
@@ -154,6 +166,7 @@ class Workspace(QObject):
         self.undo_group.addStack(st.undo)
         st.delay = delay
         run.derive = self._derive
+        self._folder_rank.setdefault(self.folder_key(st), len(self._folder_rank))
         for kind in (FID, TIC):
             st.methods[kind] = self.default_method(kind)
         if results:
@@ -326,8 +339,31 @@ class Workspace(QObject):
         self.signalKeyChanged.emit(key)
 
     def _sort_order(self) -> None:
-        seq = sequence.parse_sequence_log(self.runs[self.order[0]].run.path.parent) if self.order else []
-        self.order.sort(key=lambda i: sequence.order_key(self.runs[i].run.path, seq))
+        self.order.sort(key=lambda i: self.injection_key(self.runs[i]))
+
+    # -- batches (the folder a run was acquired into) ---------------------------------
+
+    @staticmethod
+    def folder_key(st: RunState) -> str:
+        """The run's batch: the folder it lies in (normalised for comparison)."""
+        import os
+        return os.path.normcase(os.path.abspath(str(st.run.path.parent)))
+
+    def batch_sequence(self, folder) -> list[str]:
+        """Data-file stems of the batch ``folder`` in injection order (its sequence log, cached)."""
+        import os
+        key = os.path.normcase(os.path.abspath(str(folder)))
+        stamp = sequence.log_stamp(folder)
+        cached = self._seq_cache.get(key)
+        if cached is None or cached[0] != stamp:
+            cached = (stamp, sequence.parse_sequence_log(folder))
+            self._seq_cache[key] = cached
+        return cached[1]
+
+    def injection_key(self, st: RunState):
+        """Sort key: batches in the order they were loaded, runs by their batch's injection order."""
+        return (self._folder_rank.get(self.folder_key(st), 10 ** 6),
+                sequence.order_key(st.run.path, self.batch_sequence(st.run.path.parent)))
 
     def index_of(self, run_id: str) -> int:
         return self.order.index(run_id) if run_id in self.order else -1
@@ -611,31 +647,79 @@ class Workspace(QObject):
     # -- roles and blanks ------------------------------------------------------
 
     def ordered_ids_by_injection(self) -> list[str]:
-        states = self.states()
-        if not states:
-            return []
-        seq = sequence.parse_sequence_log(states[0].run.path.parent)
-        return [s.id for s in sorted(states, key=lambda s: sequence.order_key(s.run.path, seq))]
+        return [s.id for s in sorted(self.states(), key=self.injection_key)]
 
-    def _suggest_blanks(self) -> None:
-        """Fill empty blank assignments of samples from the injection order.
+    def _suggest_blanks(self, ids=None, replace: bool = False) -> list[str]:
+        """Fill empty blank assignments of samples from the injection order of their batch.
 
-        Assignments the analyst made (``blanks_manual``) are left alone; for the
-        others, a referenced run that no longer has a blank role is dropped first.
+        Blanks come only from the sample's own folder (the same batch). Assignments the analyst
+        made (``blanks_manual``) are left alone; for the others, a referenced run that no longer
+        has a blank role is dropped first. ``replace`` suggests again even where a blank is
+        assigned (after a load the nearest blank may have arrived later). Returns the changed ids.
         """
         order = self.ordered_ids_by_injection()
-        roles = {s.id: s.role for s in self.states()}
-        paths = {s.id: s.run.path for s in self.states()}
-        for st in self.states():
-            if st.role != sequence.SAMPLE or st.blanks_manual:
+        states = self.states()
+        roles = {s.id: s.role for s in states}
+        paths = {s.id: s.run.path for s in states}
+        folders = {s.id: self.folder_key(s) for s in states}
+        changed = []
+        for st in states:
+            if st.role != sequence.SAMPLE or st.blanks_manual or (ids is not None and st.id not in ids):
                 continue
+            before = (list(st.blanks), list(st.blanks_istd))
+            if replace:
+                st.blanks, st.blanks_istd = [], []
             st.blanks = [b for b in st.blanks if roles.get(b) == sequence.BLANK]
             st.blanks_istd = [b for b in st.blanks_istd if roles.get(b) == sequence.BLANK_ISTD]
-            b, bi = sequence.suggest_blanks(st.id, paths, roles, order)
+            batch = [i for i in order if folders[i] == folders[st.id]]
+            b, bi = sequence.suggest_blanks(st.id, paths, roles, batch)
             if not st.blanks and b:
                 st.blanks = b
             if not st.blanks_istd and bi:
                 st.blanks_istd = bi
+            if (st.blanks, st.blanks_istd) != before:
+                changed.append(st.id)
+        return changed
+
+    def resuggest_blanks(self, folders=None) -> list[str]:
+        """Suggest the blanks of the automatically assigned samples again (in ``folders`` only,
+        default all), so the result does not depend on the order the runs finished loading."""
+        ids = [s.id for s in self.states() if folders is None or self.folder_key(s) in folders]
+        changed = self._suggest_blanks(ids, replace=True)
+        if changed:
+            self.invalidate_blank(changed)
+            for rid in changed:
+                self.runChanged.emit(rid)
+            self.schedule_quant()
+        return changed
+
+    #: which blanks a sample needs before it is processed (see :meth:`blank_readiness`)
+    BLANK_REQUIREMENTS = ("auto", "blank", "blank_istd", "both", "either", "none")
+
+    def blank_readiness(self, st: RunState, require: str = "auto") -> "BlankCheck":
+        """Whether ``st`` has the blanks it needs, all from its own batch folder.
+
+        ``require``: "blank", "blank_istd", "both", "either" (one of them), "none", or "auto"
+        (what the blank subtraction uses: Blank, Blank+ISTD or both)."""
+        if require == "auto":
+            require = {"blank_istd": "blank_istd", "both": "both"}.get(self.blank_options().source, "blank")
+        own = self.folder_key(st)
+        assigned = {"blank": [b for b in st.blanks if b in self.runs],
+                    "blank_istd": [b for b in st.blanks_istd if b in self.runs]}
+        foreign = [self.runs[b].name for b in assigned["blank"] + assigned["blank_istd"]
+                   if self.folder_key(self.runs[b]) != own]
+        usable = {k: [b for b in v if self.folder_key(self.runs[b]) == own] for k, v in assigned.items()}
+        need = {"blank": ["blank"], "blank_istd": ["blank_istd"], "both": ["blank", "blank_istd"],
+                "either": [], "none": []}.get(require, [])
+        missing = [k for k in need if not usable[k]]
+        if require == "either" and not (usable["blank"] or usable["blank_istd"]):
+            missing = ["blank or blank_istd"]
+        label = {"blank": "Blank", "blank_istd": "Blank+ISTD", "blank or blank_istd": "Blank or Blank+ISTD"}
+        text = ("no " + " and no ".join(label[m] for m in missing) + " from the same batch") if missing else ""
+        if foreign:
+            text = (text + "; " if text else "") + "blank from another folder: " + ", ".join(foreign)
+        return BlankCheck(not missing, missing, {k: [self.runs[b].name for b in v] for k, v in assigned.items()},
+                          foreign, text)
 
     # -- blank subtraction ------------------------------------------------------
 

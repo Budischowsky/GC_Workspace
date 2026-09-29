@@ -111,7 +111,7 @@ def generate(job, progress=lambda _: None):
     wb.save(job.target)
     write_word(job.word, title, subtitle, job.names, layout["titles"], rows)
     reported = [{"name": r[1], "cas": r[2], "rt": r[0]} for r in rows]
-    warnings = []
+    warnings = list(getattr(job, "notes", None) or [])
     if job.record_seen:
         error = RS.record_seen(job.kind, reported, job.target, job.sample_key)
         if error:

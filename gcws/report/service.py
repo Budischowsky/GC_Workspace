@@ -46,6 +46,7 @@ class ReportJob:
     record_seen: bool = True
     ri_options: Optional[dict] = None
     edits: dict = field(default_factory=dict)       # analyst edits of the double determination
+    notes: list = field(default_factory=list)       # warnings known before the report is made (e.g. no blank)
     overrides: dict = field(default_factory=dict)   # filled by combined_rows: row position -> values
 
 
@@ -145,7 +146,7 @@ def generate(job: ReportJob, progress: Callable[[str], None] = lambda s: None) -
         raise ValueError("HS samples require the HS-Screening report")
     import gc_export
     from gcws.report.legacy_api import main_script
-    warnings = []
+    warnings = list(job.notes)
     session = build_session(job)
     combined = combined_rows(job)
     tmp = Path(tempfile.mkdtemp(prefix="gcws_report_"))

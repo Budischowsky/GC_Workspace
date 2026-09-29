@@ -10,8 +10,9 @@ from __future__ import annotations
 import csv
 import re
 import unicodedata
-from pathlib import Path
-from typing import Iterable
+from dataclasses import dataclass, field
+from pathlib import Path, PureWindowsPath
+from typing import Iterable, Optional
 
 SAMPLE = "sample"
 BLANK = "blank"
@@ -94,26 +95,166 @@ def replicate_label(name) -> str:
 
 # -- injection order -------------------------------------------------------
 
-def parse_sequence_log(folder) -> list[str]:
-    """Data-file names in injection order from a ``Sequence Log .TSV``."""
+@dataclass
+class SeqLine:
+    """One planned injection of a sequence log."""
+    index: int                      # line number of the sequence
+    datafile: str                   # "07_..._A.D"
+    datapath: str = ""              # acquisition data path on the instrument PC
+    sample: str = ""                # sample name
+
+    @property
+    def stem(self) -> str:
+        return Path(self.datafile).stem.casefold()
+
+
+@dataclass
+class SequenceInfo:
+    """What the sequence log says about one batch folder.
+
+    ``lines`` are the injections planned for this folder only (a sequence can write into several
+    folders), in injection order. ``completed`` / ``aborted`` come from the ``.LOG`` beside it."""
+    tsv: Optional[Path] = None
+    log: Optional[Path] = None
+    lines: list[SeqLine] = field(default_factory=list)
+    started: str = ""
+    completed: bool = False
+    aborted: bool = False
+
+    @property
+    def stems(self) -> list[str]:
+        return [ln.stem for ln in self.lines]
+
+    @property
+    def finished(self) -> bool:
+        return self.completed or self.aborted
+
+
+def sequence_files(folder) -> list[Path]:
+    """Sequence logs (``*Sequence Log*.TSV``, ``*sequence*.tsv``) in ``folder``, newest first."""
     folder = Path(folder)
-    for log in sorted(folder.glob("*Sequence Log*.TSV")) + sorted(folder.glob("*sequence*.tsv")):
+    try:
+        found = {p for p in folder.iterdir() if p.is_file() and p.suffix.lower() == ".tsv"
+                 and "sequence" in p.name.casefold()}
+    except OSError:
+        return []
+
+    def mtime(p):
         try:
-            text = log.read_text(encoding="utf-8-sig", errors="replace")
+            return p.stat().st_mtime_ns
         except OSError:
+            return 0
+    return sorted(found, key=lambda p: (-mtime(p), p.name))
+
+
+def _read_lines(tsv: Path) -> tuple[list[SeqLine], str]:
+    try:
+        text = tsv.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return [], ""
+    rows = text.splitlines()
+    started = rows[0].strip() if rows and "\t" not in rows[0] else ""
+    lines = [ln for ln in rows if "\t" in ln]
+    out = []
+    for n, row in enumerate(csv.DictReader(lines, delimiter="\t"), 1):
+        name = (row.get("Sdatafile$") or row.get("_dataname$") or "").strip()
+        if not name:
             continue
-        lines = [ln for ln in text.splitlines() if "\t" in ln]
+        if not name.lower().endswith(".d"):
+            name += ".D"
+        try:
+            index = int((row.get("_seqline") or "").strip() or n)
+        except ValueError:
+            index = n
+        out.append(SeqLine(index, name, (row.get("_datapath$") or "").strip(),
+                           (row.get("_dataname$") or "").strip()))
+    return out, started
+
+
+def _folder_name(datapath: str) -> str:
+    return PureWindowsPath(datapath.rstrip("\\/")).name.casefold() if datapath else ""
+
+
+def lines_for_folder(lines: list[SeqLine], folder: Path, present: Iterable[str] = ()) -> list[SeqLine]:
+    """The lines of a sequence log that write into ``folder``.
+
+    Matched by the last part of the acquisition data path; a copied or renamed folder takes the
+    data path whose runs it holds. Logs without data paths belong to their folder."""
+    if not lines:
+        return []
+    groups: dict[str, list[SeqLine]] = {}
+    for ln in lines:
+        groups.setdefault(_folder_name(ln.datapath), []).append(ln)
+    if set(groups) == {""}:
+        return list(lines)
+    name = Path(folder).name.casefold()
+    if name in groups:
+        return groups[name]
+    have = {Path(p).stem.casefold() for p in present}
+    best = max(groups.values(), key=lambda g: len(have & {ln.stem for ln in g}))
+    if have & {ln.stem for ln in best}:
+        return best
+    return list(lines) if len(groups) == 1 else []
+
+
+def _log_state(tsv: Path) -> tuple[Optional[Path], bool, bool]:
+    log = tsv.with_suffix(".LOG")
+    if not log.is_file():
+        log = next((p for p in tsv.parent.glob(tsv.stem + ".*") if p.suffix.lower() == ".log"), None)
+    if log is None:
+        return None, False, False
+    try:
+        text = log.read_text(encoding="utf-8-sig", errors="replace")
+    except OSError:
+        return log, False, False
+    completed = re.search(r"sequence\s+completed", text, re.IGNORECASE) is not None
+    aborted = re.search(r"sequence\s+(?:aborted|stopped|terminated|abgebrochen)", text, re.IGNORECASE) is not None
+    return log, completed, aborted
+
+
+def read_sequence(folder, present: Iterable[str] = (), siblings: bool = True) -> SequenceInfo:
+    """The sequence log of the batch ``folder`` (see :class:`SequenceInfo`).
+
+    ``present`` are run names already in the folder (to match a copied folder). Without a log
+    of its own, the logs in neighbouring folders are searched for lines writing into it (a
+    sequence keeps its log in the folder it started in)."""
+    folder = Path(folder)
+    present = list(present)
+    candidates = [(t, True) for t in sequence_files(folder)]
+    if not candidates and siblings:
+        try:
+            neighbours = sorted(p for p in folder.parent.iterdir() if p.is_dir() and p != folder
+                                and not p.name.lower().endswith(".d"))[:200]
+        except OSError:
+            neighbours = []
+        candidates = [(t, False) for n in neighbours for t in sequence_files(n)]
+    for tsv, own in candidates:
+        lines, started = _read_lines(tsv)
+        if not own:
+            lines = [ln for ln in lines if _folder_name(ln.datapath) == folder.name.casefold()]
+        else:
+            lines = lines_for_folder(lines, folder, present)
         if not lines:
             continue
-        reader = csv.DictReader(lines, delimiter="\t")
-        order = []
-        for row in reader:
-            name = (row.get("Sdatafile$") or row.get("_dataname$") or "").strip()
-            if name:
-                order.append(Path(name).stem.casefold())
-        if order:
-            return order
-    return []
+        log, completed, aborted = _log_state(tsv)
+        return SequenceInfo(tsv, log, lines, started, completed, aborted)
+    return SequenceInfo()
+
+
+def parse_sequence_log(folder) -> list[str]:
+    """Data-file stems of ``folder`` in injection order from its ``Sequence Log .TSV``."""
+    return read_sequence(folder, siblings=False).stems
+
+
+def log_stamp(folder) -> tuple:
+    """Changes when a sequence log of ``folder`` changes (cache key)."""
+    out = []
+    for p in sequence_files(folder):
+        try:
+            out.append((p.name, p.stat().st_mtime_ns))
+        except OSError:
+            continue
+    return tuple(out)
 
 
 def order_key(path, sequence: list[str] | None = None):

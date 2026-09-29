@@ -65,6 +65,19 @@ def prepare(ws, kind: str, group: Optional[dict]) -> tuple[list[str], list]:
     return members, samples
 
 
+def blank_warnings(ws, members: list[str]) -> list[str]:
+    """Determinations without a blank from their own batch folder (the report is still made)."""
+    out = []
+    for m in members:
+        st = ws.runs.get(m)
+        if st is None:
+            continue
+        chk = ws.blank_readiness(st)
+        if not chk.ok or chk.foreign:
+            out.append(f"{st.name}: {chk.text}")
+    return out
+
+
 def default_target(ws, kind: str, members: list[str]) -> Path:
     """``<batch folder>/<stem>_<Kind>_Report.xlsx``."""
     names = [ws.runs[m].name for m in members]
@@ -99,4 +112,5 @@ def build_job(ws, kind: str, group: dict, target: Path, *, members: Optional[lis
         keep_middle=target.with_name(target.stem + "_intermediate.xlsx") if keep_middle and not preview else None,
         sample_key=stem, record_seen=(not preview) if record_seen is None else record_seen,
         ri_options={k: bool((ws.quant.get("ri") or {}).get(k)) for k in ("report_ri", "replace_rt")},
-        edits=dict(group.get("hs_edits:" + ws.quant_unit() if hs else "edits") or {}))
+        edits=dict(group.get("hs_edits:" + ws.quant_unit() if hs else "edits") or {}),
+        notes=[] if hs and not ws.quant.get("hs", {}).get("blank_correction", True) else blank_warnings(ws, members))

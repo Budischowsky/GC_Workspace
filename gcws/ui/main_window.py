@@ -52,6 +52,7 @@ class MainWindow(QMainWindow):
         self.docks: dict[str, QDockWidget] = {}
         self.loading = 0
         self._pending_project = None
+        self._fresh_folders: set = set()      # batch folders of runs loaded (not from a project) in this load
         self._maximized = None          # (dock, saved main-window state | floating geometry)
         central = QWidget()
         central.hide()
@@ -599,19 +600,29 @@ class MainWindow(QMainWindow):
             for key in list(st.results):
                 self.ws.integrate(st.id, key, emit=False)
             self.ws.runChanged.emit(st.id)
+        else:
+            self._fresh_folders.add(self.ws.folder_key(st))
         self.ws.log("Chromatogram loaded", st.name, str(run.path))
         # Finish the initial fit before reporting the load complete; later gestures win.
         self.view_link.reset()
         self._loading(-1)
         self.statusBar().showMessage(f"Loaded {st.name}", 4000)
-        if self.loading == 0 and self._pending_project is not None:
-            self._finish_project_load()
+        self._load_finished()
 
     def _load_failed(self, path, err):
         self._loading(-1)
         QMessageBox.warning(self, "Load failed", f"{Path(path).name}\n\n{err.splitlines()[0]}")
-        if self.loading == 0 and self._pending_project is not None:
+        self._load_finished()
+
+    def _load_finished(self):
+        if self.loading:
+            return
+        if self._pending_project is not None:
             self._finish_project_load()
+        elif self._fresh_folders:
+            # runs finish loading in any order: suggest the blanks again from the complete batch
+            folders, self._fresh_folders = self._fresh_folders, set()
+            self.ws.resuggest_blanks(folders)
 
     def close_run(self, run_id):
         st = self.ws.runs.get(run_id)
