@@ -93,3 +93,22 @@ def test_real_run_applies_and_keeps_ids(fresh07):
     assert ws.replicate_groups[0]["features"]["ids"]
     ids_before = {f.id for f in before.features}
     assert {f.id for f in gap} <= ids_before       # a filled feature keeps its id
+
+
+def test_real_consensus_names_agree_after_apply(fresh07):
+    from gcws.features import service as SV
+    ws, ids = fresh07
+    before = SV.build(ws, ids)
+    resolved = [f.id for f in before.features if f.identity and f.identity.case == "B"]
+    assert resolved
+    n_before = ws.project_undo.count()
+    after = SV.run(ws, ids, stack=ws.project_undo)
+    assert ws.project_undo.count() == n_before + 1          # gap fills and names: one step
+    for fid in resolved:
+        f = after.by_id(fid)
+        assert f.identity.case == "A", (fid, f.identity)
+        names = {m.peak.name for m in f.found}
+        assert len(names) == 1
+    ws.project_undo.undo()
+    again = SV.build(ws, ids, gapfill=False)
+    assert sum(1 for f in again.features if f.identity and f.identity.case == "B") == len(resolved)

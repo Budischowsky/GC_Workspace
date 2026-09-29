@@ -13,6 +13,7 @@ import copy
 from typing import Optional
 
 from gcws.features import align as AL
+from gcws.features import consensus as CO
 from gcws.features import gapfill as GF
 from gcws.features import ids as IDS
 from gcws.features.inputs import collect
@@ -57,9 +58,77 @@ def noise_pp(ws, run_id: str, key: str) -> float:
     return cache[ck]
 
 
+def quality_limit(ws) -> float:
+    from gcws.quant.nias_bridge import make_settings
+    return float(getattr(make_settings((ws.quant or {}).get("settings")), "quality_limit", 70) or 70)
+
+
+def search_method(ws, members: list[str]):
+    """The library search method of the first determination's GC method."""
+    from gcws.identify.service import search_methods
+    st = ws.runs.get(members[0]) if members else None
+    gc_method = st.run.meta.method if st is not None and getattr(st.run, "meta", None) else ""
+    return search_methods().for_gc_method(gc_method)
+
+
+def ri_function(ws, key: str, delay: float = 0.0):
+    """``feature -> RI`` from the alkane ladder (FID time), or None without a usable ladder."""
+    ladder = (((ws.quant or {}).get("ri") or {}).get("ladder")) or {}
+    if len(ladder) < 2:
+        return None
+    try:
+        import gc_qc
+        lad = {int(k): float(v) for k, v in ladder.items()}
+    except (ImportError, TypeError, ValueError):
+        return None
+    from gcws.core.keys import is_fid
+    shift = 0.0 if is_fid(key) else delay
+
+    def ri(f):
+        try:
+            return gc_qc.retention_index(f.rt + shift, lad)
+        except Exception:  # noqa: BLE001 - outside the ladder
+            return None
+    return ri
+
+
+def consensus(ws, table: FeatureTable, cfg: Settings, members: list[str], search: bool = True) -> None:
+    """Consensus spectra, their library search (cached per spectrum) and the identities."""
+    cache = getattr(ws, "_feature_consensus", None)
+    if cache is None:
+        cache = ws._feature_consensus = {}
+    needed = []
+    ql = quality_limit(ws)
+    for f in table.features:
+        f.consensus = CO.consensus_spectrum(f, cfg)
+        if f.consensus is None or f.mismatch:
+            continue
+        firsts = [m.peak.hits[0] for m in f.found if m.peak.hits]
+        groups = CO.Groups([[h] for h in firsts])
+        if len({groups.of(h) for h in firsts}) < 2:
+            continue                                   # case A needs no search
+        if not any(CO._score(h) >= ql for h in firsts):
+            continue                                   # nothing acceptable to choose between
+        ck = (tuple(int(m) for m in f.consensus[0]), tuple(round(float(a), 1) for a in f.consensus[1]))
+        if ck in cache:
+            f.consensus_hits = cache[ck]
+        else:
+            needed.append((ck, f))
+    if needed and search and cfg.consensus_search:
+        note = CO.search_consensus(table, search_method(ws, members), [f for _ck, f in needed])
+        if note:
+            table.notes.append(note)
+        else:
+            for ck, f in needed:
+                cache[ck] = f.consensus_hits
+    delay = ws.runs[members[0]].delay_value if members and members[0] in ws.runs else 0.0
+    CO.resolve(table, cfg, ql, ri_function(ws, table.key, delay))
+
+
 def build(ws, members: list[str], group: Optional[dict] = None, cfg: Optional[Settings] = None,
-          key: Optional[str] = None, *, gapfill: bool = True) -> FeatureTable:
-    """The feature table of the determinations ``members`` (the first is the reference)."""
+          key: Optional[str] = None, *, gapfill: bool = True, search: bool = True) -> FeatureTable:
+    """The feature table of the determinations ``members`` (the first is the reference);
+    ``search``: the consensus spectra may be searched in the libraries (else only cached hits)."""
     cfg = cfg or settings(ws)
     key = key or quant_key(ws)
     group = group if group is not None else group_of(ws, members)
@@ -72,6 +141,8 @@ def build(ws, members: list[str], group: Optional[dict] = None, cfg: Optional[Se
         runs = {r.run_id: ws.runs[r.run_id].run for r in inputs}
         noise = {r.run_id: noise_pp(ws, r.run_id, key) for r in inputs}
         GF.fill_table(table, runs, noise, cfg)
+    if len(inputs) > 1:
+        consensus(ws, table, cfg, [r.run_id for r in inputs], search)
     return table
 
 

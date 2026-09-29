@@ -1,0 +1,195 @@
+"""Feature double determination, P66: consensus spectrum and consensus identification."""
+import numpy as np
+import pytest
+
+from gcws import paths
+from gcws.core.ident import Identification
+from gcws.features import consensus as C
+from gcws.features.model import DETECTED, GAPFILL, Feature, Member, PeakInfo, Settings
+
+SPEC = (np.array([57, 71, 85, 99, 113, 142]), np.array([100.0, 70.0, 45.0, 25.0, 15.0, 8.0]))
+
+
+def hits(*items):
+    return [{"name": n, "cas": c, "score": s} for n, c, s in items]
+
+
+def member(label, hit_list, *, origin=DETECTED, manual=False, istd="", spec=SPEC, rt=10.0):
+    ident = None
+    if hit_list or manual or istd:
+        top = hit_list[0] if hit_list else {"name": "Manual name", "cas": "1-1-1", "score": None}
+        ident = Identification(apex_rt=rt, name=top["name"], cas=top["cas"], score=top["score"],
+                               status="Accepted", hits=hit_list, manual=manual, istd=istd)
+    p = PeakInfo(index=0, rt=rt, start=rt - 0.02, end=rt + 0.02, area=1e5, height=5e3, spectrum=spec,
+                 ident=ident, hits=list(hit_list or []), istd=bool(istd))
+    return Member(label.lower(), label, p, origin, rt)
+
+
+def feature(*members, sim=0.9, mismatch=False):
+    return Feature(members=list(members), rt=10.0, id="F-001", sim=sim, mismatch=mismatch)
+
+
+X, Y, Z = ("Xylene", "95-47-6"), ("Ethylbenzene", "100-41-4"), ("Styrene", "100-42-5")
+
+
+def test_case_a_same_first_hit():
+    f = feature(member("A", hits((*X, 88), (*Y, 80))), member("B", hits((*X, 85), (*Z, 70))))
+    ident = C.decide(f, Settings())
+    assert (ident.case, ident.name, ident.cas, ident.status) == ("A", "Xylene", "95-47-6", C.ACCEPTED)
+    assert C.write_back(f, ident, "FID") == []
+
+
+def test_case_c_swapped_close_candidates_report_both():
+    f = feature(member("A", hits((*X, 86), (*Y, 84))), member("B", hits((*Y, 85), (*X, 84.5))))
+    ident = C.decide(f, Settings())
+    assert ident.case == "C" and ident.status == C.REVIEW
+    assert ident.name == "Xylene / Ethylbenzene" and ident.cas == "95-47-6 / 100-41-4"
+    assert ident.candidates[0]["scores"] == {"A": 86.0, "B": 84.5}
+    assert C.write_back(f, ident, "FID") == []
+
+
+def test_case_b_clear_leader_over_both_hit_lists():
+    f = feature(member("A", hits((*X, 88), (*Y, 80))), member("B", hits((*Y, 82), (*X, 81))))
+    ident = C.decide(f, Settings())
+    assert (ident.case, ident.name, ident.status) == ("B", "Xylene", C.ACCEPTED)
+    assert ident.margin == pytest.approx(3.5)
+    (p,) = C.write_back(f, ident, "FID")
+    assert p.run_id == "b" and p.kind == "identity"
+    assert p.ident.name == "Xylene" and p.ident.status == C.ACCEPTED
+    assert [h["name"] for h in p.ident.hits] == ["Xylene", "Ethylbenzene"]
+    assert p.ident.source == C.SOURCE and not p.ident.manual
+
+
+def test_consensus_search_decides():
+    f = feature(member("A", hits((*X, 86), (*Y, 84))), member("B", hits((*Y, 85), (*X, 84.5))))
+    f.consensus_hits = hits((*Y, 90), (*X, 80))
+    ident = C.decide(f, Settings())
+    assert (ident.case, ident.name, ident.status) == ("B", "Ethylbenzene", C.ACCEPTED)
+    assert "consensus spectrum" in ident.basis
+    (p,) = C.write_back(f, ident, "FID")
+    assert p.run_id == "a" and p.ident.name == "Ethylbenzene"
+
+
+def test_case_d_mismatch():
+    f = feature(member("A", hits((*X, 86))), member("B", hits((*Z, 85))), sim=0.3, mismatch=True)
+    ident = C.decide(f, Settings())
+    assert ident.case == "D" and ident.status == C.CONFLICT
+    assert ident.name == "Xylene / Styrene"
+
+
+def test_analyst_and_istd_win():
+    f = feature(member("A", [], manual=True), member("B", hits((*X, 90))))
+    ident = C.decide(f, Settings())
+    assert (ident.case, ident.name, ident.status) == ("manual", "Manual name", C.ACCEPTED)
+    assert C.write_back(f, ident, "FID") == []
+    g = feature(member("A", hits(("BBP-d4", "", 95)), istd="IS2"), member("B", hits((*X, 90))))
+    assert C.decide(g, Settings()).case == "istd"
+
+
+def test_gap_filled_member_takes_the_name():
+    f = feature(member("A", hits((*X, 88), (*Y, 80))), member("B", [], origin=GAPFILL))
+    ident = C.decide(f, Settings())
+    assert ident.case == "A" and ident.name == "Xylene"
+    (p,) = C.write_back(f, ident, "FID")
+    assert p.run_id == "b" and p.ident.name == "Xylene" and p.ident.hits[0]["name"] == "Xylene"
+
+
+def test_below_the_quality_limit_everywhere_stays_unknown():
+    a, b = member("A", hits((*X, 60))), member("B", hits((*Y, 65)))
+    for m, name in ((a, "unknown (m/z 57, 71)"), (b, "possible derivative of benzene")):
+        m.peak.ident.status, m.peak.ident.name = "Uncertain", name
+    f = feature(a, b)
+    ident = C.decide(f, Settings(), quality_limit=70)
+    assert ident.case == "U" and ident.status == "Uncertain"
+    assert ident.name == "possible derivative of benzene"           # the better of the two
+    assert C.write_back(f, ident, "FID") == []
+
+
+def test_same_hit_accepted_in_one_determination_only():
+    b = member("B", hits((*X, 65), (*Y, 60)))
+    b.peak.ident.status = "Uncertain"
+    f = feature(member("A", hits((*X, 82))), b)
+    ident = C.decide(f, Settings(), quality_limit=70)
+    assert (ident.case, ident.name, ident.status) == ("A", "Xylene", C.ACCEPTED)
+    assert "below 70 in B" in ident.basis
+
+
+def test_one_accepted_candidate_against_a_weak_other():
+    b = member("B", hits((*Y, 66)))
+    b.peak.ident.status = "Uncertain"
+    f = feature(member("A", hits((*X, 84))), b)
+    ident = C.decide(f, Settings(), quality_limit=70)
+    assert ident.case == "C" and ident.name == "Xylene" and ident.status == C.REVIEW
+    assert "accepted in A only" in ident.basis
+
+
+def test_synonyms_and_missing_cas_are_one_substance():
+    f = feature(member("A", hits(("Benzaldehyde, 2,4,5-trimethyl-", "5779-72-6", 90))),
+                member("B", hits(("Benzaldehyde, 2,4,5-trimethyl-", "", 91))))
+    assert C.decide(f, Settings()).case == "A"
+    g = feature(member("A", hits(("2,4,5-Trimethylbenzaldehyde", "5779-72-6", 88))),
+                member("B", hits(("Benzaldehyde, 2,4,5-trimethyl-", "5779-72-6", 91))))
+    assert C.decide(g, Settings()).case == "A"
+
+
+def test_ri_breaks_a_tie():
+    a = member("A", [{"name": X[0], "cas": X[1], "score": 86, "ri": 905}, {"name": Y[0], "cas": Y[1], "score": 84, "ri": 860}])
+    b = member("B", [{"name": Y[0], "cas": Y[1], "score": 85, "ri": 860}, {"name": X[0], "cas": X[1], "score": 84.5, "ri": 905}])
+    f = feature(a, b)
+    ident = C.decide(f, Settings(ri_tol=20.0), ri=903.0)
+    assert (ident.case, ident.name) == ("B", "Xylene")
+    assert C.ri_score(903, 905, 20) == pytest.approx(0.9)
+    assert C.ri_score(None, 905, 20) is None
+
+
+def test_consensus_spectrum_average():
+    s1 = (np.array([57, 71, 85, 99, 113]), np.array([100.0, 50.0, 30.0, 20.0, 10.0]))
+    s2 = (np.array([57, 71, 85, 99, 127]), np.array([200.0, 120.0, 60.0, 40.0, 10.0]))
+    f = feature(member("A", [], spec=s1), member("B", [], spec=s2), sim=0.9)
+    mz, ab = C.consensus_spectrum(f, Settings())
+    assert list(mz) == [57, 71, 85, 99, 113, 127]
+    assert ab[0] == pytest.approx(999.0)
+    assert ab[1] == pytest.approx((499.5 + 599.4) / 2)
+    f.sim = 0.5
+    assert C.consensus_spectrum(f, Settings()) is None
+
+
+@pytest.fixture
+def library(tmp_path, monkeypatch):
+    from gcws.identify import library_edit as LE
+    from gcws.libsearch import service, store
+    monkeypatch.setattr(paths, "DATA", tmp_path)
+    service.reset()
+    recs = [("Hexadecane", [(57, 999), (71, 650), (85, 420), (99, 150), (226, 20)]),
+            ("Pentadecane", [(57, 999), (71, 700), (85, 480), (99, 170), (212, 25)])]
+    p = tmp_path / "Own.msp"
+    p.write_text(LE.write_msp([LE.new_record(n, pk) for n, pk in recs]), encoding="cp1252", newline="")
+    store.save(store.discover(p))
+    yield
+    service.reset()
+
+
+def test_search_consensus_with_a_library(library):
+    import gc_search_method as SM
+    method = SM.SearchMethod(libraries=[SM.LibraryEntry("Own", True)], algorithm="similarity")
+    s = (np.array([57, 71, 85, 99, 226]), np.array([999.0, 650.0, 420.0, 150.0, 20.0]))
+    f = feature(member("A", [], spec=s), member("B", [], spec=s), sim=0.95)
+    f.consensus = C.consensus_spectrum(f, Settings())
+    note = C.search_consensus(None, method, [f])
+    assert note == ""
+    assert f.consensus_hits and f.consensus_hits[0]["name"] == "Hexadecane"
+
+
+def test_search_without_libraries_is_a_note(tmp_path, monkeypatch):
+    import gc_search_method as SM
+    from gcws.libsearch import service
+    monkeypatch.setattr(paths, "DATA", tmp_path)
+    service.reset()
+    try:
+        f = feature(member("A", []), member("B", []))
+        f.consensus = SPEC
+        note = C.search_consensus(None, SM.SearchMethod(), [f])
+        assert note.startswith("consensus spectra not searched")
+        assert f.consensus_hits == []
+    finally:
+        service.reset()
