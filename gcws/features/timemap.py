@@ -103,7 +103,7 @@ def global_shift(ref_peaks: Iterable[tuple[float, float]], run_peaks: Iterable[t
     maximum."""
     a = sorted((p for p in ref_peaks if p[1] > 0), key=lambda p: -p[1])[:top]
     b = sorted((p for p in run_peaks if p[1] > 0), key=lambda p: -p[1])[:top]
-    if not a or not b:
+    if not a or not b or max_shift <= 0:
         return ShiftEstimate(0.0, 0, "none")
     max_a, max_b = a[0][1], b[0][1]
     diffs, weights = [], []
@@ -117,7 +117,7 @@ def global_shift(ref_peaks: Iterable[tuple[float, float]], run_peaks: Iterable[t
         return ShiftEstimate(0.0, 0, "none")
     edges = np.arange(-max_shift - bin_width, max_shift + 2 * bin_width, bin_width)
     hist, _ = np.histogram(diffs, bins=edges, weights=weights)
-    smoothed = np.convolve(hist, [1, 2, 3, 2, 1], mode="same")
+    smoothed = np.convolve(hist, [1, 2, 3, 2, 1], mode="full")[2:2 + hist.size]
     k = int(np.argmax(smoothed))
     center = (edges[k] + edges[k + 1]) / 2
     near = [i for i, d in enumerate(diffs) if abs(d - center) <= 2.5 * bin_width]

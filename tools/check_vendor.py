@@ -34,7 +34,8 @@ PORTED = """## Ported algorithms (mzmine)
 commit ea6ee5e of 2026-09-28): the GC aligner's row score (`align_gc/GcRowAlignScorer`,
 `align_join/RowVsRowScore`), the multi-list aligner (`align_common/BaseFeatureListAligner`), the
 consensus quantifier ion (`align_gc/GCConsensusAlignerPostProcessor`), the gap filler
-(`gapfill_peakfinder/Gap`), the spectral similarities (`util/scans/similarity`: `Weights`,
+(`gapfill_peakfinder/Gap`), the co-eluting-ion pseudo spectrum
+(`featdet_spectraldeconvolutiongc`, RT grouping and shape correlation), the spectral similarities (`util/scans/similarity`: `Weights`,
 weighted and composite cosine) and the annotation RI score (`AnnotationSummary`). Each ported
 function names its source. ADAP (dulab) and mzmine 2 (GPL) code is not used.
 
