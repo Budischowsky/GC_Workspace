@@ -55,7 +55,8 @@ class HSQuantPanel(QWidget):
         self.codes = QComboBox()
         row.addWidget(self.codes)
         for label, fn in (("Bind selected TIC peak", lambda: self.bind()), ("Unbind", lambda: self.binding(None)),
-                          ("Automatic", lambda: self.binding(...))):
+                          ("Automatic", lambda: self.binding(...)), ("Detect...", self._detect),
+                          ("Learn spectrum", self._learn)):
             button = QPushButton(label)
             button.clicked.connect(fn)
             row.addWidget(button)
@@ -66,6 +67,18 @@ class HSQuantPanel(QWidget):
 
     def config(self):
         return self.ws.quant.get("hs", {})
+
+    def _detect(self):
+        from gcws.ui.dialogs.istd_detect import DetectIstdDialog
+        if self.ws.active is not None:
+            DetectIstdDialog(self.ws, self).exec()
+
+    def _learn(self):
+        dock = self.parent()
+        while dock is not None and not hasattr(dock, "learn_spectrum"):
+            dock = dock.parent()
+        if dock is not None:
+            dock.learn_spectrum(self.codes.currentData())
 
     def push(self, cfg, label):
         q = copy.deepcopy(self.ws.quant)

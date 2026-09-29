@@ -321,6 +321,8 @@ class MainWindow(QMainWindow):
         self.quant_menu.addAction("Assign blanks...", lambda: self.ws.active_id and self.assign_blanks(self.ws.active_id))
         self.quant_menu.addAction("Blank subtraction settings...", self.edit_blank_options)
         self.quant_menu.addAction(self.setIstdAction)
+        self.quant_menu.addAction("Detect internal standards...", lambda: (self._show_dock("quant"),
+                                                                         self.quant.detect_istds()))
         self.quant_menu.addSeparator()
         self.quant_menu.addAction("Quantification panel", lambda: self._show_dock("quant"))
         self.quant_menu.addAction("Double determination...", lambda: self.open_double_determination())

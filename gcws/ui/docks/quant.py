@@ -149,9 +149,26 @@ class QuantDock(QScrollArea):
         h.addWidget(unbind)
         h.addWidget(auto)
         h.addStretch(1)
+        h2 = QHBoxLayout()
+        detect = QPushButton("Detect ISTDs...")
+        detect.setToolTip("Find every standard of the table by library name, spectrum and retention time, "
+                          "also when the run is shifted; shows the evidence before binding")
+        detect.clicked.connect(self.detect_istds)
+        learn = QPushButton("Learn spectrum")
+        learn.setToolTip("Keep the spectrum of the chosen standard's peak in this run as its reference: "
+                         "later runs find it by spectrum, without a library search")
+        learn.clicked.connect(self.learn_spectrum)
+        h2.addWidget(detect)
+        h2.addWidget(learn)
+        h2.addStretch(1)
+        self.refs_note = QLabel()
+        self.refs_note.setObjectName("hint")
+        self.refs_note.setWordWrap(True)
         self.factor = QLabel()
         rl.addWidget(self.bound)
         rl.addLayout(h)
+        rl.addLayout(h2)
+        rl.addWidget(self.refs_note)
         rl.addWidget(self.factor)
         lay.addWidget(run)
         self.legacy_groups = (par, istd, run)
@@ -276,6 +293,7 @@ class QuantDock(QScrollArea):
         for d in defs:
             self.bind_box.addItem(f"{d['code']}  {d['name']}", d["code"])
         self._refresh_bound()
+        self._refresh_refs()
         self._loading = False
 
     def _def_row(self, d):
@@ -434,6 +452,37 @@ class QuantDock(QScrollArea):
 
     def _auto_bind(self):
         self._set_binding(self.bind_box.currentData(), ...)
+
+    def detect_istds(self):
+        """Quantify > Detect internal standards: the automatic detection with its evidence."""
+        from gcws.ui.dialogs.istd_detect import DetectIstdDialog
+        if self.ws.active is None:
+            QMessageBox.information(self, "ISTD", "Load and select a sample chromatogram first.")
+            return
+        DetectIstdDialog(self.ws, self).exec()
+
+    def learn_spectrum(self, code=None):
+        """The chosen standard's spectrum in the active run becomes its reference (undoable)."""
+        from gcws.quant import istd_detect as ID
+        st = self.ws.active
+        hs = self.ws.quant.get("mode") == "hs_screening"
+        code = code or (self.hs_panel.codes.currentData() if hs else self.bind_box.currentData())
+        if st is None or not code:
+            return None
+        ref = ID.learn_reference(self.ws, st.id, code)
+        if ref is None:
+            QMessageBox.information(self, "ISTD", f"{code} is not found in {st.name}: bind its peak first.")
+            return None
+        q = copy.deepcopy(self.ws.quant)
+        q.setdefault("istd_refs", {})[code] = ref
+        self._push_quant(f"ISTD {code}: reference spectrum from {st.name}", q)
+        return ref
+
+    def _refresh_refs(self):
+        refs = self.ws.quant.get("istd_refs") or {}
+        self.refs_note.setText("Reference spectra: " + ", ".join(
+            f"{c} ({r.get('learned_from', '')})" for c, r in sorted(refs.items()) if r) if refs else
+            "No reference spectra learned yet: bind a standard, then 'Learn spectrum'.")
 
     def edit_migration(self):
         dlg = MigrationDialog(self.ws.quant.get("migration") or {}, self._settings(), self)
