@@ -312,8 +312,36 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
    parameters.
 9. **Double determination**: right-click a loaded sample and choose *Double determination with ▸* (the partner is
    suggested), or use *Quantify > Double determination*.
-   - Summary cards count confirmed substances, differences above the limit, artefacts found in only one
-     determination, and differing identifications.
+   - **Feature pairing** (default): *Compare* treats both injections as one data set.
+     - It removes the drift between them and pairs the peaks by retention time *and* EI spectrum: only the ions
+       that co-elute with the peak are compared, scored like mzmine's GC aligner.
+     - A peak found in only one injection is searched for again in the other (**gap filling**). The
+       characteristic ions must co-elute and the spectrum must match, and the FID must show the peak with
+       S/N ≥ 3. Otherwise the peak is *not detectable*, never "area 0".
+     - Every substance gets **one name from both hit lists**: the same first hit; or a candidate that clearly
+       leads over both lists, or over the searched consensus spectrum. If neither applies, both candidates
+       are shown as "c1 / c2"; the NIAS report then takes the lower SML.
+     - Gap fills and names are made automatically as **one undo step** and logged. An automatic change that
+       you undo is not made again.
+   - Every substance has a **feature id** (F-001, kept through re-integrations) and a **traffic light**:
+     - **green**: confirmed;
+     - **yellow**: made consistent automatically (gap fill, name by consensus, two candidates, a difference
+       up to 1.5× the limit, harmonised boundaries proposed): a quick look;
+     - **red**: your decision (in one injection only and not detectable in the other, so not reported;
+       different spectra at the same retention time; one peak here and two there; a difference above
+       1.5× the limit);
+     - **grey**: not reported (below the reporting limit or at blank level).
+   - *Only red* and **F3** (next red) lead you through the exceptions. The right-click menu chooses a
+     candidate name, removes a gap fill, or takes over the proposed integration boundaries (also *Harmonise
+     boundaries* for all of them). Boundaries are only proposed where the estimated area brings the two
+     injections closer together.
+   - The spectra of the selected substance are mirrored beside the chromatograms (A up, B down).
+   - *Settings…* switches to the **classic** AutoLib pairing (name first, then retention time; the reports are
+     as before) and sets the tolerances. The settings are part of processing methods. HS screening keeps the
+     classic pairing.
+   - `tools\duplicate_benchmark.py --lib-oracle` compares both pairings on a batch.
+   - With the classic pairing, summary cards count confirmed substances, differences above the limit, artefacts
+     found in only one determination, and differing identifications.
    - Every substance gets a plain-language verdict. The mirror plot shows A above and B below in FID signal
      units (baseline removed, solvent front left out); it fits the intensity to the visible time window, so a
      picked substance is shown full height. Wheel / drag: time; double-click: the whole run.
@@ -406,6 +434,10 @@ analyst), need control, were not processed, are waiting or failed - per workflow
   without a blank. Optional: no SML above the reporting limit, a substance above a concentration (name / CAS
   pattern), too many unidentified substances, a fixed ISTD area window. Each rule can be *control needed* or
   *note only*; a workflow's Report² step can have its own rules.
+- **Double determination: substances to decide** (default on): with the feature pairing the job makes the
+  automatic gap fills and names (as *Compare* does) before the reports are made. Every **red** substance sends
+  the report to *Control needed*, including those not reported because they were found in one injection only.
+  The yellow ones can be listed too.
 
 **Batch report from GC Workspace** (*Report > Batch report of this folder...*): every sample of the active
 chromatogram's batch folder (its replicate groups, else the suggested ones) is reported into a folder you

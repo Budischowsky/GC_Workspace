@@ -181,6 +181,16 @@ def run_job(spec: dict, *, progress: Callable[[str], None] = log.info,
     ws.replicate_groups = [{"id": group.get("key") or "g", "name": group["name"], "members": members,
                             "policy": group.get("policy", "all")}]
     ws.recompute_quant()
+    # the feature double determination: gap fills and one name per substance, as the analyst's Compare
+    if len(members) >= 2 and mode != "rereport":
+        t1 = time.time()
+        try:
+            note = run_features(ws, members)
+            if note:
+                warnings.append(note)
+        except Exception as exc:  # noqa: BLE001 - reported as a finding, the reports are still made
+            warnings.append(f"Double determination (features) failed: {exc}")
+        timings["features"] = round(time.time() - t1, 1)
     if detection:
         from gcws.quant import istd_detect as ID
         for rid, codes in detection.items():
@@ -275,6 +285,40 @@ def run_job(spec: dict, *, progress: Callable[[str], None] = log.info,
                      warnings + sample_warn + errors_ev, timings)
 
 
+def run_features(ws, members: list) -> str:
+    """Pair the determinations by features and make the automatic changes (gap fills, names);
+    returns a note for the job ("" when there is nothing to say)."""
+    from gcws.features import service as SV
+    from gcws.features.model import PAIRING_FEATURES
+    if SV.pairing(ws) != PAIRING_FEATURES or (ws.quant or {}).get("mode") == "hs_screening":
+        return ""
+    stack = ws.project_undo
+    before = stack.count()
+    table = SV.run(ws, members, stack=stack)
+    if stack.count() != before:
+        ws.recompute_quant()
+    names = " / ".join(ws.runs[m].name for m in members if m in ws.runs)
+    gap = sum(1 for f in table.features for m in f.members if m.origin == "gapfill")
+    ws.log("Automation: double determination (features)", names,
+           f"{len(table.features)} features, {gap} gap fill(s); " + "; ".join(table.notes))
+    return next((n for n in table.notes if n.startswith("consensus")), "")
+
+
+def feature_evidence(ws, members: list) -> list[dict]:
+    """The feature rows of the determinations (all of them, also those not reported) for Report²."""
+    from gcws.quant import duplicate_view as DV
+    if len(members) < 2 or DV.features_table(ws, members) is None:
+        return []
+    rows, _problems = DV.compute(ws, members, "all")
+    out = []
+    for r in rows:
+        out.append({"feature_id": r.get("feature_id"), "rt": r.get("rt"), "name": r.get("name"),
+                    "cas": r.get("cas"), "light": r.get("light"), "verdict": r.get("verdict"),
+                    "reasons": "; ".join(r.get("reasons") or []), "c1": r.get("c1"), "c2": r.get("c2"),
+                    "mean": r.get("mean"), "status": r.get("status")})
+    return out
+
+
 def evidence_for(ws, members: list, *, kind: str = "nias", require: str = "auto",
                  detection: Optional[dict] = None) -> dict:
     """What the Report² rules look at for the determinations ``members`` of one sample (without the
@@ -292,7 +336,12 @@ def evidence_for(ws, members: list, *, kind: str = "nias", require: str = "auto"
             "quant_error": (ws.quant_result.errors.get(rid) if ws.quant_result else "") or "",
             "blank_ok": chk.ok, "blank_text": chk.text, "blanks": chk.assigned,
             "istd_detection": (detection or {}).get(rid, {})})
+    try:
+        features = feature_evidence(ws, members)
+    except Exception:  # noqa: BLE001 - the other rules still work
+        features = []
     return {"kind": kind, "members": out, "rows": [], "summary": {}, "warnings": [], "errors": [],
+            "features": features,
             "settings": {"reporting_limit": getattr(s, "reporting_limit", 0.01),
                          "duplicate_max_reldiff": getattr(s, "duplicate_max_reldiff", 30.0)}}
 

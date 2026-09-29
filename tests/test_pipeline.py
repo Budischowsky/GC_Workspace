@@ -203,3 +203,26 @@ def test_job_process(samples, data, tmp_path):
     done = subprocess.run([sys.executable, "-m", "gcws", "--process-job", str(bad / "spec.json")],
                           cwd=str(paths.ROOT), env=env, timeout=600, capture_output=True)
     assert json.loads((bad / "result.json").read_text(encoding="utf-8"))["state"] in ("retry", "failed")
+
+
+def test_job_makes_the_feature_double_determination(qapp, samples, data, tmp_path):
+    from gcws.automation import headless as H
+    from gcws.automation import pipeline as PL
+    batch = copy_batch(samples, tmp_path / "watch", ["06_", "07_", "08_", "11_", "13_"])
+    res = PL.run_job(spec(batch, tmp_path / "job"), identify=lib_oracle)
+    assert res.state in (PL.ACCEPTED_AUTO, PL.CONTROL), res.reason
+    assert "features" in res.timings
+    feats = res.evidence["features"]
+    assert feats and all(f["light"] in ("green", "yellow", "red", "grey") for f in feats)
+    red = [f for f in feats if f["light"] == "red"]
+    found = [f for f in res.findings if f["rule"] == "feature_review"]
+    assert len(found) == len(red)
+    if red:
+        assert res.state == PL.CONTROL
+    # the analyst's project holds the automatic gap fills and the record of what was made automatically
+    ws = H.new_workspace()
+    H.open_project(ws, res.project)
+    g = ws.replicate_groups[0]
+    assert g["features"]["ids"] and g["features"]["auto_done"]
+    gap = [e for st in ws.states() for e in st.events("FID") if e.option == "gapfill"]
+    assert gap and all("gap fill" in e.comment for e in gap)

@@ -195,3 +195,23 @@ def test_optional_rules_off_by_default_and_json(data):
     assert RU.to_list(RU.load_default_rules()) == RU.to_list(info)
     assert RU.to_list(RU.rules_for({})) == RU.to_list(info)
     assert RU.evaluate(RU.default_rules(), _evidence(), auto_accept=False).status == RU.CONTROL
+
+
+def test_feature_review_rule():
+    from gcws.automation import rules as RU
+    ev = {"features": [
+        {"feature_id": "F-003", "rt": 12.1, "name": "Xylene", "cas": "95-47-6", "light": "red",
+         "verdict": "Only in A", "reasons": "B: not detectable (m/z 91 shows no peak)", "c1": 0.2, "c2": None,
+         "mean": None},
+        {"feature_id": "F-004", "rt": 13.0, "name": "Toluene", "cas": "", "light": "yellow",
+         "verdict": "Check: gap fill", "reasons": "gap fill in B", "mean": 0.1},
+        {"feature_id": "F-005", "rt": 14.0, "name": "Hexane", "light": "green", "verdict": "Confirmed", "mean": 0.3}]}
+    rule = next(r for r in RU.default_rules() if r.id == "feature_review")
+    assert rule.enabled
+    (f,) = RU.CHECKS["feature_review"](rule, ev)
+    assert f.level == RU.CONTROL and "F-003" in f.substance and "not detectable" in f.text and f.value == 0.2
+    rule.params["yellow"] = True
+    found = RU.CHECKS["feature_review"](rule, ev)
+    assert [x.level for x in found] == [RU.CONTROL, "info"]
+    assert RU.evaluate([rule], {"features": ev["features"][1:]}).status == RU.ACCEPTED_AUTO
+    assert RU.evaluate([rule], ev).status == RU.CONTROL

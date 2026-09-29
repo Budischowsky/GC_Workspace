@@ -990,8 +990,9 @@ def test_double_determination_sheet_keys_and_fill(qtbot, win, samples):
     # Enter: back into the report
     QTest.keyClick(t, Qt.Key_Return)
     assert all(page.rows[k_of(x)]["report"] for x in rows_by_rt(rts[:2]))
-    win.a_undo.trigger()
-    win.a_undo.trigger()
+    # undo on the stack the steps went to: picking a row activates its run, and with it that run's stack
+    stack.undo()
+    stack.undo()
     assert all(page.rows[k_of(x)]["report"] for x in rows_by_rt(rts[:2]))
     # Ctrl+D: the top name goes into the marked cells below (both determinations' peaks)
     def names(n=3):
@@ -1004,11 +1005,12 @@ def test_double_determination_sheet_keys_and_fill(qtbot, win, samples):
     r = rows_by_rt(rts)
     t.clearSelection()
     t.setRangeSelected(QTableWidgetSelectionRange(r[0], C_NAME, r[2], C_NAME), True)
+    fill_stack = page._stack()
     QTest.keyClick(t, Qt.Key_D, Qt.ControlModifier)
     for rid in (a, b):
         assert sum(1 for i in ws.runs[rid].ident_set("FID").items if i.name == "Fill name") >= 3
     qtbot.waitUntil(lambda: names() == ["Fill name"] * 3, timeout=20000)
-    win.a_undo.trigger()
+    fill_stack.undo()                                      # the whole fill is one step
     qtbot.waitUntil(lambda: names()[1:] != ["Fill name"] * 2, timeout=20000)
     # Ctrl+V: one copied value into every marked cell; Ctrl+C gives tab-separated text
     r = rows_by_rt(rts)

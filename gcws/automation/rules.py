@@ -46,6 +46,12 @@ RULES = {
                           False, {"max": 5}),
     "no_blank": ("Processed without a blank",
                  "The sample was processed without a blank from its batch (the analyst allowed it).", True, {}),
+    "feature_review": ("Double determination: substances to decide",
+                       "The feature double determination marked a substance red: found in one determination only "
+                       "and not detectable in the other, different spectra at the same retention time, integrated "
+                       "as one peak here and two there, or a difference above 1.5 x the limit. Yellow substances "
+                       "(made consistent automatically: gap fill, name from both hit lists) can be listed too.",
+                       True, {"yellow": False}),
 }
 
 
@@ -300,10 +306,30 @@ def _no_blank(rule: Rule, ev: dict) -> list[Finding]:
     return out
 
 
+def _feature_review(rule: Rule, ev: dict) -> list[Finding]:
+    out = []
+    for row in ev.get("features") or []:
+        light = row.get("light")
+        if light == "red":
+            level = rule.level
+        elif light == "yellow" and rule.p("yellow"):
+            level = "info"
+        else:
+            continue
+        text = str(row.get("verdict") or light)
+        if row.get("reasons"):
+            text += ": " + str(row["reasons"])
+        out.append(Finding(rule.id, level, text, substance=f"{row.get('feature_id') or ''} {_label(row)}".strip(),
+                           cas=str(row.get("cas") or ""), rt=_num(row.get("rt")),
+                           value=_num(row.get("mean")) if row.get("mean") is not None else
+                           max((v for v in (_num(row.get("c1")), _num(row.get("c2"))) if v is not None), default=None)))
+    return out
+
+
 CHECKS = {"manual_check": _manual_check, "sml_exceeded": _sml_exceeded,
           "istd_qc": lambda r, ev: _istd_qc(r, ev) + _istd_spread(r, ev),
           "processing_warnings": _processing, "no_sml_above_limit": _no_sml, "substance_above": _substance_above,
-          "unidentified_over": _unidentified, "no_blank": _no_blank}
+          "unidentified_over": _unidentified, "no_blank": _no_blank, "feature_review": _feature_review}
 
 
 def evaluate(rules: list[Rule], evidence: dict, auto_accept: bool = True) -> Evaluation:

@@ -201,6 +201,11 @@ class DuplicatePage(QWidget):
         QShortcut(QKeySequence(Qt.Key_F3), self, activated=self.next_red)
         self.table_features = None                   # the FeatureTable of the rows (feature pairing)
         self._search = None                          # the running consensus search
+        self._comparing = False
+        self._refresh = QTimer(self)                 # a comparison asked for while one is running
+        self._refresh.setSingleShot(True)
+        self._refresh.setInterval(0)
+        self._refresh.timeout.connect(self._refresh_now)
 
         self.mirror = pg.PlotWidget(axisItems={"left": _AbsAxis("left")})
         self.mirror.setMenuEnabled(False)
@@ -387,8 +392,10 @@ class DuplicatePage(QWidget):
     # -- compute ---------------------------------------------------------------------------
 
     def _quant_changed(self):
-        if self.isVisible() and self.members and not getattr(self, "_comparing", False):
-            self.compare(sync=False)
+        """A new quantification: compare again -- never inside a running comparison (the building
+        of the feature table recomputes the quantification itself), and once for several changes."""
+        if self.isVisible() and self.members:
+            self._refresh.start()
         self.limit.blockSignals(True)
         self.limit.setValue(DV.limits(self.ws)[0])
         self.limit.blockSignals(False)
@@ -408,7 +415,23 @@ class DuplicatePage(QWidget):
         from gcws.quant.service import quant_detector
         return quant_detector(self.ws.quant)
 
+    def _refresh_now(self):
+        if self._comparing:
+            self._refresh.start(50)
+        elif self.isVisible() and self.members:
+            self.compare(sync=False)
+
     def compare(self, sync: bool = False):
+        if self._comparing:                         # re-entered through a signal: once more afterwards
+            self._refresh.start()
+            return
+        self._comparing = True
+        try:
+            self._compare(sync)
+        finally:
+            self._comparing = False
+
+    def _compare(self, sync: bool = False):
         key = self.quant_signal()
         self.mirror.setLabel("bottom", f"RT ({key})", units="min")
         self.mirror.setLabel("left", f"A  ↑   {key}   ↓  B")
@@ -430,13 +453,9 @@ class DuplicatePage(QWidget):
             # a deliberate Compare makes the automatic changes (each only once); a refresh only shows
             stack = self._stack()
             before = (stack.count(), stack.index())
-            self._comparing = True
-            try:
-                table = SV.run(self.ws, self.members, apply_auto=None if sync else False, stack=stack)
-                if (stack.count(), stack.index()) != before:
-                    self.ws.recompute_quant()          # the gap-filled peaks get their concentrations now
-            finally:
-                self._comparing = False
+            table = SV.run(self.ws, self.members, apply_auto=None if sync else False, stack=stack)
+            if (stack.count(), stack.index()) != before:
+                self.ws.recompute_quant()              # the gap-filled peaks get their concentrations now
             self.table_features = DV.features_table(self.ws, self.members, table)
         rows, problems = DV.compute(self.ws, self.members, "all")
         limit, rl = DV.limits(self.ws)
