@@ -51,6 +51,7 @@ class Settings:
     gap_shape_r: float = 0.8
     gap_min_cos: float = 0.7
     gap_min_points: int = 5
+    gap_min_fraction: float = 0.25        # FID-only gap fill: at least this share of the expected height
     gap_int_tol: float = 0.2              # mzmine Gap intTolerance
     consensus_search: bool = True
     id_margin: float = 3.0                # score points the consensus candidate must lead by
