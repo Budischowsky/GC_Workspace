@@ -1,0 +1,354 @@
+"""Automation panel: the workflows (folder -> method -> Report² -> report -> folder), the watcher
+that runs them in the background, and what it did last.
+
+The chart of a workflow is edited in its own window (:class:`gcws.ui.automation.editor.WorkflowEditor`).
+The watcher is a separate process; this panel starts, pauses and stops it and shows its state
+from the automation journal, which it reads every few seconds while visible.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Optional
+
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtWidgets import (QCheckBox, QFileDialog, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QMenu,
+                               QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout,
+                               QWidget)
+
+from gcws.automation import journal as J
+from gcws.automation import templates
+from gcws.automation import workflow as W
+from gcws.ui import theme
+
+STATE_LEVEL = {"running": "ok", "processing": "info", "paused": "warn", "stopped": "neutral",
+               "not responding": "bad"}
+
+
+class AutomationDock(QWidget):
+    showReport2 = Signal()
+
+    def __init__(self, parent=None, journal: Optional[J.Journal] = None, control=None, poll_ms: int = 3000):
+        super().__init__(parent)
+        self._journal = journal
+        self._control = control
+        self.editors: dict = {}
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(6, 6, 6, 6)
+        # the watcher
+        box = QGroupBox("Watcher (background processing)")
+        bl = QVBoxLayout(box)
+        row = QHBoxLayout()
+        self.state = theme.chip("stopped", "neutral")
+        self.state_text = QLabel()
+        self.state_text.setObjectName("hint")
+        row.addWidget(self.state)
+        row.addWidget(self.state_text, 1)
+        bl.addLayout(row)
+        row = QHBoxLayout()
+        self.b_start = QPushButton("Start")
+        theme.set_primary(self.b_start)
+        self.b_start.clicked.connect(self.start_watcher)
+        self.b_pause = QPushButton("Pause")
+        self.b_pause.clicked.connect(self.toggle_pause)
+        self.b_scan = QPushButton("Check now")
+        self.b_scan.clicked.connect(lambda: self._send("scan_now"))
+        self.b_stop = QPushButton("Stop")
+        self.b_stop.clicked.connect(self.stop_watcher)
+        for b in (self.b_start, self.b_pause, self.b_scan, self.b_stop):
+            row.addWidget(b)
+        row.addStretch(1)
+        self.autostart = QCheckBox("Start with Windows")
+        self.autostart.setToolTip("A shortcut in your Startup folder starts the watcher when you log on")
+        self.autostart.toggled.connect(self._autostart)
+        row.addWidget(self.autostart)
+        bl.addLayout(row)
+        bl.addWidget(theme.hint("The watcher keeps running when GC Workspace is closed (tray icon). It checks "
+                                "the watched folders, processes every finished sample and hands the reports "
+                                "to Report²."))
+        lay.addWidget(box)
+        # workflows
+        box = QGroupBox("Workflows")
+        wl = QVBoxLayout(box)
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(["Active", "Name", "Watched folder", "Every", "Waiting", "To check"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setWordWrap(False)
+        self.table.setTextElideMode(Qt.ElideMiddle)
+        hh = self.table.horizontalHeader()
+        for c in range(6):
+            hh.setSectionResizeMode(c, QHeaderView.Stretch if c == 2 else QHeaderView.ResizeToContents)
+        self.table.cellDoubleClicked.connect(lambda r, c: self.edit() if c else None)
+        self.table.itemChanged.connect(self._active_changed)
+        wl.addWidget(self.table, 1)
+        row = QHBoxLayout()
+        self.b_new = QToolButton()
+        self.b_new.setText("New")
+        self.b_new.setPopupMode(QToolButton.InstantPopup)
+        menu = QMenu(self.b_new)
+        for key, label in templates.TEMPLATES.items():
+            menu.addAction(label, lambda k=key: self.new(k))
+        self.b_new.setMenu(menu)
+        row.addWidget(self.b_new)
+        for label, fn in (("Edit chart...", self.edit), ("Duplicate", self.duplicate), ("Delete", self.delete),
+                          ("Import...", self.import_), ("Export...", self.export)):
+            b = QPushButton(label)
+            b.clicked.connect(fn)
+            row.addWidget(b)
+        row.addStretch(1)
+        r2 = QPushButton("Report²")
+        r2.clicked.connect(self.showReport2.emit)
+        row.addWidget(r2)
+        wl.addLayout(row)
+        lay.addWidget(box, 2)
+        # activity
+        box = QGroupBox("Activity")
+        al = QVBoxLayout(box)
+        self.log = QTableWidget(0, 3)
+        self.log.setHorizontalHeaderLabels(["When", "", "What"])
+        self.log.verticalHeader().setVisible(False)
+        self.log.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.log.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        al.addWidget(self.log)
+        lay.addWidget(box, 2)
+        self.timer = QTimer(self)
+        self.timer.setInterval(poll_ms)
+        self.timer.timeout.connect(self._poll)
+        self.timer.start()
+        self.status = {"state": "stopped"}
+        self.refresh()
+
+    # -- data ---------------------------------------------------------------------------------------
+
+    @property
+    def journal(self) -> J.Journal:
+        if self._journal is None:
+            self._journal = J.Journal()
+        return self._journal
+
+    @property
+    def control(self):
+        if self._control is None:
+            from gcws.automation.control import WatcherControl
+            self._control = WatcherControl()
+        return self._control
+
+    def _poll(self):
+        if self.isVisible():
+            self.refresh()
+
+    def refresh(self):
+        self._refresh_status()
+        self._refresh_workflows()
+        self._refresh_log()
+
+    def _refresh_status(self):
+        try:
+            self.status = self.control.status(self.journal)
+        except Exception:  # noqa: BLE001
+            self.status = {"state": "stopped"}
+        state = self.status.get("state", "stopped")
+        theme.set_chip(self.state, state, STATE_LEVEL.get(state, "neutral"))
+        cur = self.status.get("current") or ""
+        job = self.journal.job(cur) if cur else None
+        hb = self.status.get("heartbeat")
+        text = f"processing {job.group_name}" if job else ""
+        if hb is not None and state != "stopped":
+            text += ("; " if text else "") + f"last sign of life {hb:.0f} s ago"
+        self.state_text.setText(text)
+        running = state not in ("stopped", "not responding")
+        self.b_start.setEnabled(not running)
+        self.b_pause.setEnabled(running)
+        self.b_pause.setText("Resume" if state == "paused" else "Pause")
+        self.b_scan.setEnabled(running)
+        self.b_stop.setEnabled(running)
+        from gcws.automation import autostart
+        self.autostart.blockSignals(True)
+        self.autostart.setChecked(autostart.is_installed())
+        self.autostart.blockSignals(False)
+
+    def _refresh_workflows(self):
+        keep = self.selected_id()
+        self.table.blockSignals(True)
+        self.table.setRowCount(0)
+        for wf in W.list_workflows():
+            counts = self.journal.counts(wf.id)
+            r = self.table.rowCount()
+            self.table.insertRow(r)
+            on = QTableWidgetItem()
+            on.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            on.setCheckState(Qt.Checked if wf.enabled else Qt.Unchecked)
+            on.setData(Qt.UserRole, wf.id)
+            self.table.setItem(r, 0, on)
+            src = wf.source
+            vals = [wf.name, src.p("folder") if src else "", f"{src.p('interval_min')} min" if src else "",
+                    str(counts.get(J.WAITING, 0) + counts.get(J.QUEUED, 0) + counts.get(J.PROCESSING, 0)),
+                    str(counts.get(J.CONTROL, 0))]
+            for c, v in enumerate(vals, 1):
+                it = QTableWidgetItem(v)
+                if c == 5 and counts.get(J.CONTROL):
+                    it.setBackground(theme.status_brush("warn"))
+                self.table.setItem(r, c, it)
+            issues = W.errors(W.validate(wf, check_paths=False))
+            if issues:
+                self.table.item(r, 1).setToolTip("\n".join(i.text for i in issues))
+                self.table.item(r, 1).setForeground(theme.status_color("bad"))
+            if wf.id == keep:
+                self.table.selectRow(r)
+        self.table.blockSignals(False)
+
+    def _refresh_log(self):
+        try:
+            events = self.journal.events(limit=60)
+        except Exception:  # noqa: BLE001
+            return
+        self.log.setRowCount(0)
+        for e in reversed(events):
+            r = self.log.rowCount()
+            self.log.insertRow(r)
+            lvl = QTableWidgetItem("●")
+            lvl.setForeground(theme.status_color({"error": "bad", "warning": "warn"}.get(e.get("level"), "ok")))
+            self.log.setItem(r, 0, QTableWidgetItem(J.when(e["ts"])))
+            self.log.setItem(r, 1, lvl)
+            self.log.setItem(r, 2, QTableWidgetItem(e.get("text") or ""))
+        self.log.resizeColumnToContents(0)
+        self.log.resizeColumnToContents(1)
+
+    # -- watcher ---------------------------------------------------------------------------------------
+
+    def _send(self, cmd: str):
+        reply = self.control.send(cmd)
+        if reply is None and cmd != "quit":
+            QMessageBox.information(self, "Watcher", "The watcher is not running.")
+        QTimer.singleShot(300, self.refresh)
+        return reply
+
+    def start_watcher(self):
+        if not W.list_workflows() or not any(w.enabled for w in W.list_workflows()):
+            if QMessageBox.question(self, "Watcher", "No workflow is active. Start the watcher anyway?") \
+                    != QMessageBox.Yes:
+                return
+        if not self.control.start():
+            QMessageBox.warning(self, "Watcher", "The watcher could not be started.")
+        QTimer.singleShot(1500, self.refresh)
+
+    def toggle_pause(self):
+        self._send("resume" if self.status.get("state") == "paused" else "pause")
+
+    def stop_watcher(self):
+        if self.status.get("current") and QMessageBox.question(
+                self, "Watcher", "A sample is being processed. Stop anyway? It will be processed again at the next "
+                                 "start.") != QMessageBox.Yes:
+            return
+        self._send("quit")
+
+    def _autostart(self, on: bool):
+        from gcws.automation import autostart
+        try:
+            autostart.install() if on else autostart.remove()
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Start with Windows", str(exc))
+        self._refresh_status()
+
+    # -- workflows -------------------------------------------------------------------------------------
+
+    def selected_id(self) -> Optional[str]:
+        rows = self.table.selectionModel().selectedRows() if self.table.selectionModel() else []
+        if not rows:
+            return None
+        it = self.table.item(rows[0].row(), 0)
+        return it.data(Qt.UserRole) if it else None
+
+    def _active_changed(self, item):
+        if item.column() != 0:
+            return
+        wf = W.find(item.data(Qt.UserRole))
+        if wf is None:
+            return
+        on = item.checkState() == Qt.Checked
+        if on and W.errors(W.validate(wf)):
+            QMessageBox.information(self, "Workflow", f"'{wf.name}' is not complete: open its chart and correct "
+                                    "the errors first.")
+            self.refresh()
+            return
+        wf.enabled = on
+        wf.save()
+        self.control.send("reload", 500)
+        self.refresh()
+
+    def new(self, kind: str = "nias"):
+        from gcws.core import proc_method as PM
+        names = PM.names()
+        wf = templates.make(kind, method=names[0] if len(names) == 1 else "")
+        wf.save()
+        self.refresh()
+        return self.open_editor(wf)
+
+    def edit(self):
+        wf = W.find(self.selected_id() or "")
+        if wf is not None:
+            return self.open_editor(wf)
+        return None
+
+    def open_editor(self, wf: W.Workflow):
+        from gcws.ui.automation.editor import WorkflowEditor
+        ed = self.editors.get(wf.id)
+        if ed is None:
+            ed = WorkflowEditor(wf, self.window())
+            ed.setWindowFlag(Qt.Window, True)
+            ed.saved.connect(lambda *_: (self.control.send("reload", 500), self.refresh()))
+            ed.destroyed.connect(lambda *_, i=wf.id: self.editors.pop(i, None))
+            self.editors[wf.id] = ed
+        ed.show()
+        ed.raise_()
+        ed.activateWindow()
+        return ed
+
+    def duplicate(self):
+        wf = W.find(self.selected_id() or "")
+        if wf is None:
+            return
+        d = W.Workflow.from_dict(wf.to_dict())
+        d.id, d.name, d.enabled, d.created = W.new_id("wf"), wf.name + " (copy)", False, ""
+        d.save()
+        self.refresh()
+
+    def delete(self, confirm: bool = True):
+        wf = W.find(self.selected_id() or "")
+        if wf is None:
+            return
+        if confirm and QMessageBox.question(self, "Delete workflow", f"Delete the workflow '{wf.name}'? Reports "
+                                            "already made stay in Report² and in the target folders.") \
+                != QMessageBox.Yes:
+            return
+        W.delete(wf.id)
+        self.control.send("reload", 500)
+        self.refresh()
+
+    def export(self):
+        wf = W.find(self.selected_id() or "")
+        if wf is None:
+            return
+        fn, _ = QFileDialog.getSaveFileName(self, "Export workflow", f"{wf.name}.gcwsflow.json", "Workflow (*.json)")
+        if fn:
+            Path(fn).write_text(json.dumps(wf.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def import_(self, path=None):
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(self, "Import workflow", "", "Workflow (*.json)")
+        if not path:
+            return None
+        try:
+            wf = W.load(path)
+        except (OSError, ValueError, TypeError) as exc:
+            QMessageBox.warning(self, "Import workflow", str(exc))
+            return None
+        if W.find(wf.id) is not None:
+            wf.id = W.new_id("wf")
+        wf.enabled = False
+        wf.save()
+        self.refresh()
+        return wf

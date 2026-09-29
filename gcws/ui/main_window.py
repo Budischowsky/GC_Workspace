@@ -35,7 +35,7 @@ DOCKS = [  # key, title
     ("tree", "Folders"), ("chrom", "Chromatogram 1"), ("zoom", "Chromatogram 2"),
     ("table", "Peaks / substances"), ("spectrum", "Mass spectrum"), ("events", "Integration method"),
     ("props", "Properties"), ("audit", "Audit trail"), ("quant", "Quantification"),
-    ("replicates", "Replicates / results"),
+    ("replicates", "Replicates / results"), ("automation", "Automation"),
 ]
 
 
@@ -89,9 +89,11 @@ class MainWindow(QMainWindow):
         self.audit = AuditDock(self.ws)
         self.quant = QuantDock(self.ws)
         self.replicates = ReplicatesDock(self.ws)
+        from gcws.ui.docks.automation import AutomationDock
+        self.automation = AutomationDock(self)
         widgets = {"tree": self.folder_split, "chrom": self.chrom, "zoom": self.chrom2, "table": self.table,
                    "spectrum": self.spectrum, "events": self.events, "props": self.props, "audit": self.audit,
-                   "quant": self.quant, "replicates": self.replicates}
+                   "quant": self.quant, "replicates": self.replicates, "automation": self.automation}
         self.overlay = DropOverlay(self)
         for key, title in DOCKS:
             self._add_dock(key, title, widgets[key])
@@ -121,7 +123,7 @@ class MainWindow(QMainWindow):
         from gcws.ui.layout.title_bar import RightTitleDock
         d = RightTitleDock(title, self) if key in ("chrom", "zoom", "spectrum") else QDockWidget(title, self)
         d.setObjectName("dock." + key)
-        if key == "events":
+        if key in ("events", "automation"):
             # form-heavy panels scroll instead of forcing a wide minimum on the whole dock column
             from PySide6.QtWidgets import QScrollArea
             area = QScrollArea()
@@ -340,6 +342,17 @@ class MainWindow(QMainWindow):
         a.setCheckable(True)
         a.setChecked(QSettings().value("report/keep_middle", False, type=bool))
         a.toggled.connect(lambda on: QSettings().setValue("report/keep_middle", on))
+
+        self.automation_menu = m = mb.addMenu("&Automation")
+        m.addAction("Automation panel", lambda: self._show_dock("automation"))
+        new = m.addMenu("New workflow")
+        from gcws.automation.templates import TEMPLATES
+        for key, label in TEMPLATES.items():
+            new.addAction(label, lambda k=key: (self._show_dock("automation"), self.automation.new(k)))
+        m.addSeparator()
+        m.addAction("Start the watcher", self.automation.start_watcher)
+        m.addAction("Pause / resume the watcher", self.automation.toggle_pause)
+        m.addAction("Stop the watcher", self.automation.stop_watcher)
 
         m = mb.addMenu("&Layout")
         for name, tip in presets.PRESETS.items():
