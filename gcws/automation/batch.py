@@ -30,6 +30,7 @@ def combined_word(xlsx: list[Path], target: Path) -> Path:
 def summary_workbook(batch_name: str, entries: list[dict], target: Path) -> Path:
     """``entries``: name, state, reviewer, comment, reviewed, findings [{text, substance, member}], files."""
     from openpyxl import Workbook
+    from gcws.core.text import excel_safe
     from openpyxl.styles import Alignment, Font, PatternFill
     wb = Workbook()
     sh = wb.active
@@ -47,9 +48,9 @@ def summary_workbook(batch_name: str, entries: list[dict], target: Path) -> Path
         findings = e.get("findings") or []
         details = "\n".join(" - ".join(x for x in (f.get("member"), f.get("substance"), f.get("text")) if x)
                             for f in findings)
-        sh.append([e.get("name", ""), STATUS.get(e.get("state"), e.get("state", "")), e.get("reviewer") or "",
-                   e.get("reviewed") or "", e.get("comment") or "", len(findings), details,
-                   str(e.get("report") or "")])
+        sh.append([excel_safe(v) for v in (
+            e.get("name", ""), STATUS.get(e.get("state"), e.get("state", "")), e.get("reviewer") or "",
+            e.get("reviewed") or "", e.get("comment") or "", len(findings), details, str(e.get("report") or ""))])
         row = sh.max_row
         fill = fills.get(e.get("state"))
         if fill:

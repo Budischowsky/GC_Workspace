@@ -7,6 +7,8 @@ from openpyxl.utils import get_column_letter
 
 
 def literal(cell, value):
+    from gcws.core.text import excel_safe
+    value = excel_safe(value)
     cell.value = value
     if isinstance(value, str):
         cell.data_type = "s"
@@ -108,6 +110,12 @@ def generate(job, progress=lambda _: None):
                     cell.data_type = "s"
         for c in range(1, sheet.max_column + 1):
             sheet.column_dimensions[get_column_letter(c)].width = 24
+    from gcws.core.text import ILLEGAL, excel_safe
+    for sheet in wb.worksheets:
+        for line in sheet.iter_rows():
+            for cell in line:
+                if isinstance(cell.value, str) and ILLEGAL.search(cell.value):
+                    cell.value = excel_safe(cell.value)
     wb.save(job.target)
     write_word(job.word, title, subtitle, job.names, layout["titles"], rows)
     reported = [{"name": r[1], "cas": r[2], "rt": r[0]} for r in rows]

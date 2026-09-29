@@ -23,6 +23,11 @@ class Identification:
     istd: str = ""                     # ISTD code bound to this peak (quantification)
     peak_id: str = ""                  # replay-stable split fragment, empty for legacy RT binding
 
+    def __post_init__(self):
+        from gcws.core.text import clean_name, clean_rows
+        self.name, self.cas, self.formula = clean_name(self.name), clean_name(self.cas), clean_name(self.formula)
+        clean_rows(self.hits)
+
     def to_dict(self) -> dict:
         return asdict(self)
 

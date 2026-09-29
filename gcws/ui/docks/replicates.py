@@ -304,6 +304,7 @@ class ReplicatesDock(QWidget):
         if not path:
             return
         from openpyxl import Workbook
+        from gcws.core.text import excel_safe
         wb = Workbook()
         sh = wb.active
         sh.title = "Replicates"
@@ -313,7 +314,7 @@ class ReplicatesDock(QWidget):
             for c in range(self.sheet.columnCount()):
                 it = self.sheet.item(r, c)
                 v = it.data(Qt.DisplayRole) if it else None
-                row.append(v)
+                row.append(excel_safe(v))
             sh.append(row)
         wb.save(path)
         self.ws.message.emit(f"Worksheet exported: {path}")

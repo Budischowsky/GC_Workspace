@@ -159,6 +159,7 @@ def apply_overrides(middle: Path, overrides: dict) -> int:
 
 
 def generate(job: ReportJob, progress: Callable[[str], None] = lambda s: None) -> ReportResult:
+    clean_samples(job.samples)
     if job.kind == "hs_screening":
         from gcws.report.hs import generate as generate_hs
         return generate_hs(job, progress)
@@ -169,6 +170,8 @@ def generate(job: ReportJob, progress: Callable[[str], None] = lambda s: None) -
     warnings = list(job.notes)
     session = build_session(job)
     combined = combined_rows(job)
+    from gcws.core.text import clean_rows
+    clean_rows(combined)
     tmp = Path(tempfile.mkdtemp(prefix="gcws_report_"))
     middle = tmp / f"{job.target.stem}_intermediate.xlsx"
     progress("1/4 intermediate workbook")
@@ -221,6 +224,18 @@ def generate(job: ReportJob, progress: Callable[[str], None] = lambda s: None) -
     shutil.rmtree(tmp, ignore_errors=True)
     return ReportResult(job.target, word, len(rows), batch, kept, warnings, rows, json_safe(summary or {}),
                         slim_rows(combined, job.overrides))
+
+
+def clean_samples(samples) -> None:
+    """Remove the characters Excel refuses from the names of the determinations' peak rows
+    (some library files carry control characters in their names)."""
+    from gcws.core.text import ILLEGAL, clean_name
+    for sample in samples or []:
+        for row in getattr(sample, "rows", None) or []:
+            for attr in ("name", "cas", "ref", "mark"):
+                v = getattr(row, attr, None)
+                if isinstance(v, str) and ILLEGAL.search(v):
+                    setattr(row, attr, clean_name(v))
 
 
 def json_safe(value):

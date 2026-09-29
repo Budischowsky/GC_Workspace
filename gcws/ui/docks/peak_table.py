@@ -569,12 +569,13 @@ class PeakTable(QWidget):
                 csv.writer(fh, delimiter=";").writerows(rows)
         else:
             from openpyxl import Workbook
+            from gcws.core.text import excel_safe
             wb = Workbook()
             ws = wb.active
             ws.title = "Peaks"
             ws.append([f"{st.name}  ({self.ws.signal_key})  exported {datetime.now():%Y-%m-%d %H:%M}"])
             for r in rows:
-                ws.append([_num(v) for v in r])
+                ws.append([excel_safe(_num(v)) for v in r])
             wb.save(path)
         self.ws.message.emit(f"Exported {len(rows) - 1} peaks to {path}")
 

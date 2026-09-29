@@ -1233,6 +1233,7 @@ class DuplicatePage(QWidget):
             return
         from openpyxl import Workbook
         from openpyxl.styles import PatternFill
+        from gcws.core.text import excel_safe
         wb = Workbook()
         sh = wb.active
         sh.title = "Double determination"
@@ -1245,9 +1246,10 @@ class DuplicatePage(QWidget):
                    f"Mean [{unit}]", "Diff. %", "Verdict", "Explanation", "Report", "Changed by analyst", "Comment"])
         fills = {lvl: PatternFill("solid", fgColor=theme.LEVELS[lvl][1].lstrip("#")) for lvl in theme.LEVELS}
         for row, v in zip(self.rows, self.verdicts):
-            sh.append([row.get("rt"), row.get("name"), row.get("cas"), row.get("c1"), row.get("c2"), row.get("mean"),
-                       row.get("reldiff"), v.text, v.detail, "yes" if row.get("report") else "no",
-                       ", ".join(sorted(row.get("edited") or {})), row.get("comment", "")])
+            sh.append([excel_safe(x) for x in (
+                row.get("rt"), row.get("name"), row.get("cas"), row.get("c1"), row.get("c2"), row.get("mean"),
+                row.get("reldiff"), v.text, v.detail, "yes" if row.get("report") else "no",
+                ", ".join(sorted(row.get("edited") or {})), row.get("comment", ""))])
             sh.cell(sh.max_row, 8).fill = fills.get(v.level, fills["neutral"])
         wb.save(path)
         self.ws.message.emit(f"Double determination exported: {path}")

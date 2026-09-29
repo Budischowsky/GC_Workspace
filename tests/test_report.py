@@ -204,3 +204,35 @@ def test_duplicate_edits_reach_nias_report(samples, qapp, tmp_path):
     # everything else is as without edits
     others = [r for r in base if all(abs(r[0] - x["rt"]) > 0.02 for x in (drop, change, artefact))]
     assert all(near(r[0]) and near(r[0])[0][2] == pytest.approx(r[2]) for r in others)
+
+
+def test_control_characters_in_names_do_not_break_the_report(samples, qapp, tmp_path):
+    """A Shimadzu library name with a NUL byte ("\x00n-Tridecan-1-ol") made openpyxl refuse the
+    workbook ("... cannot be used in worksheets")."""
+    from openpyxl import load_workbook
+    from gcws.core.text import excel_safe
+    from gcws.report.service import ReportJob, SUFFIXES, generate
+    from gcws.quant.nias_bridge import make_settings
+    from gcws import paths
+    ident = Identification(apex_rt=1.0, name="\x00n-Tridecan-1-ol\x02", cas="112-70-9\x1f",
+                           hits=[{"name": "\x08Tridecanol", "cas": "112-70-9"}])
+    assert (ident.name, ident.cas, ident.hits[0]["name"]) == ("n-Tridecan-1-ol", "112-70-9", "Tridecanol")
+    assert Identification.from_dict({"apex_rt": 1.0, "name": "a\x0bb"}).name == "ab"
+    assert excel_safe("x\x00y") == "xy" and excel_safe(3.5) == 3.5
+    ws = _ws_with(samples, ["06_", "07_", "08_", "11_"], qapp)
+    ids = [s.id for s in ws.states() if s.role == "sample"]
+    samples_ = [ws.nias_sample(r) for r in ids]
+    named = [r for r in samples_[0].rows if r.name]
+    assert named
+    named[0].name = "\x00n-Tridecan-1-ol"            # a project saved before names were cleaned
+    target = tmp_path / f"26016606{SUFFIXES['nias']}.xlsx"
+    job = ReportJob(kind="nias", samples=samples_, names=[ws.runs[r].name for r in ids],
+                    settings=make_settings(ws.quant.get("settings")), target=target,
+                    word=target.with_suffix(".docx"), cas_path=paths.RESOURCES / "CASINFO.xlsx",
+                    keep_middle=tmp_path / "middle.xlsx")
+    res = generate(job)
+    assert res.target.exists()
+    assert named[0].name == "n-Tridecan-1-ol"
+    texts = [c.value for sh in load_workbook(tmp_path / "middle.xlsx").worksheets for row in sh.iter_rows()
+             for c in row if isinstance(c.value, str)]
+    assert not any("\x00" in t for t in texts)
