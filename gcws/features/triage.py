@@ -63,37 +63,33 @@ def classify(feature: Feature, row: dict, limit: float, reporting_limit: float, 
         return "red", f"Deviation {rd:.0f} % > {limit:g} %", reasons
     if reasons:
         return "red", "Check pairing", reasons
-    # yellow
+    # yellow: (verdict text, reason) in order of importance; the first one names the row
+    tagged: list[tuple[str, str]] = []
     gap = [m for m in found if m.origin == GAPFILL]
     for m in gap:
-        reasons.append(f"gap fill in {m.label}" + (f": {m.note}" if m.note else ""))
-    if ident is not None and ident.case == "C":
-        reasons.append(f"candidates: {ident.name}" + (f" ({ident.basis})" if ident.basis else ""))
-    elif ident is not None and ident.case == "B":
-        reasons.append(f"name from the determinations together: {ident.basis}")
-    elif ident is not None and ident.case == "A" and "below" in (ident.basis or ""):
-        reasons.append(f"name confirmed by the other determination ({ident.basis})")
-    elif any(getattr(m.peak.ident, "source", "") == CONSENSUS_SOURCE for m in found):
-        reasons.append("name set by the double determination (consensus of the hit lists)")
+        tagged.append(("Check: gap fill", f"gap fill in {m.label}" + (f": {m.note}" if m.note else "")))
     if rd is not None and rd > limit:
-        reasons.append(f"deviation {rd:.0f} % > {limit:g} %")
+        tagged.append((f"Deviation {rd:.0f} % > {limit:g} %", f"deviation {rd:.0f} % > {limit:g} %"))
+    if ident is not None and ident.case == "C":
+        tagged.append(("Check: 2 candidates", f"candidates: {ident.name}" + (f" ({ident.basis})" if ident.basis else "")))
+    elif ident is not None and ident.case == "B":
+        tagged.append(("Check: name by consensus", f"name from the determinations together: {ident.basis}"))
+    elif ident is not None and ident.case == "A" and "below" in (ident.basis or ""):
+        tagged.append(("Check: name by consensus", f"name confirmed by the other determination ({ident.basis})"))
+    elif any(getattr(m.peak.ident, "source", "") == CONSENSUS_SOURCE for m in found):
+        tagged.append(("Check: name by consensus", "name set by the double determination (consensus of the hit lists)"))
     if feature.sim is not None and feature.sim < settings.green_sim:
-        reasons.append(f"spectra only partly similar ({feature.sim:.2f})")
+        tagged.append(("Check: spectra", f"spectra only partly similar ({feature.sim:.2f})"))
     if feature.sim is None and len(found) > 1:
         d = max(m.rt_ref for m in found) - min(m.rt_ref for m in found)
         if d > 0.5 * settings.rt_tol:
-            reasons.append(f"paired by retention time only ({d * 60:.1f} s apart)")
-    if reasons:
-        text = "Deviation" if (rd is not None and rd > limit) else "Check"
-        if text == "Deviation":
-            text = f"Deviation {rd:.0f} % > {limit:g} %"
-        elif gap:
-            text = "Check: gap fill"
-        elif ident is not None and ident.case == "C":
-            text = "Check: 2 candidates"
-        elif ident is not None and ident.case in ("A", "B"):
-            text = "Check: name by consensus"
-        return "yellow", text, reasons
+            tagged.append(("Check: retention time", f"paired by retention time only ({d * 60:.1f} s apart)"))
+    bounds = [p for p in feature.proposals if p.kind == "boundary"]
+    if bounds:
+        tagged.append(("Check: boundaries",
+                       "integration boundaries differ; proposal: " + bounds[0].text.split(": ", 1)[-1]))
+    if tagged:
+        return "yellow", tagged[0][0], [r for _t, r in tagged]
     detail = []
     if rd is not None:
         detail.append(f"difference {rd:.1f} %")

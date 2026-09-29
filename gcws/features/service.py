@@ -15,6 +15,7 @@ from typing import Optional
 from gcws.features import align as AL
 from gcws.features import consensus as CO
 from gcws.features import gapfill as GF
+from gcws.features import harmonise as HM
 from gcws.features import ids as IDS
 from gcws.features.inputs import collect
 from gcws.features.model import FeatureTable, Settings
@@ -141,6 +142,8 @@ def build(ws, members: list[str], group: Optional[dict] = None, cfg: Optional[Se
         runs = {r.run_id: ws.runs[r.run_id].run for r in inputs}
         noise = {r.run_id: noise_pp(ws, r.run_id, key) for r in inputs}
         GF.fill_table(table, runs, noise, cfg)
+    if cfg.harmonise and len(inputs) > 1:
+        HM.propose_table(table, cfg, {r.run_id: ws.runs[r.run_id].run for r in inputs})
     if len(inputs) > 1:
         consensus(ws, table, cfg, [r.run_id for r in inputs], search)
     return table
@@ -209,14 +212,46 @@ def remember_ids(ws, members: list[str], table: FeatureTable) -> None:
             ws.dirty = True
 
 
+def signature(p) -> str:
+    """What identifies an automatic change across rebuilds (to make it automatically only once)."""
+    if p.event is not None:
+        e = p.event
+        return f"{p.kind}|{p.run_id}|{p.key}|{e.kind.name}|{e.t0:.3f}|{(e.t1 or 0.0):.3f}"
+    return f"{p.kind}|{p.run_id}|{p.key}|{(p.rt or 0.0):.3f}|{getattr(p.ident, 'name', '')}"
+
+
+def auto_done(ws, members: list[str]) -> set:
+    g = group_of(ws, members)
+    return set(((g or {}).get("features") or {}).get("auto_done") or [])
+
+
+def _remember_done(ws, members: list[str], sigs: set) -> None:
+    g = group_of(ws, members)
+    if g is None:
+        return
+    feats = g.setdefault("features", {})
+    feats["auto_done"] = sorted(set(feats.get("auto_done") or []) | sigs)
+    if hasattr(ws, "dirty"):
+        ws.dirty = True
+
+
+def pending(ws, members: list[str], table: FeatureTable) -> list:
+    """The automatic proposals not made automatically before (an undone one stays a proposal)."""
+    done = auto_done(ws, members)
+    return [p for p in proposals(table) if signature(p) not in done]
+
+
 def run(ws, members: list[str], cfg: Optional[Settings] = None, *, apply_auto: Optional[bool] = None,
         stack=None) -> FeatureTable:
-    """Build the table, make its automatic proposals (``cfg.apply_auto``), build again, keep the ids."""
+    """Build the table, make its automatic proposals (``cfg.apply_auto``) -- each only once, so an
+    analyst's undo sticks -- build again and keep the ids."""
     cfg = cfg or settings(ws)
     group = group_of(ws, members)
     table = build(ws, members, group, cfg)
     auto = cfg.apply_auto if apply_auto is None else apply_auto
-    if auto and apply(ws, table, stack=stack):
+    props = pending(ws, members, table) if auto else []
+    if props and apply(ws, table, props, stack=stack):
+        _remember_done(ws, members, {signature(p) for p in props})
         remember_ids(ws, members, table)
         table = build(ws, members, group_of(ws, members), cfg)
     remember_ids(ws, members, table)

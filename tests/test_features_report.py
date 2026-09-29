@@ -191,3 +191,18 @@ def test_real_nias_report_with_feature_pairing(quant_ws, tmp_path):
     rep2 = _report_table(generate(job("edited", edits)).target)
     near = [r for r in rep2 if abs(r[0] - target["rt"]) < 0.02]
     assert near and near[0][2] == pytest.approx(1.234, abs=1e-3)
+
+
+def test_boundary_proposal_is_yellow():
+    from gcws.features.model import Proposal
+    f = feature(pair())
+    f.proposals.append(Proposal("boundary", "b", "FID", "F-007 B: boundaries as in A (end 10.08 -> 10.03)",
+                                auto=False))
+    light, text, reasons = TR.classify(f, row(), 30.0, 0.01, S)
+    assert (light, text) == ("yellow", "Check: boundaries")
+    assert "end 10.08 -> 10.03" in reasons[-1]
+
+
+def test_yellow_text_follows_the_first_reason():
+    light, text, _ = TR.classify(feature(pair(), sim=0.65), row(), 30.0, 0.01, S)
+    assert (light, text) == ("yellow", "Check: spectra")

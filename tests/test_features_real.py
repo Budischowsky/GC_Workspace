@@ -112,3 +112,39 @@ def test_real_consensus_names_agree_after_apply(fresh07):
     ws.project_undo.undo()
     again = SV.build(ws, ids, gapfill=False)
     assert sum(1 for f in again.features if f.identity and f.identity.case == "B") == len(resolved)
+
+
+def test_real_undo_of_the_automatic_step_sticks(fresh07):
+    from gcws.features import service as SV
+    ws, ids = fresh07
+    ws.replicate_groups = [{"id": "g", "name": "130m", "members": ids, "policy": "all"}]
+    SV.run(ws, ids, stack=ws.project_undo)
+    n = ws.project_undo.count()
+    assert n == 1 and ws.replicate_groups[0]["features"]["auto_done"]
+    ws.project_undo.undo()
+    table = SV.run(ws, ids, stack=ws.project_undo)             # a later Compare
+    assert ws.project_undo.count() == n and ws.project_undo.index() == 0   # nothing made again
+    assert not any(m.origin == "gapfill" for f in table.features for m in f.members)
+    assert SV.proposals(table)                                  # still offered as proposals
+
+
+def test_real_boundary_proposals_bring_the_ratio_closer(fresh07):
+    import math
+    from gcws.features import harmonise as HM
+    from gcws.features import service as SV
+    ws, ids = fresh07
+    table = SV.build(ws, ids, gapfill=False, search=False)
+    props = [p for f in table.features for p in f.proposals if p.kind == "boundary"]
+    assert props and all(not p.auto for p in props)
+    feats = {f.id for f in table.features if any(p.kind == "boundary" for p in f.proposals)}
+    ratio0 = HM.typical_ratio(table, ids[0], ids[1])
+
+    def err(t, fid):
+        f = t.by_id(fid)
+        a, b = f.member(ids[0]), f.member(ids[1])
+        return abs(math.log((b.area / a.area) / ratio0))
+    before = {fid: err(table, fid) for fid in feats}
+    SV.apply(ws, table, props, stack=ws.project_undo)
+    after_t = SV.build(ws, ids, gapfill=False, search=False)
+    better = sum(1 for fid in feats if err(after_t, fid) < before[fid])
+    assert better >= len(feats) - 1                             # (the estimate is not the integrator)
