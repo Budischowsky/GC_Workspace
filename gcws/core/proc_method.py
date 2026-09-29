@@ -28,6 +28,7 @@ SECTIONS = {
     "blank": "Blank subtraction",
     "deconv": "Deconvolution",
     "ri": "Retention index",
+    "features": "Double determination (feature alignment)",
     "migration": "Migration conditions",
     "search": "Library search (search method, peak type)",
     "own_search": "Own library search options",
@@ -37,7 +38,8 @@ SECTIONS = {
 QUANT_KEYS = ("mode", "unit", "istd_conc_value", "settings", "istd_defs", "istd_options", "solvent_cut", "hs",
               "ms_solvent", "rrt_reference", "detector", "istd_refs", "istd_detect")
 #: sections that live in ``ws.quant`` under one key
-QUANT_SECTIONS = {"blank": "blank_sub", "deconv": "deconv", "ri": "ri", "migration": "migration"}
+QUANT_SECTIONS = {"blank": "blank_sub", "deconv": "deconv", "ri": "ri", "migration": "migration",
+                  "features": "features"}
 
 
 def folder() -> Path:
@@ -168,7 +170,7 @@ def summary(method: dict) -> str:
 # -- applying -----------------------------------------------------------------------------------
 
 #: sections that change the workspace itself (quantification settings and integration methods)
-WORKSPACE_SECTIONS = ("integration", "quant", "blank", "deconv", "ri", "migration")
+WORKSPACE_SECTIONS = ("integration", "quant", "blank", "deconv", "ri", "migration", "features")
 
 
 def chosen_sections(method: dict, sections=None) -> list[str]:

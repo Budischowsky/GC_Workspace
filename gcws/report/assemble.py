@@ -84,6 +84,17 @@ def default_target(ws, kind: str, members: list[str]) -> Path:
     return ws.runs[members[0]].run.path.parent / f"{RS.report_stem(names)}{RS.SUFFIXES[kind]}.xlsx"
 
 
+def feature_table(ws, members: list[str], group: dict):
+    """The feature table of a double (N-fold) determination when the group is paired by features
+    (``ws.quant["features"]["pairing"]``); None for AutoLib's pairing or a single determination.
+    Only what is already applied counts; library searches are not started here (cached only)."""
+    from gcws.features import service as SV
+    from gcws.features.model import PAIRING_FEATURES
+    if len(members) < 2 or SV.pairing(ws) != PAIRING_FEATURES:
+        return None
+    return SV.build(ws, members, group, search=False)
+
+
 def build_job(ws, kind: str, group: dict, target: Path, *, members: Optional[list] = None,
               samples: Optional[list] = None, preview: bool = False, keep_middle: bool = False,
               record_seen: Optional[bool] = None, batch_workbook: bool = True) -> RS.ReportJob:
@@ -113,4 +124,5 @@ def build_job(ws, kind: str, group: dict, target: Path, *, members: Optional[lis
         sample_key=stem, record_seen=(not preview) if record_seen is None else record_seen,
         ri_options={k: bool((ws.quant.get("ri") or {}).get(k)) for k in ("report_ri", "replace_rt")},
         edits=dict(group.get("hs_edits:" + ws.quant_unit() if hs else "edits") or {}),
-        notes=[] if hs and not ws.quant.get("hs", {}).get("blank_correction", True) else blank_warnings(ws, members))
+        notes=[] if hs and not ws.quant.get("hs", {}).get("blank_correction", True) else blank_warnings(ws, members),
+        features=None if hs else feature_table(ws, members, group))

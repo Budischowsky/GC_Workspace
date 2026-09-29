@@ -25,6 +25,14 @@ _TRANSLATIONS = [
     (r"auch im Blank", "also in the blank"),
     (r"unsichere Identifikation", "uncertain identification"),
     (r"Manuelle Prüfung", "manual review"),
+    (r"Bestimmung (\d+): Peak durch Lückenfüllung nachintegriert", r"determination \1: peak integrated by gap filling"),
+    (r"Bestimmung (\d+): nicht nachweisbar", r"determination \1: not detectable"),
+    (r"Spektren der Bestimmungen unterschiedlich \(Ähnlichkeit ([\d.]+)\); Koelution prüfen",
+     r"different spectra in the determinations (similarity \1); check for co-elution"),
+    (r"in einer Bestimmung als ein Peak, in der anderen als zwei Peaks integriert",
+     "integrated as one peak in one determination and as two in the other"),
+    (r"Identifikation uneindeutig", "identification not unique"),
+    (r"Identifikation aus beiden Bestimmungen", "identification from both determinations"),
     (r"Einzelbestimmung", "single determination"),
 ]
 
@@ -63,6 +71,12 @@ def _fmt(v, digits=4):
 
 
 def plain_verdict(row: dict, limit: float, reporting_limit: float = 0.0, labels=("A", "B"), unit: str = "") -> Verdict:
+    if row.get("light"):
+        # the feature double determination has judged the row already (gcws.features.triage)
+        from gcws.features.triage import LEVEL
+        text = row.get("verdict") or "Confirmed"
+        detail = "; ".join(row.get("reasons") or [])
+        return Verdict(LEVEL.get(row["light"], "neutral"), text, detail[:1].upper() + detail[1:] if detail else "")
     import gc_duplicate as GD
     dr = GD.DuplicateRow(row)
     status = row.get("status") or ""
@@ -209,7 +223,45 @@ def compute(ws, members: list[str], policy: str = "all"):
             lists.append(engine_peaks(s, value=lambda row, qr=qr: qr.get(row.derived.get("gcws_index"), {}).get("conc")))
     settings = make_settings(ws.quant.get("hs" if mode == "hs_screening" else "settings"))
     tol = float(getattr(settings, "rt_tolerance", 0.035) or 0.035)
+    table = features_table(ws, members)
+    if table is not None:
+        from gcws.features import combine as FC
+        limit, rl = limits(ws)
+        return FC.rows(table, lists, limit, rl, policy), []
     return combine(lists, tol, policy), []
+
+
+def features_table(ws, members: list[str], table=None):
+    """The feature table used for ``members`` (None: AutoLib's pairing -- HS screening, or the
+    pairing set to classic). ``table``: one the caller already built (e.g. after applying)."""
+    from gcws.features import service as SV
+    from gcws.features.model import PAIRING_FEATURES
+    if ws.quant.get("mode") == "hs_screening" or len(members) < 2 or SV.pairing(ws) != PAIRING_FEATURES:
+        return None
+    cache = getattr(ws, "_feature_table", None)
+    if table is None:
+        if cache is not None and cache.members == list(members) and _fresh(ws, cache):
+            return cache
+        table = SV.build(ws, members, search=False)
+    table.stamp = stamp(ws, table.members, table.key)
+    ws._feature_table = table
+    return table
+
+
+def _fresh(ws, table) -> bool:
+    """The integrations and identifications the table was built from are still the current ones."""
+    return getattr(table, "stamp", None) == stamp(ws, table.members, table.key)
+
+
+def stamp(ws, members, key) -> tuple:
+    out = []
+    for m in members:
+        st = ws.runs.get(m)
+        res = st.results.get(key) if st is not None else None
+        items = st.ident_set(key).items if st is not None else []
+        out.append((m, res.digest if res is not None else None, id(res),
+                    tuple((round(i.apex_rt, 4), i.name, i.cas) for i in items)))
+    return tuple(out)
 
 
 def limits(ws) -> tuple[float, float]:
@@ -252,6 +304,10 @@ def edit_key(rt: float) -> str:
     return f"{float(rt):.3f}"
 
 
+def is_feature_key(key: str) -> bool:
+    return str(key).startswith("F-")
+
+
 def find_edit(edits: dict, rt: float, tol: float, used: set | None = None):
     """Key of the stored edit for the pair at ``rt`` (nearest within ``tol``), or ``None``."""
     best = None
@@ -277,6 +333,10 @@ def apply_edits(rows: list[dict], verdicts: list, edits: dict, tol: float) -> li
     O/V); an edited concentration and the mean are taken as entered; the mean and the difference
     follow edited concentrations unless the mean itself was set."""
     out, used = [], set()
+    # a feature row finds its edit by the feature id; everything else (and edits of old projects) by RT
+    by_id = {row.get("feature_id") for row in rows if row.get("feature_id") in (edits or {})}
+    used |= by_id
+    rt_edits = {k: e for k, e in (edits or {}).items() if not is_feature_key(k)}
     for row, v in zip(rows, verdicts):
         r = dict(row)
         s1, s2 = row.get("source1") or {}, row.get("source2") or {}
@@ -284,7 +344,10 @@ def apply_edits(rows: list[dict], verdicts: list, edits: dict, tol: float) -> li
         r["report"] = default_report(row, v)
         r["comment"] = ""
         r["edited"] = {}
-        k = find_edit(edits, row.get("rt") or 0.0, tol, used) if row.get("rt") is not None else None
+        if row.get("feature_id") in by_id:
+            k = row["feature_id"]
+        else:
+            k = find_edit(rt_edits, row.get("rt") or 0.0, tol, used) if row.get("rt") is not None else None
         if k is not None:
             used.add(k)
             e = edits[k]

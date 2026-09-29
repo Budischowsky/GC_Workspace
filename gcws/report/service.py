@@ -48,6 +48,7 @@ class ReportJob:
     edits: dict = field(default_factory=dict)       # analyst edits of the double determination
     notes: list = field(default_factory=list)       # warnings known before the report is made (e.g. no blank)
     overrides: dict = field(default_factory=dict)   # filled by combined_rows: row position -> values
+    features: object = None                         # FeatureTable: pair by features (None: AutoLib's pairing)
 
 
 @dataclass
@@ -92,8 +93,10 @@ def combined_rows(job: ReportJob):
     from gcws.quant.replicates import combine, engine_peaks
     tol = float(getattr(job.settings, "rt_tolerance", 0.035) or 0.035)
     lists = [engine_peaks(s) for s in job.samples]
-    rows = combine(lists, tol, job.policy)
     job.overrides = {}
+    if job.features is not None and len(job.samples) >= 2:
+        return feature_rows(job, lists, tol)
+    rows = combine(lists, tol, job.policy)
     if len(job.samples) == 2 and job.policy == "all":
         from gcws.quant import duplicate_view as DV
         limit = float(getattr(job.settings, "duplicate_max_reldiff", 30.0) or 30.0)
@@ -102,6 +105,23 @@ def combined_rows(job: ReportJob):
             import gc_duplicate as GD
             rl = getattr(job.settings, "reporting_limit", None)
             rl = float(rl if rl is not None else GD.DEFAULT_REPORTING_LIMIT)
+        rows, job.overrides = DV.rows_for_report(rows, job.edits or {}, limit, rl, tol)
+    return rows
+
+
+def feature_rows(job: ReportJob, lists: list, tol: float):
+    """The combined rows of the feature double determination (``gcws.features.combine``); for two
+    determinations the analyst's report choices and numbers as in :func:`combined_rows`."""
+    from gcws.features import combine as FC
+    from gcws.quant import duplicate_view as DV
+    limit = float(getattr(job.settings, "duplicate_max_reldiff", 30.0) or 30.0)
+    rl = 0.0
+    if job.kind == "nias":
+        import gc_duplicate as GD
+        rl = getattr(job.settings, "reporting_limit", None)
+        rl = float(rl if rl is not None else GD.DEFAULT_REPORTING_LIMIT)
+    rows = FC.rows(job.features, lists, limit, rl, job.policy)
+    if len(job.samples) == 2 and job.policy == "all":
         rows, job.overrides = DV.rows_for_report(rows, job.edits or {}, limit, rl, tol)
     return rows
 
