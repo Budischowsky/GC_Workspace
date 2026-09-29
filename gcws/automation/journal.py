@@ -70,6 +70,8 @@ CREATE TABLE IF NOT EXISTS exports(id INTEGER PRIMARY KEY, job_id TEXT, revision
     report_node TEXT, fmt TEXT, src TEXT, dst TEXT, ts REAL, state TEXT, error TEXT);
 CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, ts REAL, level TEXT, user TEXT, workflow_id TEXT,
     batch_id INTEGER, job_id TEXT, text TEXT);
+CREATE TABLE IF NOT EXISTS watched(workflow_id TEXT, source_key TEXT, first_scan REAL,
+    PRIMARY KEY(workflow_id, source_key));
 CREATE INDEX IF NOT EXISTS jobs_state ON jobs(state);
 CREATE INDEX IF NOT EXISTS events_job ON events(job_id);
 """
@@ -175,6 +177,13 @@ class Journal:
         return rows[0] if rows else {}
 
     # -- batches and runs ------------------------------------------------------------------
+
+    def first_scan(self, workflow_id: str, source) -> bool:
+        """True the first time a workflow looks at its folder (what is there then is not processed)."""
+        key = os.path.normcase(os.path.abspath(str(source)))
+        cur = self.con.execute("INSERT OR IGNORE INTO watched(workflow_id, source_key, first_scan) VALUES(?,?,?)",
+                               (workflow_id, key, time.time()))
+        return cur.rowcount == 1
 
     def batch(self, workflow_id: str, folder: Path) -> dict:
         key = os.path.normcase(os.path.abspath(str(folder)))

@@ -173,6 +173,15 @@ def _render(name: str, color: str, ink: str, paper: str) -> QPixmap:
         qp.setBrush(QColor("#f2cf6b"))
         qp.drawRoundedRect(QRectF(3, 9, 26, 18), 2, 2)
         qp.drawRect(QRectF(3, 6, 10, 5))
+    elif name == "watch":
+        qp.setPen(_pen("#9a7b2f", 1.4))
+        qp.setBrush(QColor("#f2cf6b"))
+        qp.drawRoundedRect(QRectF(2, 9, 22, 16), 2, 2)
+        qp.drawRect(QRectF(2, 6, 9, 5))
+        qp.setBrush(Qt.NoBrush)
+        qp.setPen(_pen(color, 2.6))
+        qp.drawArc(QRectF(15, 14, 14, 14), 30 * 16, 280 * 16)
+        qp.drawPolyline(QPolygonF([QPointF(27, 13), QPointF(28.5, 17.5), QPointF(24, 18)]))
     elif name == "run":
         qp.setPen(_pen("#4a5a6a", 1.4))
         qp.setBrush(QColor("#e8eef5"))
