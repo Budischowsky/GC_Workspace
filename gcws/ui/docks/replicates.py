@@ -146,30 +146,8 @@ class ReplicatesDock(QWidget):
         self.refresh_sheet()
 
     def suggest(self):
-        from gcws.io.sequence import sample_number, replicate_stem
-        groups = copy.deepcopy(self.ws.replicate_groups)
-        taken = {m for g in groups for m in g["members"]}
-        order = self.ws.ordered_ids_by_injection()
-        added = 0
-        for ids in self.ws.suggest_replicate_groups():
-            # a run waiting alone in a single-determination group joins its partner
-            if any(len(g["members"]) == 1 and g["members"][0] in ids for g in groups):
-                groups = [g for g in groups if not (len(g["members"]) == 1 and g["members"][0] in ids)]
-                taken = {m for g in groups for m in g["members"]}
-            ids = [i for i in order if i in ids and i not in taken]
-            if len(ids) < 2:
-                continue
-            import re
-            first = self.ws.runs[ids[0]].run.path.stem
-            name = re.sub(r"^\d+[_\- ]+", "", first)            # injection prefix
-            name = re.sub(r"[_\- ]+([A-Za-z]|\d{1,2})$", "", name)  # replicate letter
-            groups.append({"id": uuid.uuid4().hex[:8], "name": name, "members": ids, "policy": "all"})
-            taken.update(ids)
-            added += 1
-        for st in self.ws.states():                  # samples without partner: single determination
-            if st.role == "sample" and st.id not in taken:
-                groups.append({"id": uuid.uuid4().hex[:8], "name": st.name, "members": [st.id], "policy": "all"})
-                added += 1
+        from gcws.quant.grouping import for_workspace
+        groups, added = for_workspace(self.ws)
         if added:
             self._set_groups(groups, f"suggest {added} replicate group(s)")
 

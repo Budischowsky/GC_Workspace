@@ -12,6 +12,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -166,42 +167,75 @@ def summary(method: dict) -> str:
 
 # -- applying -----------------------------------------------------------------------------------
 
+#: sections that change the workspace itself (quantification settings and integration methods)
+WORKSPACE_SECTIONS = ("integration", "quant", "blank", "deconv", "ri", "migration")
+
+
+def chosen_sections(method: dict, sections=None) -> list[str]:
+    """The sections of ``method`` to apply, in the order of application."""
+    sec = method.get("sections") or {}
+    return [k for k in SECTIONS if k in sec and (sections is None or k in sections)]
+
+
+def plan_quant(current: dict, method: dict, chosen) -> dict:
+    """``ws.quant`` after applying the ``chosen`` sections of ``method`` (pure)."""
+    sec = method.get("sections") or {}
+    q = copy.deepcopy(current or {})
+    if "quant" in chosen:
+        # Missing detector/RRT fields identify an older method. Do not keep
+        # the current independent cut or reference when restoring it.
+        for key in ("ms_solvent", "rrt_reference"):
+            if key not in (sec["quant"] or {}):
+                q.pop(key, None)
+        for k in QUANT_KEYS:
+            if k in (sec["quant"] or {}):
+                value = copy.deepcopy(sec["quant"][k])
+                if k == "hs":
+                    value["samples"] = copy.deepcopy(q.get("hs", {}).get("samples", {}))
+                    value["istd_bindings"] = copy.deepcopy(q.get("hs", {}).get("istd_bindings", {}))
+                q[k] = value
+    for s_name, key in QUANT_SECTIONS.items():
+        if s_name in chosen:
+            if sec[s_name] is None:
+                q.pop(key, None)
+            else:
+                q[key] = copy.deepcopy(sec[s_name])
+    return q
+
+
+def apply_to_workspace(ws, method: dict, sections=None, *, persist: bool = True, log: bool = True) -> list[str]:
+    """Apply the workspace sections of ``method`` to ``ws`` as one undo step.
+
+    ``persist`` also keeps the integration methods for later sessions (method store and the
+    default for runs loaded later). Without it nothing is written outside ``ws``: runs loaded
+    later into this workspace start with the method's integration (``ws.default_methods``).
+    Returns the applied sections."""
+    sec = method.get("sections") or {}
+    chosen = [k for k in chosen_sections(method, sections) if k in WORKSPACE_SECTIONS]
+    name = method.get("name", "method")
+    stack = ws.undo_group.activeStack() or ws.project_undo
+    stack.beginMacro(f"load method '{name}'")
+    try:
+        q = plan_quant(ws.quant, method, chosen)
+        if q != (ws.quant or {}):
+            ws.push_quant(f"method '{name}': settings", q, "processing method")
+        if "integration" in chosen:
+            _apply_integration(ws, sec["integration"] or {}, name, stack, persist)
+    finally:
+        stack.endMacro()
+    if log:
+        ws.log("Processing method loaded", "", name, "", ", ".join(SECTIONS[k] for k in chosen))
+    return chosen
+
+
 def apply(win, method: dict, sections=None) -> list[str]:
     """Apply ``sections`` (default: all present) of ``method``; returns the applied ones."""
     from PySide6.QtCore import QSettings
     ws = win.ws
     sec = method.get("sections") or {}
-    chosen = [k for k in SECTIONS if k in sec and (sections is None or k in sections)]
+    chosen = chosen_sections(method, sections)
     name = method.get("name", "method")
-    stack = ws.undo_group.activeStack() or ws.project_undo
-    stack.beginMacro(f"load method '{name}'")
-    try:
-        q = copy.deepcopy(ws.quant or {})
-        if "quant" in chosen:
-            # Missing detector/RRT fields identify an older method. Do not keep
-            # the current independent cut or reference when restoring it.
-            for key in ("ms_solvent", "rrt_reference"):
-                if key not in (sec["quant"] or {}):
-                    q.pop(key, None)
-            for k in QUANT_KEYS:
-                if k in (sec["quant"] or {}):
-                    value = copy.deepcopy(sec["quant"][k])
-                    if k == "hs":
-                        value["samples"] = copy.deepcopy(q.get("hs", {}).get("samples", {}))
-                        value["istd_bindings"] = copy.deepcopy(q.get("hs", {}).get("istd_bindings", {}))
-                    q[k] = value
-        for s_name, key in QUANT_SECTIONS.items():
-            if s_name in chosen:
-                if sec[s_name] is None:
-                    q.pop(key, None)
-                else:
-                    q[key] = copy.deepcopy(sec[s_name])
-        if q != (ws.quant or {}):
-            ws.push_quant(f"method '{name}': settings", q, "processing method")
-        if "integration" in chosen:
-            _apply_integration(ws, sec["integration"] or {}, name, stack)
-    finally:
-        stack.endMacro()
+    apply_to_workspace(ws, method, sections, persist=True, log=False)
     s = QSettings()
     if "search" in chosen:
         _apply_search(sec["search"] or {})
@@ -229,13 +263,41 @@ def apply(win, method: dict, sections=None) -> list[str]:
     return chosen
 
 
-def _apply_integration(ws, integ: dict, name: str, stack) -> None:
+@dataclass
+class SearchConfig:
+    """How a method searches the libraries (for unattended processing; nothing is saved)."""
+    method: object                       # gc_search_method.SearchMethod
+    fast: bool
+    target: str = "TIC"
+    transfer: bool = True
+    mode: str = "average_bg"
+
+
+def search_config(method: dict, gc_method: str = "") -> SearchConfig:
+    """The library search of ``method``; without a search section the search method the library
+    search would choose for the acquisition method ``gc_method``."""
+    import gc_search_method as SM
+    from gcws.identify.service import is_fast, search_methods
+    d = (method.get("sections") or {}).get("search") or {}
+    if d.get("method"):
+        m = SM.SearchMethod.from_dict(d["method"])
+    else:
+        m = search_methods().for_gc_method(gc_method)
+    fast = bool(d["fast"]) if "fast" in d else is_fast(m)
+    return SearchConfig(m, fast, str(d.get("target") or "TIC"), bool(d.get("transfer", True)),
+                        str(d.get("mode") or "average_bg"))
+
+
+def _apply_integration(ws, integ: dict, name: str, stack, persist: bool = True) -> None:
     from gcws.integration.method import IntegrationMethod
     from gcws.ui.undo import SetMethodCommand
     for kind, d in integ.items():
         m = IntegrationMethod.from_dict(d)
-        ws.methods.save(m)                             # known by name, also for later sessions
-        ws.methods.set_default(kind, m.name)           # runs loaded later start with it
+        if persist:
+            ws.methods.save(m)                         # known by name, also for later sessions
+            ws.methods.set_default(kind, m.name)       # runs loaded later start with it
+        else:
+            ws.default_methods[kind] = m.copy()        # runs loaded later into this workspace
         ids = [st.id for st in ws.states()]
         if ids:
             stack.push(SetMethodCommand(ws, ids, kind, m, f"method '{name}': {kind} integration '{m.name}'"))

@@ -835,7 +835,7 @@ class MainWindow(QMainWindow):
         return next((self.ws.panel_key(i) for i in (0, 1) if base_key(self.ws.panel_key(i)) == target), target)
 
     def _search_done(self, items, v, protected, cancelled):
-        from gcws.identify.service import identification_from_hits
+        from gcws.identify.service import apply_search_results
         from gcws.ui.dialogs.identify import CompoundReview
         self.progress.hide()
         self.cancel_btn.hide()
@@ -852,36 +852,9 @@ class MainWindow(QMainWindow):
             dlg = CompoundReview(done, method.min_score, self)
             if dlg.exec() != CompoundReview.Accepted:
                 return
-        by_run: dict = {}
-        for it in done:
-            if not it.job.apply:
-                continue
-            st = self.ws.runs.get(it.run_id)
-            if st is None:
-                continue
-            prev = st.ident_set(it.key).for_peak(type("P", (), {
-                "apex_rt": it.apex_rt, "width50": 0, "extra": {"spectrum_id": it.peak_id}})())
-            ident = identification_from_hits(it, it.job.hits, it.job.chosen, method, prev)
-            by_run.setdefault((it.run_id, it.key), []).append((it.apex_rt, ident))
-        from gcws.core.keys import is_fid
-        from gcws.identify.service import transfer_names
-        copied = {"copied": 0, "unmatched": 0, "protected": 0, "coeluting": 0}
-        fid_key = self.search_key("FID")
-        for (rid, key), changes in by_run.items():
-            st = self.ws.runs[rid]
-            text = f"library search ({method.name}): {len(changes)} peaks"
-            fid_changes = []
-            if v.get("transfer") and not is_fid(key) and st.run.fid is not None:
-                fid_changes, counts = transfer_names(self.ws, rid, changes, fid_key)
-                for k in copied:
-                    copied[k] += counts[k]
-            st.undo.beginMacro(text + (f", {len(fid_changes)} names copied to FID" if fid_changes else ""))
-            st.undo.push(IdentCommand(self.ws, rid, key, changes, text))
-            if fid_changes:
-                st.undo.push(IdentCommand(self.ws, rid, fid_key, fid_changes,
-                                          f"{len(fid_changes)} names from the TIC search copied to FID peaks"))
-            st.undo.endMacro()
-        n = sum(len(c) for c in by_run.values())
+        hits = apply_search_results(self.ws, done, method, transfer=bool(v.get("transfer")),
+                                    fid_key=self.search_key("FID"))
+        copied, n = hits.copied, hits.identified
         msg = f"Library search: {n} peaks identified" + (f", {protected} protected" if protected else "")
         if v.get("transfer"):
             msg += f"; {copied['copied']} names copied to FID peaks"

@@ -278,9 +278,10 @@ class LocalBatchSearch:
     ``("status", text)``, ``("hit", index)``, ``("error", text)``, finally ``("done", cancelled)``.
     """
 
-    def __init__(self, jobs, method):
+    def __init__(self, jobs, method, fast: Optional[bool] = None):
         import threading
         self.jobs, self.method = jobs, method
+        self.fast = fast                    # None: the method's own Fast search switch
         self.messages: "queue.Queue" = queue.Queue()
         self.cancelled = threading.Event()
         self.thread = threading.Thread(target=self._run, daemon=True)
@@ -303,7 +304,7 @@ class LocalBatchSearch:
             return
         rng = GI.mz_range(self.jobs)
         todo = [n for n, job in enumerate(self.jobs) if not job.done]
-        if len(todo) > 1 and is_fast(self.method):
+        if len(todo) > 1 and (is_fast(self.method) if self.fast is None else self.fast):
             self._run_fast(todo, rng)
             self.messages.put(("done", self.cancelled.is_set()))
             return
@@ -349,6 +350,81 @@ class LocalBatchSearch:
                             cancelled=self.cancelled.is_set, done=done)
         except Exception as exc:  # noqa: BLE001
             self.messages.put(("error", str(exc)))
+
+
+class SearchError(RuntimeError):
+    """The library search could not run (no library, engine error)."""
+
+
+def run_search_blocking(items: list[SearchItem], method, *, fast: Optional[bool] = None,
+                        progress=lambda text: None, timeout: Optional[float] = None) -> list[SearchItem]:
+    """Search ``items`` and wait for the result (unattended processing; no Qt event loop).
+
+    Returns the items searched without error; raises :class:`SearchError` when the search
+    failed as a whole."""
+    import time
+    batch = LocalBatchSearch([it.job for it in items], method, fast).start()
+    errors, end = [], (time.monotonic() + timeout) if timeout else None
+    while True:
+        try:
+            kind, value = batch.messages.get(timeout=0.5)
+        except queue.Empty:
+            if end is not None and time.monotonic() > end:
+                batch.cancel()
+                raise SearchError(f"library search timed out after {timeout:.0f} s")
+            continue
+        if kind == "status":
+            progress(str(value))
+        elif kind == "error":
+            errors.append(str(value))
+        elif kind == "done":
+            break
+    done = [it for it in items if it.job.done and not it.job.error]
+    if not done and errors:
+        raise SearchError("; ".join(errors))
+    return done
+
+
+@dataclass
+class HitSummary:
+    identified: int = 0
+    copied: Optional[dict] = None
+
+
+def apply_search_results(ws, items: list[SearchItem], method, *, transfer: bool,
+                         fid_key: str = "FID") -> HitSummary:
+    """Name the searched peaks from their hits (and copy TIC names to the FID peaks).
+
+    One undo step per run, as the interactive library search does it."""
+    from gcws.core.keys import is_fid
+    from gcws.ui.undo import IdentCommand
+    by_run: dict = {}
+    for it in items:
+        if not it.job.done or it.job.error or not getattr(it.job, "apply", True):
+            continue
+        st = ws.runs.get(it.run_id)
+        if st is None:
+            continue
+        prev = st.ident_set(it.key).for_peak(type("P", (), {
+            "apex_rt": it.apex_rt, "width50": 0, "extra": {"spectrum_id": it.peak_id}})())
+        ident = identification_from_hits(it, it.job.hits, it.job.chosen, method, prev)
+        by_run.setdefault((it.run_id, it.key), []).append((it.apex_rt, ident))
+    copied = {"copied": 0, "unmatched": 0, "protected": 0, "coeluting": 0}
+    for (rid, key), changes in by_run.items():
+        st = ws.runs[rid]
+        text = f"library search ({method.name}): {len(changes)} peaks"
+        fid_changes = []
+        if transfer and not is_fid(key) and st.run.fid is not None:
+            fid_changes, counts = transfer_names(ws, rid, changes, fid_key)
+            for k in copied:
+                copied[k] += counts[k]
+        st.undo.beginMacro(text + (f", {len(fid_changes)} names copied to FID" if fid_changes else ""))
+        st.undo.push(IdentCommand(ws, rid, key, changes, text))
+        if fid_changes:
+            st.undo.push(IdentCommand(ws, rid, fid_key, fid_changes,
+                                      f"{len(fid_changes)} names from the TIC search copied to FID peaks"))
+        st.undo.endMacro()
+    return HitSummary(sum(len(c) for c in by_run.values()), copied)
 
 
 class LibrarySearchWorker(QObject):

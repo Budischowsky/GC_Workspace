@@ -106,6 +106,9 @@ class Workspace(QObject):
         self.table_panel: int = 0
         self.selected: int = -1
         self.methods = MethodStore()
+        # integration methods for runs loaded later, set by a processing method applied without
+        # saving it (unattended processing); otherwise the method store's defaults
+        self.default_methods: dict[str, IntegrationMethod] = {}
         self.audit = AuditLog()
         self.undo_group = QUndoGroup(self)
         self.project_undo = QUndoStack(self)
@@ -152,7 +155,7 @@ class Workspace(QObject):
         st.delay = delay
         run.derive = self._derive
         for kind in (FID, TIC):
-            st.methods[kind] = self.methods.get(self.methods.default_name(kind))
+            st.methods[kind] = self.default_method(kind)
         if results:
             st.results.update(results)
         self.runs[run.id] = st
@@ -339,9 +342,15 @@ class Workspace(QObject):
         kind = method_kind(key)
         m = st.methods.get(kind)
         if m is None:
-            m = self.methods.get(self.methods.default_name(kind))
+            m = self.default_method(kind)
             st.methods[kind] = m
         return m
+
+    def default_method(self, kind: str) -> IntegrationMethod:
+        """The integration method a newly loaded run starts with."""
+        if kind in self.default_methods:
+            return self.default_methods[kind].copy()
+        return self.methods.get(self.methods.default_name(kind))
 
     def solvent_cut_settings(self, key=None, st=None):
         """Enabled/end in detector minutes, including legacy linked-MS fallback."""
