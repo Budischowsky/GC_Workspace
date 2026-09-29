@@ -338,9 +338,16 @@ def test_double_determination_from_tab_menu(qtbot, win, samples):
     assert page.rows and len(page.verdicts) == len(page.rows), page.banner.text()
     g = page.group()
     assert g is not None and g["members"] == [a, b]
+    stack = ws.undo_group.activeStack() or ws.project_undo
+    auto = "gap fill" in stack.undoText() or "name(s)" in stack.undoText()
+    if auto:
+        win.a_undo.trigger()                               # the automatic gap fills / names: their own step
+        assert page.group() is not None
     win.a_undo.trigger()                                   # the group change is undoable
     assert page.group() is None or ws.replicate_groups == []
     win.a_redo.trigger()
+    if auto:
+        win.a_redo.trigger()
     # the difference limit is the report parameter
     page.limit.setValue(12.5)
     page._limit_changed()
@@ -1301,3 +1308,57 @@ def test_dark_mode(qtbot, win, samples, tmp_path, name):
     assert app.palette().color(QPalette.Window).name().lower() == theme.LIGHT["BG"].lower()
     for fg, bg in ((theme.TEXT, theme.SURFACE), (theme.ACCENT_TEXT, theme.ACCENT_SOFT), (theme.ON_ACCENT, theme.ACCENT)):
         assert _contrast(fg, bg) >= 4.5
+
+
+def test_double_determination_features_panel(qtbot, win, samples):
+    from PySide6.QtCore import Qt
+    from gcws.features.model import PAIRING_CLASSIC, Settings
+    from gcws.ui.docks.duplicate import C_FEATURE, C_ICON, ICON
+    _load(qtbot, win, samples, ["07_", "08_", "11_"])
+    ws = win.ws
+    a = next(s.id for s in ws.states() if s.name.startswith("07_"))
+    b = next(s.id for s in ws.states() if s.name.startswith("11_"))
+    win.loaded_samples.pairRequested.emit(a, b)
+    page = win.replicates.duplicate
+    assert page.table_features is not None
+    rows = page.rows
+    assert rows and all(r.get("light") in ("green", "yellow", "red", "grey") for r in rows)
+    assert page.table.horizontalHeaderItem(C_FEATURE).text() == "Feature"
+    counts = {c: sum(1 for r in rows if r["light"] == c) for c in ("green", "yellow", "red", "grey")}
+    assert page.cards["confirmed"].value.text() == str(counts["green"])
+    assert page.cards["only_a"].value.text() == str(counts["red"])
+    # the automatic step was one undoable step with gap fills
+    stack = ws.undo_group.activeStack() or ws.project_undo
+    assert "gap fill" in stack.undoText()
+    gap_rows = [r for r in rows if r.get("gapfill")]
+    assert gap_rows and all(r["source1"] is not None and r["source2"] is not None for r in gap_rows)
+    # only red, and F3 to the next red row
+    page.only_red.setChecked(True)
+    shown = [page.table.item(i, C_ICON).text() for i in range(page.table.rowCount())]
+    assert shown and set(shown) == {ICON["bad"]}
+    page.only_red.setChecked(False)
+    page.table.setCurrentCell(0, 3)
+    page.next_red()
+    assert page.table.item(page.table.currentRow(), C_ICON).text() == ICON["bad"]
+    # the spectra of the selected substance
+    k = next(i for i, r in enumerate(page.rows) if r.get("sim") is not None)
+    r = next(i for i in range(page.table.rowCount()) if page.table.item(i, 0).data(Qt.UserRole) == k)
+    page.table.setCurrentCell(r, 3)
+    page._row_selected()
+    assert page.spec.listDataItems()
+    # remove a gap fill again: one more undo step, the substance is one-sided again
+    fid = gap_rows[0]["feature_id"]
+    row = next(r for r in page.rows if r.get("feature_id") == fid)
+    actions = dict(page.row_actions(row))
+    stack = page._stack()                                  # the active run's stack (navigation changed it)
+    n = stack.count()
+    actions["Remove the gap fill"]()
+    assert stack.count() == n + 1 and "gap fill" in stack.undoText()
+    after = next((r for r in page.rows if r.get("feature_id") == fid), None)
+    assert after is None or not after.get("gapfill")
+    # classic pairing: AutoLib's rows, undoable
+    page.set_settings(Settings(pairing=PAIRING_CLASSIC))
+    assert page.rows and not any(r.get("feature_id") for r in page.rows)
+    win.a_undo.trigger()
+    page.compare(sync=False)
+    assert page.rows and all(r.get("feature_id") for r in page.rows)

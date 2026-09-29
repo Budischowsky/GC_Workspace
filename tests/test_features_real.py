@@ -148,3 +148,21 @@ def test_real_boundary_proposals_bring_the_ratio_closer(fresh07):
     after_t = SV.build(ws, ids, gapfill=False, search=False)
     better = sum(1 for fid in feats if err(after_t, fid) < before[fid])
     assert better >= len(feats) - 1                             # (the estimate is not the integrator)
+
+
+def test_real_consensus_search_bookkeeping(fresh07):
+    from gcws.features import service as SV
+    ws, ids = fresh07
+    cfg = SV.settings(ws)
+    table = SV.build(ws, ids, search=False)
+    needed = SV.consensus_needed(ws, table, cfg)
+    assert needed                                   # first hits differ, one accepted, spectra agree
+    for _ck, f in needed:
+        f.consensus_hits = [{"name": "Test", "cas": "", "score": 99}]
+    SV.store_consensus(ws, needed[:1])              # searched: cached
+    SV.store_consensus(ws, needed[1:], "No library loaded")     # failed: not retried
+    again = SV.build(ws, ids, search=False)
+    assert not SV.consensus_needed(ws, again, cfg)
+    f = again.by_id(needed[0][1].id)
+    assert f.consensus_hits and f.consensus_hits[0]["name"] == "Test"
+    assert any("No library" in n for n in again.notes)

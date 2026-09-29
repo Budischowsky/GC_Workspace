@@ -12,6 +12,14 @@ AutoLib's rule), the name and CAS (they become the identification of the peak
 in both determinations), areas, concentrations and the mean, and a comment.
 Every change is undoable, marked in the table and written to the audit trail;
 the NIAS report uses exactly these rows and values.
+
+With the feature pairing (``gcws.features``, the default) *Compare* pairs the peaks
+by retention time and spectrum, fills gaps and sets one name per substance
+automatically (one undo step), and every row gets a traffic light: green is
+taken over, yellow was made consistent automatically, red needs the analyst.
+"Only red" and F3 (next red) lead through the exceptions; the right-click menu
+chooses a candidate name, removes a gap fill or takes over harmonised
+boundaries.
 """
 from __future__ import annotations
 
@@ -20,10 +28,10 @@ import uuid
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QTimer, Qt, Signal as QtSignal
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtCore import QThread, QTimer, Qt, Signal as QtSignal
+from PySide6.QtGui import QBrush, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame,
-                               QHBoxLayout, QHeaderView, QLabel, QPushButton, QSplitter,
+                               QHBoxLayout, QHeaderView, QLabel, QMenu, QPushButton, QSplitter,
                                QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 
 from gcws.core.model import FID
@@ -41,6 +49,10 @@ KEYS_NOTE = ("Enter: report · Delete: not reported · type or F2: edit · Ctrl+
 ICON = {"ok": "✔", "warn": "⚠", "bad": "✖", "info": "ℹ", "neutral": "·"}
 #: table column -> edited field
 C_ICON, C_REPORT, C_RT, C_NAME, C_CAS, C_A1, C_A2, C_C1, C_C2, C_MEAN, C_DIFF, C_VERDICT, C_NOTES, C_COMMENT = range(14)
+#: feature pairing only (appended, so the columns above keep their places)
+C_FEATURE, C_SIM, C_HIT_A, C_HIT_B = range(14, 18)
+LIGHT_TEXT = {"green": "green: taken over", "yellow": "yellow: made consistent", "red": "red: your decision",
+              "grey": "grey: not reported"}
 FIELD_OF = {C_REPORT: "report", C_NAME: "name", C_CAS: "cas", C_A1: "a1", C_A2: "a2", C_C1: "c1", C_C2: "c2",
             C_MEAN: "mean", C_COMMENT: "comment"}
 
@@ -50,6 +62,23 @@ class _AbsAxis(pg.AxisItem):
 
     def tickStrings(self, values, scale, spacing):
         return super().tickStrings([abs(v) for v in values], scale, spacing)
+
+
+class _ConsensusSearch(QThread):
+    """The library search of the consensus spectra (it may load the libraries first)."""
+    finished_note = QtSignal(str)
+
+    def __init__(self, method, features, parent=None):
+        super().__init__(parent)
+        self.method, self.features = method, features
+
+    def run(self):
+        from gcws.features.consensus import search_consensus
+        try:
+            note = search_consensus(None, self.method, self.features)
+        except Exception as exc:  # noqa: BLE001 - reported in the banner
+            note = f"consensus search failed: {exc}"
+        self.finished_note.emit(note)
 
 
 class _Card(QFrame):
@@ -119,14 +148,24 @@ class DuplicatePage(QWidget):
         self.limit.setToolTip("Maximum relative difference |A−B| / mean. This is the report parameter "
                               "'Duplicate difference limit': changing it changes the report too.")
         self.limit.editingFinished.connect(self._limit_changed)
-        self.only_problems = QCheckBox("Only substances that need attention")
+        self.only_problems = QCheckBox("Only red and yellow")
+        self.only_problems.setToolTip("Only the substances that need attention (and those changed by the analyst)")
         self.only_problems.toggled.connect(lambda *_: self._fill_table())
+        self.only_red = QCheckBox("Only red")
+        self.only_red.setToolTip("Only what the analyst has to decide. F3: next red row")
+        self.only_red.toggled.connect(lambda *_: self._fill_table())
+        self.b_settings = QToolButton()
+        self.b_settings.setText("Settings…")
+        self.b_settings.setToolTip("Pairing (features or classic), gap filling, consensus name")
+        self.b_settings.clicked.connect(self.edit_settings)
         lim = QHBoxLayout()
         lim.addWidget(QLabel("Accept a difference up to"))
         lim.addWidget(self.limit)
         lim.addWidget(theme.hint("(report parameter)", False))
         lim.addStretch(1)
         lim.addWidget(self.only_problems)
+        lim.addWidget(self.only_red)
+        lim.addWidget(self.b_settings)
 
         self.cards = {
             "confirmed": _Card("confirmed in both", "ok"),
@@ -157,6 +196,11 @@ class DuplicatePage(QWidget):
         self._nav.timeout.connect(self._row_selected)
         self.table.currentItemChanged.connect(lambda *_: self._nav.start())
         self.table.cellDoubleClicked.connect(self._open_row)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._context_menu)
+        QShortcut(QKeySequence(Qt.Key_F3), self, activated=self.next_red)
+        self.table_features = None                   # the FeatureTable of the rows (feature pairing)
+        self._search = None                          # the running consensus search
 
         self.mirror = pg.PlotWidget(axisItems={"left": _AbsAxis("left")})
         self.mirror.setMenuEnabled(False)
@@ -179,9 +223,22 @@ class DuplicatePage(QWidget):
                                "whole chromatogram")
         self.cursor = pg.InfiniteLine(angle=90, movable=False,
                                       pen=pg.mkPen(theme.ACCENT, width=1, style=Qt.DashLine))
+        self.spec = pg.PlotWidget(axisItems={"left": _AbsAxis("left")})
+        self.spec.setMenuEnabled(False)
+        self.spec.showGrid(x=False, y=True, alpha=theme.PLOT["grid_alpha"])
+        self.spec.setLabel("bottom", "m/z")
+        self.spec.setLabel("left", "A  ↑   %   ↓  B")
+        self.spec.getAxis("left").setWidth(62)
+        self.spec.setToolTip("The spectra of the selected substance: A up, B down (co-eluting ions, "
+                             "background subtracted), each scaled to its base peak")
+        theme.register_plot(self.spec, lambda: self._draw_spectra())
+        plots = QSplitter(Qt.Horizontal)
+        plots.addWidget(self.mirror)
+        plots.addWidget(self.spec)
+        plots.setSizes([520, 300])
         split = QSplitter(Qt.Vertical)
         split.addWidget(self.table)
-        split.addWidget(self.mirror)
+        split.addWidget(plots)
         split.setSizes([320, 220])
 
         buttons = QHBoxLayout()
@@ -196,6 +253,11 @@ class DuplicatePage(QWidget):
             b.clicked.connect(lambda _=False, k=kind: self._report(k))
             buttons.addWidget(b)
         buttons.addStretch(1)
+        self.b_bounds = QPushButton("Harmonise boundaries")
+        self.b_bounds.setToolTip("Take over every proposed integration boundary (one undo step)")
+        self.b_bounds.clicked.connect(lambda: self.apply_boundaries(None))
+        self.b_bounds.setVisible(False)
+        buttons.addWidget(self.b_bounds)
         reset_row = QPushButton("Reset row")
         reset_row.setToolTip("Undo the analyst's changes of the selected substance")
         reset_row.clicked.connect(self.reset_row)
@@ -325,7 +387,7 @@ class DuplicatePage(QWidget):
     # -- compute ---------------------------------------------------------------------------
 
     def _quant_changed(self):
-        if self.isVisible() and self.members:
+        if self.isVisible() and self.members and not getattr(self, "_comparing", False):
             self.compare(sync=False)
         self.limit.blockSignals(True)
         self.limit.setValue(DV.limits(self.ws)[0])
@@ -360,6 +422,22 @@ class DuplicatePage(QWidget):
             return
         if sync:
             self._sync_group(self.members)
+        self.table_features = None
+        if len(self.members) >= 2 and self.features_mode() and not DV.member_problems(self.ws, self.members):
+            from gcws.features import service as SV
+            if self.ws.quant_result is None:
+                self.ws.recompute_quant()
+            # a deliberate Compare makes the automatic changes (each only once); a refresh only shows
+            stack = self._stack()
+            before = (stack.count(), stack.index())
+            self._comparing = True
+            try:
+                table = SV.run(self.ws, self.members, apply_auto=None if sync else False, stack=stack)
+                if (stack.count(), stack.index()) != before:
+                    self.ws.recompute_quant()          # the gap-filled peaks get their concentrations now
+            finally:
+                self._comparing = False
+            self.table_features = DV.features_table(self.ws, self.members, table)
         rows, problems = DV.compute(self.ws, self.members, "all")
         limit, rl = DV.limits(self.ws)
         labels = self.labels()
@@ -367,6 +445,8 @@ class DuplicatePage(QWidget):
         verdicts = [DV.plain_verdict(r, limit, rl, labels, unit) for r in rows]
         self.base_rows = rows
         self._show(DV.apply_edits(rows, verdicts, self.edits(), self._tol()), verdicts, problems)
+        if self.table_features is not None:
+            self._start_consensus_search()
 
     # -- analyst edits ------------------------------------------------------------------------
 
@@ -609,7 +689,10 @@ class DuplicatePage(QWidget):
                 c.set("–")
             self.banner.setText("Cannot compare yet: " + "; ".join(problems))
             self.banner.setProperty("level", "warn")
+        elif rows and rows[0].get("light"):
+            self._show_lights(rows)
         else:
+            self._card_captions(labels)
             s = DV.summarize(rows, verdicts, limit, labels)
             self.cards["confirmed"].set(s.confirmed)
             self.cards["deviating"].set(s.deviating)
@@ -620,12 +703,58 @@ class DuplicatePage(QWidget):
             self.banner.setText(("✔  " if s.level == "ok" else "⚠  ") + s.text if len(self.members) == 2 else
                                 "Single determination: choose a partner B to compare.")
             self.banner.setProperty("level", s.level if len(self.members) == 2 else "neutral")
-        self.cards["only_a"].findChild(QLabel, "hint").setText(f"only in {labels[0]} (artefact)")
-        self.cards["only_b"].findChild(QLabel, "hint").setText(f"only in {labels[1]} (artefact)")
         theme._repolish(self.banner)
         self._fill_table()
         self._update_report_note()
         self._draw_mirror()
+
+    def _card_captions(self, labels, lights: bool = False):
+        caps = ({"confirmed": LIGHT_TEXT["green"], "deviating": LIGHT_TEXT["yellow"], "only_a": LIGHT_TEXT["red"],
+                 "only_b": "of them: found in one only", "conflicts": LIGHT_TEXT["grey"], "mean": "mean difference"}
+                if lights else
+                {"confirmed": "confirmed in both", "deviating": "difference above the limit",
+                 "only_a": f"only in {labels[0]} (artefact)", "only_b": f"only in {labels[1]} (artefact)",
+                 "conflicts": "identification differs", "mean": "mean difference"})
+        for k, text in caps.items():
+            self.cards[k].findChild(QLabel, "hint").setText(text)
+
+    def _show_lights(self, rows):
+        """Cards and banner of the feature pairing: how many rows are green, yellow, red, grey."""
+        self._card_captions(self.labels(), lights=True)
+        n = {c: sum(1 for r in rows if r.get("light") == c) for c in ("green", "yellow", "red", "grey")}
+        lone = sum(1 for r in rows if r.get("light") == "red" and str(r.get("status", "")).startswith("Artefact"))
+        diffs = [r["reldiff"] for r in rows if r.get("reldiff") is not None and r.get("light") != "grey"]
+        self.cards["confirmed"].set(n["green"])
+        self.cards["deviating"].set(n["yellow"])
+        self.cards["only_a"].set(n["red"])
+        self.cards["only_b"].set(lone)
+        self.cards["conflicts"].set(n["grey"])
+        self.cards["mean"].set(f"{sum(diffs) / len(diffs):.1f} %" if diffs else "–")
+        notes = list(getattr(self.table_features, "notes", []) or [])
+        auto = sum(1 for r in rows if r.get("gapfill"))
+        if n["red"]:
+            text = (f"{n['red']} of {len(rows)} substances need your decision (red; F3 = next); "
+                    f"{n['yellow']} were made consistent automatically (yellow), {n['green']} are confirmed.")
+            level = "bad"
+        elif n["yellow"]:
+            text = f"Nothing to decide: {n['yellow']} made consistent automatically (yellow, a quick look), " \
+                   f"{n['green']} confirmed."
+            level = "warn"
+        else:
+            text, level = f"Double determination consistent: {n['green']} substances confirmed.", "ok"
+        if auto:
+            text += f" {auto} gap fill(s)."
+        drift = [x for x in notes if "drift" in x]
+        if drift:
+            text += " " + "; ".join(drift) + "."
+        other = [x for x in notes if "drift" not in x and "time map" not in x]
+        if other:
+            text += " " + "; ".join(other)
+        self.banner.setText(("✔  " if level == "ok" else "⚠  ") + text)
+        self.banner.setProperty("level", level)
+        props = self.boundary_proposals()
+        self.b_bounds.setVisible(bool(props))
+        self.b_bounds.setText(f"Harmonise boundaries ({len({p.rt for p in props})})")
 
     def _fill_table(self):
         from PySide6.QtGui import QFont
@@ -635,6 +764,9 @@ class DuplicatePage(QWidget):
         headers = ["", "Report", "RT [min]", "Substance", "CAS", f"Area {labels[0]}", f"Area {labels[1]}",
                    f"{labels[0]} [{unit}]", f"{labels[1]} [{unit}]", f"Mean [{unit}]", "Diff. %", "Verdict", "Notes",
                    "Comment"]
+        feature_rows = bool(self.rows) and bool(self.rows[0].get("feature_id"))
+        if feature_rows:
+            headers += ["Feature", "Similarity", f"Hit {labels[0]}", f"Hit {labels[1]}"]
         cur = self.table.currentItem()
         keep_cur = (cur.data(Qt.UserRole), cur.column()) if cur is not None else None
         keep_sel = {(i.data(Qt.UserRole), i.column()) for i in self.table.selectedItems()}
@@ -653,12 +785,18 @@ class DuplicatePage(QWidget):
         for k, (row, v) in enumerate(zip(self.rows, self.verdicts)):
             if self.only_problems.isChecked() and v.level in ("ok", "neutral") and not row.get("edited"):
                 continue
+            if self.only_red.isChecked() and v.level != "bad":
+                continue
             r = self.table.rowCount()
             self.table.insertRow(r)
-            notes = "; ".join(x for x in (DV.english(row.get("review", "")),) if x)
+            notes = "; ".join(x for x in (v.detail if row.get("light") else DV.english(row.get("review", "")),) if x)
             vals = [ICON.get(v.level, ""), None, row.get("rt"), row.get("name", ""), row.get("cas", ""),
                     row.get("a1"), row.get("a2"), row.get("c1"), row.get("c2"), row.get("mean"), row.get("reldiff"),
                     v.text, notes, row.get("comment", "")]
+            if feature_rows:
+                s1, s2 = row.get("source1") or {}, row.get("source2") or {}
+                vals += [row.get("feature_id", ""), row.get("sim"),
+                         s1.get("name", "") if s1 else "", s2.get("name", "") if s2 else ""]
             edited = row.get("edited") or {}
             for c, val in enumerate(vals):
                 it = QTableWidgetItem()
@@ -669,7 +807,7 @@ class DuplicatePage(QWidget):
                     if c in (C_A1, C_A2):
                         it.setData(Qt.DisplayRole, int(round(val)))          # areas: whole counts
                     else:
-                        it.setData(Qt.DisplayRole, round(val, {C_RT: 3, C_DIFF: 1}.get(c, 4)))
+                        it.setData(Qt.DisplayRole, round(val, {C_RT: 3, C_DIFF: 1, C_SIM: 2}.get(c, 4)))
                     it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 else:
                     it.setText("" if val is None else str(val))
@@ -718,6 +856,174 @@ class DuplicatePage(QWidget):
                 self.table.selectionModel().setCurrentIndex(idx, QItemSelectionModel.NoUpdate)
         finally:
             self.table.blockSignals(False)
+
+    # -- feature pairing ------------------------------------------------------------------------
+
+    def features_mode(self) -> bool:
+        from gcws.features import service as SV
+        from gcws.features.model import PAIRING_FEATURES
+        return self.ws.quant.get("mode") != "hs_screening" and SV.pairing(self.ws) == PAIRING_FEATURES
+
+    def feature_of(self, row):
+        t = self.table_features
+        return t.by_id(row.get("feature_id")) if (t is not None and row and row.get("feature_id")) else None
+
+    def edit_settings(self):
+        from gcws.features import service as SV
+        from gcws.ui.dialogs.feature_settings import FeatureSettingsDialog
+        dlg = FeatureSettingsDialog(SV.settings(self.ws), self)
+        if dlg.exec() != FeatureSettingsDialog.Accepted:
+            return
+        self.set_settings(dlg.settings())
+
+    def set_settings(self, settings) -> None:
+        """Store the feature settings (one undo step) and compare again."""
+        q = copy.deepcopy(self.ws.quant)
+        q["features"] = settings.to_dict()
+        if q != self.ws.quant:
+            self.ws.push_quant("double determination settings", q, "double determination (features)")
+        self.compare(sync=False)
+
+    def next_red(self):
+        """F3: the next red row after the current one (from the top at the end)."""
+        rows = [r for r in range(self.table.rowCount())
+                if self.table.item(r, C_VERDICT) is not None
+                and self.table.item(r, C_ICON).text() == ICON["bad"]]
+        if not rows:
+            return
+        cur = self.table.currentRow()
+        nxt = next((r for r in rows if r > cur), rows[0])
+        self.table.setCurrentCell(nxt, C_NAME)
+
+    def boundary_proposals(self, row=None) -> list:
+        t = self.table_features
+        if t is None:
+            return []
+        feats = [self.feature_of(row)] if row is not None else t.features
+        return [p for f in feats if f is not None for p in f.proposals if p.kind == "boundary"]
+
+    def apply_boundaries(self, row=None) -> int:
+        from gcws.features import service as SV
+        props = self.boundary_proposals(row)
+        if not props or self.table_features is None:
+            return 0
+        n = SV.apply(self.ws, self.table_features, props, stack=self._stack(),
+                     label=f"double determination: {len({p.rt for p in props})} boundaries harmonised")
+        self.compare(sync=False)
+        return n
+
+    def remove_gap_fill(self, row) -> bool:
+        """Take the gap fill of this substance out again (one undo step)."""
+        from gcws.features.model import GAPFILL, GAPFILL_OPTION
+        from gcws.ui.undo import ManualEventsCommand, MultiCommand
+        f = self.feature_of(row)
+        if f is None:
+            return False
+        cmds = []
+        for m in f.members:
+            if m.origin != GAPFILL or m.peak is None:
+                continue
+            key = self.table_features.key
+            st = self.ws.runs[m.run_id]
+            keep = [e for e in st.events(key)
+                    if not (e.option == GAPFILL_OPTION and e.t1 is not None
+                            and min(e.t0, e.t1) - 1e-6 <= m.peak.rt <= max(e.t0, e.t1) + 1e-6)]
+            if len(keep) != len(st.events(key)):
+                cmds.append(ManualEventsCommand(self.ws, m.run_id, key, keep, f"{f.id}: gap fill removed"))
+        if not cmds:
+            return False
+        self._stack().push(MultiCommand(f"double determination: gap fill of {f.id} removed", cmds))
+        self.ws.log("Double determination (features)", self._names(), f"{f.id}: gap fill removed by the analyst")
+        self.compare(sync=False)
+        return True
+
+    def row_actions(self, row) -> list:
+        """``[(text, callable)]`` of the right-click menu of ``row``."""
+        out = []
+        f = self.feature_of(row)
+        if f is None:
+            return out
+        ident = f.identity
+        if ident is not None and ident.case in ("C", "D"):
+            for c in ident.candidates[:3]:
+                out.append((f"Name: {c['name']}", lambda c=c: self.set_identities([(row, c["name"], c.get("cas") or "")])))
+        if any(m.origin == "gapfill" for m in f.members):
+            out.append(("Remove the gap fill", lambda: self.remove_gap_fill(row)))
+        if self.boundary_proposals(row):
+            out.append(("Harmonise the boundaries", lambda: self.apply_boundaries(row)))
+        return out
+
+    def _context_menu(self, pos):
+        it = self.table.itemAt(pos)
+        if it is None:
+            return
+        k = it.data(Qt.UserRole)
+        if k is None or not (0 <= k < len(self.rows)):
+            return
+        actions = self.row_actions(self.rows[k])
+        if not actions:
+            return
+        menu = QMenu(self)
+        for text, fn in actions:
+            menu.addAction(text, fn)
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _start_consensus_search(self):
+        """Search the consensus spectra still unknown (worker thread), then compare again."""
+        from gcws.features import service as SV
+        t = self.table_features
+        if t is None or self._search is not None or not SV.settings(self.ws).consensus_search:
+            return
+        needed = SV.consensus_needed(self.ws, t, SV.settings(self.ws))
+        if not needed:
+            return
+        self._search_needed = needed
+        self._search = _ConsensusSearch(SV.search_method(self.ws, t.members), [f for _k, f in needed], self)
+        self._search.finished_note.connect(self._consensus_found)
+        self.banner.setText(self.banner.text() + f"  Searching {len(needed)} consensus spectra…")
+        self._search.start()
+
+    def _consensus_found(self, note: str):
+        from gcws.features import service as SV
+        needed, self._search_needed = getattr(self, "_search_needed", []), []
+        if self._search is not None:
+            self._search.wait()
+            self._search.deleteLater()
+        self._search = None
+        SV.store_consensus(self.ws, needed, note)
+        if self.isVisible() and self.members:
+            self.compare(sync=True)
+
+    # -- spectra ---------------------------------------------------------------------------------
+
+    def _draw_spectra(self):
+        self.spec.clear()
+        row = self._current_row()
+        f = self.feature_of(row) if row is not None else None
+        if f is None:
+            return
+        self.spec.addItem(pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen(theme.BORDER_STRONG)), ignoreBounds=True)
+        for sign, m in zip((1, -1), f.members[:2]):
+            if m.peak is None:
+                continue
+            spec = m.peak.spectrum if m.peak.spectrum is not None else m.peak.full_spectrum
+            if spec is None or len(spec[0]) == 0:
+                continue
+            mz, ab = np.asarray(spec[0], float), np.asarray(spec[1], float)
+            ab = ab / ab.max() * 100.0
+            xs = np.repeat(mz, 2)
+            ys = np.column_stack([np.zeros_like(ab), sign * ab]).ravel()
+            st = self.ws.runs.get(m.run_id)
+            color = st.color if st is not None else theme.ACCENT
+            self.spec.plot(xs, ys, connect="pairs", pen=pg.mkPen(color, width=1.5))
+            for i in np.argsort(-ab)[:4]:
+                t = pg.TextItem(f"{int(mz[i])}", anchor=(0.5, 1.0 if sign > 0 else 0.0), color=theme.FAINT)
+                t.setPos(mz[i], sign * ab[i])
+                self.spec.addItem(t)
+        sim = "–" if f.sim is None else f"{f.sim:.2f}"
+        name = f.identity.name if f.identity else ""
+        self.spec.setTitle(f"{f.id}  similarity {sim}  {name[:40]}", size="9pt")
+        self.spec.setYRange(-110, 110, padding=0)
 
     # -- mirror plot -----------------------------------------------------------------------
 
@@ -848,6 +1154,7 @@ class DuplicatePage(QWidget):
             self.cursor.setPos(rt)
             self.mirror.setXRange(rt - 0.4, rt + 0.4, padding=0)
             self._navigate(row, prefer_b=False)
+        self._draw_spectra()
 
     def _open_row(self, r, c):
         if c in FIELD_OF:                       # an editable cell: the double-click edits it

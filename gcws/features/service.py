@@ -93,15 +93,29 @@ def ri_function(ws, key: str, delay: float = 0.0):
     return ri
 
 
-def consensus(ws, table: FeatureTable, cfg: Settings, members: list[str], search: bool = True) -> None:
-    """Consensus spectra, their library search (cached per spectrum) and the identities."""
-    cache = getattr(ws, "_feature_consensus", None)
-    if cache is None:
-        cache = ws._feature_consensus = {}
-    needed = []
+def _cache(ws, name: str, factory):
+    value = getattr(ws, name, None)
+    if value is None:
+        value = factory()
+        setattr(ws, name, value)
+    return value
+
+
+def _consensus_key(spec) -> tuple:
+    return tuple(int(m) for m in spec[0]), tuple(round(float(a), 1) for a in spec[1])
+
+
+def consensus_needed(ws, table: FeatureTable, cfg: Settings) -> list:
+    """``[(cache key, feature)]`` whose consensus spectrum still has to be searched; features with a
+    searched (cached) spectrum get their hits here. Only features whose first hits differ and one of
+    them reaches the quality limit need a search; a spectrum whose search failed is not retried."""
+    cache = _cache(ws, "_feature_consensus", dict)
+    failed = _cache(ws, "_feature_consensus_failed", set)
     ql = quality_limit(ws)
+    needed = []
     for f in table.features:
-        f.consensus = CO.consensus_spectrum(f, cfg)
+        if f.consensus is None:
+            f.consensus = CO.consensus_spectrum(f, cfg)
         if f.consensus is None or f.mismatch:
             continue
         firsts = [m.peak.hits[0] for m in f.found if m.peak.hits]
@@ -110,20 +124,37 @@ def consensus(ws, table: FeatureTable, cfg: Settings, members: list[str], search
             continue                                   # case A needs no search
         if not any(CO._score(h) >= ql for h in firsts):
             continue                                   # nothing acceptable to choose between
-        ck = (tuple(int(m) for m in f.consensus[0]), tuple(round(float(a), 1) for a in f.consensus[1]))
+        ck = _consensus_key(f.consensus)
         if ck in cache:
             f.consensus_hits = cache[ck]
-        else:
+        elif ck not in failed:
             needed.append((ck, f))
+    return needed
+
+
+def store_consensus(ws, needed: list, note: str = "") -> None:
+    """Keep the hits of searched consensus spectra (``note``: the search could not be made)."""
+    cache = _cache(ws, "_feature_consensus", dict)
+    failed = _cache(ws, "_feature_consensus_failed", set)
+    for ck, f in needed:
+        if note:
+            failed.add(ck)
+        else:
+            cache[ck] = f.consensus_hits
+    ws._feature_consensus_note = note or ""
+
+
+def consensus(ws, table: FeatureTable, cfg: Settings, members: list[str], search: bool = True) -> None:
+    """Consensus spectra, their library search (cached per spectrum) and the identities."""
+    needed = consensus_needed(ws, table, cfg)
     if needed and search and cfg.consensus_search:
         note = CO.search_consensus(table, search_method(ws, members), [f for _ck, f in needed])
-        if note:
-            table.notes.append(note)
-        else:
-            for ck, f in needed:
-                cache[ck] = f.consensus_hits
+        store_consensus(ws, needed, note)
+    note = getattr(ws, "_feature_consensus_note", "")
+    if note and cfg.consensus_search:
+        table.notes.append(note)
     delay = ws.runs[members[0]].delay_value if members and members[0] in ws.runs else 0.0
-    CO.resolve(table, cfg, ql, ri_function(ws, table.key, delay))
+    CO.resolve(table, cfg, quality_limit(ws), ri_function(ws, table.key, delay))
 
 
 def build(ws, members: list[str], group: Optional[dict] = None, cfg: Optional[Settings] = None,
