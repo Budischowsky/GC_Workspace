@@ -23,7 +23,8 @@ from gcws.ui import theme
 
 PERIODS = {"all": ("All", None), "today": ("Today", 1), "week": ("7 days", 7), "month": ("30 days", 30)}
 LEVEL = {J.ACCEPTED_AUTO: "ok", J.ACCEPTED_MANUAL: "ok", J.CONTROL: "warn", J.REJECTED: "bad",
-         J.FAILED: "bad", J.NOT_PROCESSED: "bad", J.WAITING: "neutral", J.QUEUED: "info", J.PROCESSING: "info"}
+         J.FAILED: "bad", J.NOT_PROCESSED: "bad", J.WAITING: "neutral", J.QUEUED: "info", J.PROCESSING: "info",
+         J.REMOVED: "neutral"}
 FILE_LABELS = {"docx": "Word", "xlsx": "Excel", "pdf": "PDF", "dd": "Double determination",
                "batch_docx": "Batch Word", "batch_pdf": "Batch PDF", "batch_xlsx": "Batch summary"}
 
@@ -127,6 +128,9 @@ class Report2Dock(QWidget):
         self.a_rereport = more.addAction("Report again from the (edited) project", lambda: self.reprocess("rereport"))
         self.a_reprocess = more.addAction("Process again from the raw data", lambda: self.reprocess("full"))
         self.a_noblank = more.addAction("Process without a blank...", self.process_without_blank)
+        self.a_remove = more.addAction("Remove from the queue...", self.remove_from_queue)
+        self.a_remove.setToolTip("The sample cannot be processed: the watcher skips it and the batch report no "
+                                 "longer waits for it ('Process again' brings it back)")
         more.addSeparator()
         self.a_folder = more.addAction("Open the job folder", self.open_folder)
         self.a_export = more.addAction("Deliver to the target folders now", self.export_now)
@@ -258,8 +262,9 @@ class Report2Dock(QWidget):
         self._fill(self.control, [j for j in jobs if j.state == J.CONTROL])
         self._fill(self.accepted, [j for j in jobs if j.state in J.ACCEPTED])
         self._fill(self.pending, [j for j in jobs if j.state in (J.WAITING, J.QUEUED, J.PROCESSING)])
-        self._fill(self.problems, [j for j in jobs if j.state in (J.NOT_PROCESSED, J.FAILED, J.REJECTED)])
-        self.others.setTabText(1, f"Not processed / failed / rejected ({count(J.NOT_PROCESSED, J.FAILED, J.REJECTED)})")
+        self._fill(self.problems, [j for j in jobs if j.state in (J.NOT_PROCESSED, J.FAILED, J.REJECTED, J.REMOVED)])
+        self.others.setTabText(1, f"Not processed / failed / rejected / removed "
+                                  f"({count(J.NOT_PROCESSED, J.FAILED, J.REJECTED, J.REMOVED)})")
         self.others.setTabText(0, f"Waiting / processing ({count(J.WAITING, J.QUEUED, J.PROCESSING)})")
         try:
             self._stamp = None
@@ -292,6 +297,9 @@ class Report2Dock(QWidget):
                                       str(n) if n else "", J.when(j.finished or j.created)])
                 it.setData(0, Qt.UserRole, j.id)
                 it.setBackground(1, theme.status_brush(LEVEL.get(j.state, "neutral")))
+                if j.state == J.REMOVED:
+                    for c in range(4):
+                        it.setForeground(c, theme.status_color("neutral"))
                 if j.reason:
                     it.setToolTip(1, j.reason)
                 top.addChild(it)
@@ -375,6 +383,7 @@ class Report2Dock(QWidget):
         self.a_rereport.setEnabled(bool(job.project_path) and not job.is_batch)
         self.a_reprocess.setEnabled(job.state not in (J.QUEUED, J.PROCESSING))
         self.a_noblank.setEnabled(job.state == J.NOT_PROCESSED)
+        self.a_remove.setEnabled(job.state in J.REMOVABLE)
         self.a_export.setEnabled(job.state in (J.CONTROL, J.ACCEPTED_AUTO, J.ACCEPTED_MANUAL))
         self.a_folder.setEnabled(bool(job.job_dir))
 
@@ -411,6 +420,18 @@ class Report2Dock(QWidget):
             QMessageBox.information(self, "Report²", "This report is already being processed.")
         elif not self._watcher_running():
             self.banner_text.setText("Queued - start the watcher to process it.")
+        self.refresh()
+        return ok
+
+    def remove_from_queue(self, confirm: bool = True) -> bool:
+        job = self._job()
+        if job is None or job.state not in J.REMOVABLE:
+            return False
+        if confirm and QMessageBox.question(
+                self, "Remove from the queue", f"Remove '{job.group_name}' from the queue? The watcher skips it "
+                "and the batch report no longer waits for it. 'Process again' brings it back.") != QMessageBox.Yes:
+            return False
+        ok = bool(self.journal.remove([job.id]))
         self.refresh()
         return ok
 

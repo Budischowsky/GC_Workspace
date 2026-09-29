@@ -229,6 +229,44 @@ def test_planned_runs_that_never_came(env, qapp):
     assert next(j for j in jr.jobs() if j.is_batch).state == J.ACCEPTED_AUTO
 
 
+def test_removed_sample_does_not_hold_up_the_batch(env, qapp):
+    """A sample that cannot be processed (its B run is never measured, the sequence goes on) is
+    removed from the queue: rescans keep it removed, the batch report no longer waits for it and
+    "Process again" brings it back."""
+    from gcws.automation import journal as J
+    from gcws.automation.watcher import WatcherCore
+    jr, launcher = env["journal"], FakeLauncher()
+    now = [time.time()]
+    core = WatcherCore(jr, launcher, clock=lambda: now[0])
+    core.tick()
+    batch = env["watch"] / "26016605_TEST"
+    batch.mkdir()
+    _log(batch, BATCH)                                     # not completed: 12 y_B is still planned
+    for n in BATCH:
+        if n != "12_26016607_y_B":
+            _acquire(batch, n)
+    now[0] += 61
+    core.tick()
+    jobs = {j.group_name: j for j in jr.jobs()}
+    y = jobs["26016607_y"]
+    assert y.state == J.WAITING
+    launcher.complete(_result(launcher.started[-1][1], "accepted_auto", findings=0))
+    now[0] += 61
+    core.tick()
+    assert not any(j.is_batch for j in jr.jobs())          # waits for y
+    assert jr.remove([y.id, jobs["26016606_x"].id], user="analyst") == [y.id]   # x is done: not removable
+    assert jr.job(y.id).state == J.REMOVED and "analyst" in jr.job(y.id).reason
+    assert jr.counts().get(J.WAITING, 0) == 0
+    now[0] += 61
+    core.tick()
+    assert jr.job(y.id).state == J.REMOVED                 # the rescan keeps it removed
+    assert launcher.started[-1][2] == "batch"
+    assert [e["name"] for e in launcher.started[-1][1]["entries"]] == ["26016606_x"]
+    launcher.complete({"state": "accepted_auto", "files": {}, "findings": []})
+    assert jr.request(y.id) and jr.job(y.id).state == J.QUEUED
+    assert not jr.remove([]) and J.STATE_LABELS[J.REMOVED] == "Removed"
+
+
 def test_first_look_skips_existing_runs(env, qapp):
     from gcws.automation.watcher import WatcherCore
     jr, launcher = env["journal"], FakeLauncher()

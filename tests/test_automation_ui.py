@@ -140,3 +140,39 @@ def test_panel_new_duplicate_delete(qtbot, data, monkeypatch):
     path = W.list_workflows()[0].path
     imported = dock.import_(str(path))
     assert imported is not None and len(W.list_workflows()) == 2 and not imported.enabled
+
+
+def test_queue_remove_and_process_again(qtbot, data, monkeypatch):
+    """P72: a sample that cannot be processed is removed from the queue in the panel (and in
+    Report²); "Process again" brings it back."""
+    from PySide6.QtWidgets import QMessageBox
+    from gcws.automation import journal as J
+    from gcws.ui.docks.automation import AutomationDock
+    from gcws.ui.docks.report2 import Report2Dock
+    jr = J.Journal(data / "journal.sqlite")
+    b = jr.batch("wf1", data / "26016605_TEST")
+    stuck = jr.ensure_job("wf1", "m", b["id"], "7:x", "26016606_x", ["07.D"], {}, "fp", reason="waiting for 11.D")
+    failed = jr.ensure_job("wf1", "m", b["id"], "9:y", "26016607_y", ["09.D"], {}, "fp")
+    assert jr.transition(failed.id, J.WAITING, J.NOT_PROCESSED, reason="no Blank in the batch folder")
+    dock = AutomationDock(journal=jr, control=NoWatcher())
+    qtbot.addWidget(dock)
+    assert dock.queue.rowCount() == 2 and not dock.b_remove.isEnabled()
+    dock.queue.selectAll()
+    assert dock.b_remove.isEnabled()
+    asked = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: asked.append(a) or QMessageBox.Yes)
+    assert sorted(dock.remove_from_queue()) == sorted([stuck.id, failed.id]) and len(asked) == 1
+    assert dock.queue.rowCount() == 0
+    dock.show_removed.setChecked(True)
+    assert dock.queue.rowCount() == 2 and dock.queue.item(0, 3).text() == "Removed"
+    dock.queue.selectRow(0)
+    first = dock.queue.item(0, 0).data(0x0100)
+    assert dock.process_again() == [first] and jr.job(first).state == J.QUEUED
+    # Report²: remove from its "More" menu
+    r2 = Report2Dock(journal=jr, poll_ms=60000)
+    qtbot.addWidget(r2)
+    r2.select(first)
+    assert r2.a_remove.isEnabled()
+    assert r2.remove_from_queue(confirm=False) and jr.job(first).state == J.REMOVED
+    r2.select(first)
+    assert not r2.a_remove.isEnabled()

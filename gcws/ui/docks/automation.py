@@ -104,6 +104,36 @@ class AutomationDock(QWidget):
         row.addWidget(r2)
         wl.addLayout(row)
         lay.addWidget(box, 2)
+        # the queue: samples not processed yet, or whose processing could not finish
+        box = QGroupBox("Queue")
+        ql = QVBoxLayout(box)
+        self.queue = QTableWidget(0, 5)
+        self.queue.setHorizontalHeaderLabels(["Sample", "Batch", "Workflow", "State", "Why"])
+        self.queue.verticalHeader().setVisible(False)
+        self.queue.setSelectionBehavior(QTableWidget.SelectRows)
+        self.queue.setSelectionMode(QTableWidget.ExtendedSelection)
+        self.queue.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.queue.setWordWrap(False)
+        qh = self.queue.horizontalHeader()
+        for c in range(5):
+            qh.setSectionResizeMode(c, QHeaderView.Stretch if c == 4 else QHeaderView.ResizeToContents)
+        self.queue.itemSelectionChanged.connect(self._queue_buttons)
+        ql.addWidget(self.queue, 1)
+        row = QHBoxLayout()
+        self.b_remove = QPushButton("Remove from queue")
+        self.b_remove.setToolTip("Samples that cannot be processed: the watcher skips them and the batch report "
+                                 "no longer waits for them ('Process again' brings them back)")
+        self.b_remove.clicked.connect(lambda: self.remove_from_queue())
+        self.b_again = QPushButton("Process again")
+        self.b_again.clicked.connect(self.process_again)
+        self.show_removed = QCheckBox("Show removed")
+        self.show_removed.toggled.connect(lambda _on: self._refresh_queue())
+        for w in (self.b_remove, self.b_again):
+            row.addWidget(w)
+        row.addStretch(1)
+        row.addWidget(self.show_removed)
+        ql.addLayout(row)
+        lay.addWidget(box, 2)
         # activity
         box = QGroupBox("Activity")
         al = QVBoxLayout(box)
@@ -143,6 +173,7 @@ class AutomationDock(QWidget):
     def refresh(self):
         self._refresh_status()
         self._refresh_workflows()
+        self._refresh_queue()
         self._refresh_log()
 
     def _refresh_status(self):
@@ -199,6 +230,72 @@ class AutomationDock(QWidget):
             if wf.id == keep:
                 self.table.selectRow(r)
         self.table.blockSignals(False)
+
+    def _refresh_queue(self):
+        states = list(J.QUEUE) + ([J.REMOVED] if self.show_removed.isChecked() else [])
+        try:
+            jobs = self.journal.jobs(states=states)
+            batches = {b["id"]: b for b in self.journal.batches()}
+        except Exception:  # noqa: BLE001
+            return
+        keep = set(self.queue_selection())
+        names = {wf.id: wf.name for wf in W.list_workflows()}
+        self.queue.blockSignals(True)
+        self.queue.setRowCount(0)
+        level = {J.WAITING: "neutral", J.QUEUED: "info", J.PROCESSING: "info", J.FAILED: "bad",
+                 J.NOT_PROCESSED: "bad", J.REMOVED: "neutral"}
+        for j in jobs:
+            r = self.queue.rowCount()
+            self.queue.insertRow(r)
+            vals = [j.group_name, batches.get(j.batch_id, {}).get("name", ""), names.get(j.workflow_id, ""),
+                    j.label, j.reason or ""]
+            for c, v in enumerate(vals):
+                it = QTableWidgetItem(v)
+                it.setData(Qt.UserRole, j.id)
+                if c == 4:
+                    it.setToolTip(v)
+                if j.state == J.REMOVED:
+                    it.setForeground(theme.status_color("neutral"))
+                self.queue.setItem(r, c, it)
+            self.queue.item(r, 3).setBackground(theme.status_brush(level.get(j.state, "neutral")))
+            if j.id in keep:
+                self.queue.selectRow(r)
+        self.queue.blockSignals(False)
+        self._queue_buttons()
+
+    def queue_selection(self) -> list[str]:
+        model = self.queue.selectionModel()
+        rows = sorted({i.row() for i in model.selectedRows()}) if model else []
+        return [self.queue.item(r, 0).data(Qt.UserRole) for r in rows if self.queue.item(r, 0)]
+
+    def _queue_jobs(self) -> list:
+        return [j for j in (self.journal.job(i) for i in self.queue_selection()) if j is not None]
+
+    def _queue_buttons(self):
+        jobs = self._queue_jobs() if self.queue.rowCount() else []
+        self.b_remove.setEnabled(any(j.state in J.REMOVABLE for j in jobs))
+        self.b_again.setEnabled(any(j.state not in (J.QUEUED, J.PROCESSING) for j in jobs))
+
+    def remove_from_queue(self, confirm: bool = True) -> list[str]:
+        jobs = [j for j in self._queue_jobs() if j.state in J.REMOVABLE]
+        if not jobs:
+            return []
+        names = ", ".join(j.group_name for j in jobs[:5]) + (f" and {len(jobs) - 5} more" if len(jobs) > 5 else "")
+        if confirm and QMessageBox.question(
+                self, "Remove from queue", f"Remove {names} from the queue? The watcher skips "
+                f"{'it' if len(jobs) == 1 else 'them'} and the batch report no longer waits. "
+                "'Process again' brings them back.") != QMessageBox.Yes:
+            return []
+        done = self.journal.remove([j.id for j in jobs])
+        self.control.send("scan_now", 500)
+        self.refresh()
+        return done
+
+    def process_again(self) -> list[str]:
+        done = [j.id for j in self._queue_jobs() if j.state not in (J.QUEUED, J.PROCESSING)
+                and self.journal.request(j.id)]
+        self.refresh()
+        return done
 
     def _refresh_log(self):
         try:

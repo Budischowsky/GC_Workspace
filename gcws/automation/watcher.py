@@ -319,9 +319,16 @@ class WatcherCore(QObject):
                             j.id, J.WAITING, J.NOT_PROCESSED, reason="the sequence ended without these runs"):
                         self.journal.event("warning", f"{j.group_name}: not processed - the sequence ended without "
                                            "its runs", job_id=j.id, workflow_id=wf.id, batch_id=b["id"])
-            self.journal.update_batch(b["id"], plan={"complete": plan.complete, "groups": [
-                {"key": g.key, "name": g.name, "state": g.state, "reason": g.reason} for g in plan.groups]})
-            if plan.complete:
+            # a sample the analyst removed from the queue is not waited for
+            removed = {j.group_key for j in self.journal.jobs(workflow_id=wf.id, batch_id=b["id"],
+                                                              states=[J.REMOVED], include_batch=False)
+                       if j.method_node == m.id}
+            complete = (plan.finished or bool(seq.lines)) and all(
+                g.state != PN.WAITING or g.key in removed for g in plan.groups) if removed else plan.complete
+            self.journal.update_batch(b["id"], plan={"complete": complete, "groups": [
+                {"key": g.key, "name": g.name, "state": "removed" if g.key in removed else g.state,
+                 "reason": g.reason} for g in plan.groups]})
+            if complete:
                 self._batch_report(wf, m, b, folder)
 
     # -- the batch report ------------------------------------------------------------------------------
@@ -331,7 +338,7 @@ class WatcherCore(QObject):
         if not reports:
             return
         jobs = [j for j in self.journal.jobs(workflow_id=wf.id, batch_id=b["id"], include_batch=False)
-                if j.method_node == m.id]
+                if j.method_node == m.id and j.state != J.REMOVED]
         if not jobs:
             return
         states = {j.state for j in jobs}

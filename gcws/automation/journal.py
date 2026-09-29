@@ -31,23 +31,29 @@ ACCEPTED_MANUAL = "accepted_manual"
 REJECTED = "rejected"
 FAILED = "failed"
 NOT_PROCESSED = "not_processed"         # e.g. no blank in the batch
+REMOVED = "removed"                     # the analyst took it out of the queue (skipped, restorable)
 
 STATE_LABELS = {WAITING: "Waiting", QUEUED: "Queued", PROCESSING: "Processing", CONTROL: "Control needed",
                 ACCEPTED_AUTO: "Accepted (automatic)", ACCEPTED_MANUAL: "Accepted (analyst)",
-                REJECTED: "Rejected", FAILED: "Failed", NOT_PROCESSED: "Not processed"}
+                REJECTED: "Rejected", FAILED: "Failed", NOT_PROCESSED: "Not processed", REMOVED: "Removed"}
 ACCEPTED = (ACCEPTED_AUTO, ACCEPTED_MANUAL)
 DONE = (CONTROL, ACCEPTED_AUTO, ACCEPTED_MANUAL, REJECTED)          # processed (a report exists)
 TRANSITIONS = {
-    WAITING: {QUEUED, NOT_PROCESSED, WAITING},
-    QUEUED: {PROCESSING, WAITING},
+    WAITING: {QUEUED, NOT_PROCESSED, WAITING, REMOVED},
+    QUEUED: {PROCESSING, WAITING, REMOVED},
     PROCESSING: {CONTROL, ACCEPTED_AUTO, FAILED, NOT_PROCESSED, QUEUED},
-    FAILED: {QUEUED, WAITING},
-    NOT_PROCESSED: {QUEUED, WAITING},
+    FAILED: {QUEUED, WAITING, REMOVED},
+    NOT_PROCESSED: {QUEUED, WAITING, REMOVED},
+    REMOVED: {QUEUED},
     CONTROL: {ACCEPTED_MANUAL, REJECTED, QUEUED},
     ACCEPTED_AUTO: {REJECTED, QUEUED, CONTROL},
     ACCEPTED_MANUAL: {REJECTED, QUEUED, CONTROL},
     REJECTED: {QUEUED, CONTROL},
 }
+#: the states of the queue (not yet processed, or processing could not finish)
+QUEUE = (WAITING, QUEUED, PROCESSING, FAILED, NOT_PROCESSED)
+#: the states "Remove from queue" applies to (a job being processed is not taken away from the watcher)
+REMOVABLE = (WAITING, QUEUED, FAILED, NOT_PROCESSED)
 BATCH_KEY = "__batch__"                 # the job row of a batch report
 
 _DDL = """
@@ -242,7 +248,8 @@ class Journal:
     def ensure_job(self, workflow_id: str, method_node: str, batch_id: int, group_key: str, group_name: str,
                    members: list, blanks: dict, input_fp: str, state: str = WAITING, reason: str = "") -> Job:
         """The job of one sample; created waiting. A finished job whose input changed (a run was
-        acquired again) gets a new revision and is processed again; its review is reset."""
+        acquired again) gets a new revision and is processed again; its review is reset. A job the
+        analyst removed from the queue stays removed ("Process again" brings it back)."""
         from gcws.automation.workflow import new_id
         now = time.time()
         with self.tx():
@@ -257,6 +264,8 @@ class Journal:
                 what = "batch report" if group_key == BATCH_KEY else "new sample"
                 self._event_raw("info", workflow_id, batch_id, jid, f"{group_name}: {what} ({reason or state})")
                 return self.job(jid)
+            if cur.state == REMOVED:
+                return cur
             if cur.input_fp != input_fp and cur.state not in (QUEUED, PROCESSING, WAITING):
                 self.con.execute(
                     "UPDATE jobs SET revision=revision+1, members_json=?, blanks_json=?, input_fp=?, state=?, "
@@ -355,11 +364,28 @@ class Journal:
         if override is not None:
             fields["override"] = override
         ok = self.transition(job_id, (CONTROL, ACCEPTED_AUTO, ACCEPTED_MANUAL, REJECTED, FAILED, NOT_PROCESSED,
-                                      WAITING), QUEUED, **fields)
+                                      WAITING, REMOVED), QUEUED, **fields)
         if ok:
             self.event("info", f"{j.group_name}: {'report again' if mode == 'rereport' else 'process again'} "
                        f"requested", job_id=job_id, workflow_id=j.workflow_id, batch_id=j.batch_id, user=user)
         return ok
+
+    def remove(self, job_ids: Iterable[str], user: Optional[str] = None) -> list[str]:
+        """Take jobs out of the queue (they cannot be processed and would hold the batch up): the
+        watcher skips them, rescans do not add them again and the batch report does not wait for
+        them. Returns the ids removed; a job being processed is not."""
+        user = user or _user()
+        done = []
+        for jid in job_ids:
+            j = self.job(jid)
+            if j is None:
+                continue
+            if self.transition(jid, REMOVABLE, REMOVED, reason=f"removed from the queue by {user} "
+                               f"(was: {j.label.lower()})", not_before=0):
+                done.append(jid)
+                self.event("info", f"{j.group_name}: removed from the queue by {user}", job_id=jid,
+                           workflow_id=j.workflow_id, batch_id=j.batch_id, user=user)
+        return done
 
     # -- exports and events ------------------------------------------------------------------
 
