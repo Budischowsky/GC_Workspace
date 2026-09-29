@@ -16,6 +16,9 @@ def _setup_logging():
 
 def main(argv=None):
     argv = list(sys.argv if argv is None else argv)
+    if len(argv) > 2 and argv[1] in ("--process-job", "--batch-report"):
+        from gcws.automation.child import main as job_main
+        job_main(argv)                         # a job process of the watcher; never returns
     _setup_logging()
     from PySide6.QtCore import QCoreApplication, QSettings
     from PySide6.QtWidgets import QApplication, QMessageBox

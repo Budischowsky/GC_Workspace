@@ -146,10 +146,22 @@ def test_rules_accept_clean_report_and_flag_problems():
     assert len(res.findings) == 3
     # below the reporting limit a deviation does not count
     assert RU.evaluate(rules, _evidence(rows=[row(mean=0.005, reldiff=80.0)])).status == RU.ACCEPTED_AUTO
-    # the area window
+    # the fixed area window (switched on) and the areas of the determinations against each other
     low = _evidence()
     low["members"][0]["standards"][0]["fid_area"] = 2e6
-    assert "area low" in RU.evaluate(rules, low).findings[0].text
+    assert RU.evaluate(rules, low).status == RU.ACCEPTED_AUTO
+    window = RU.from_list(RU.to_list(rules))
+    window[[r.id for r in window].index("istd_qc")].params["area_window"] = True
+    assert "area low" in RU.evaluate(window, low).findings[0].text
+    two = _evidence()
+    second = {"name": "11_B", "mean_factor": 1.1, "blank_ok": True,
+              "standards": [dict(two["members"][0]["standards"][0], fid_area=4e6),
+                            dict(two["members"][0]["standards"][1], fid_area=1e5)]}
+    two["members"].append(second)
+    res = RU.evaluate(rules, two)
+    assert [f.text[:30] for f in res.findings] == ["IS1 area differs by 138 % betw"]   # the QC standard is exempt
+    second["standards"][0]["fid_area"] = 8e6
+    assert RU.evaluate(rules, two).status == RU.ACCEPTED_AUTO
     # the automatic ISTD detection disagrees with the peak the quantification used
     det = _evidence()
     det["members"][0]["istd_detection"] = {"IS2": {"rt": 18.918, "confidence": "medium", "applied": False,

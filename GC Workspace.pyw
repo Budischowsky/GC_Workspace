@@ -28,6 +28,12 @@ if not _in_project_venv() and VENV_PYTHONW.exists() and not os.environ.get("GCWS
     subprocess.Popen([str(VENV_PYTHONW), str(Path(__file__).resolve()), *sys.argv[1:]], cwd=str(ROOT))
     sys.exit(0)
 
+# --data <folder>: another data folder (e.g. the watcher started with Windows for a shared one)
+if "--data" in sys.argv[:-1]:
+    i = sys.argv.index("--data")
+    os.environ["GCWS_DATA"] = sys.argv[i + 1]
+    del sys.argv[i:i + 2]
+
 sys.path.insert(0, str(ROOT))
 
 try:

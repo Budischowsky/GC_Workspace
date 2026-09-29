@@ -27,9 +27,11 @@ RULES = {
                      True, {"only_above_limit": True, "artefacts": True}),
     "sml_exceeded": ("SML exceeded", "A reported substance above its specific migration limit.", True, {}),
     "istd_qc": ("Internal standards (QC)",
-                "An internal standard not found, outside the area window, no ISTD factor, or quantified with "
-                "another peak than the automatic ISTD detection found.",
-                True, {"area_window": True, "area_low": 8e6, "area_high": 11e6, "detection": True}),
+                "An internal standard not found, its area differing between the determinations (or outside a "
+                "fixed area window), no ISTD factor, or quantified with another peak than the automatic ISTD "
+                "detection found.",
+                True, {"area_diff": True, "max_area_diff_pct": 50.0, "area_window": False, "area_low": 8e6,
+                       "area_high": 11e6, "detection": True}),
     "processing_warnings": ("Processing problems",
                             "The report could not be made completely (warnings of the report, quantification "
                             "errors, a missing file).", True, {}),
@@ -211,7 +213,7 @@ def _istd_qc(rule: Rule, ev: dict) -> list[Finding]:
                     out.append(Finding(rule.id, rule.level, f"ISTD area {c.verdict}: {c.area:,.0f} "
                                        f"(window {float(rule.p('area_low')):,.0f} - {float(rule.p('area_high')):,.0f})",
                                        member=name, substance=c.name, value=c.area))
-        if ev.get("kind") in ("nias", None) and m.get("mean_factor") in (None, 0) and m.get("quantified", True):
+        if ev.get("kind") in ("nias", None, "total_extraction") and m.get("mean_factor") in (None, 0)                 and m.get("quantified", True):
             out.append(Finding(rule.id, rule.level, "No ISTD factor", member=name))
         if rule.p("detection"):
             for code, d in (m.get("istd_detection") or {}).items():
@@ -220,6 +222,29 @@ def _istd_qc(rule: Rule, ev: dict) -> list[Finding]:
                     out.append(Finding(rule.id, rule.level, f"{code}: the automatic detection found it at "
                                        f"{rt:.3f} ({d.get('confidence')} confidence), quantified with the peak "
                                        f"at {used:.3f}", member=name, substance=code, rt=used))
+    return out
+
+
+def _istd_spread(rule: Rule, ev: dict) -> list[Finding]:
+    """The same standard with very different areas in the determinations of one sample."""
+    if not rule.p("area_diff"):
+        return []
+    limit = float(rule.p("max_area_diff_pct") or 50.0)
+    areas: dict = {}
+    for m in ev.get("members") or []:
+        for s in m.get("standards") or []:
+            a = _num(s.get("fid_area"))
+            if a and str(s.get("role") or "") != "QC":
+                areas.setdefault(s.get("code"), []).append((a, s.get("name") or s.get("code")))
+    out = []
+    for code, vals in areas.items():
+        if len(vals) < 2:
+            continue
+        lo, hi = min(v for v, _ in vals), max(v for v, _ in vals)
+        diff = (hi / lo - 1.0) * 100.0
+        if diff > limit:
+            out.append(Finding(rule.id, rule.level, f"{code} area differs by {diff:.0f} % between the determinations "
+                               f"({lo:,.0f} - {hi:,.0f}; limit {limit:.0f} %)", substance=vals[0][1], value=diff))
     return out
 
 
@@ -275,7 +300,8 @@ def _no_blank(rule: Rule, ev: dict) -> list[Finding]:
     return out
 
 
-CHECKS = {"manual_check": _manual_check, "sml_exceeded": _sml_exceeded, "istd_qc": _istd_qc,
+CHECKS = {"manual_check": _manual_check, "sml_exceeded": _sml_exceeded,
+          "istd_qc": lambda r, ev: _istd_qc(r, ev) + _istd_spread(r, ev),
           "processing_warnings": _processing, "no_sml_above_limit": _no_sml, "substance_above": _substance_above,
           "unidentified_over": _unidentified, "no_blank": _no_blank}
 
