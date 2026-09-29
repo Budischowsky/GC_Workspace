@@ -125,6 +125,7 @@ class Workspace(QObject):
         self.undo_group.addStack(self.project_undo)
         self.project_path: Optional[Path] = None
         self.replicate_groups: list[dict] = []
+        self.automation: dict = {}                    # the automation job that made this project (if any)
         self.quant: dict = {"mode": "nias_mgkg", "unit": "µg/L", "settings": {},
                            "ms_solvent": {"enabled": False, "end": 0.0},
                            "solvent_cut": QSettings().value("integration/solvent_cut", False, type=bool)}

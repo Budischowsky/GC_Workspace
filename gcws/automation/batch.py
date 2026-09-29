@@ -12,7 +12,7 @@ from typing import Optional
 
 from gcws.automation import store
 
-STATUS = {"accepted_auto": "Accepted (automatic)", "accepted_manual": "Accepted (analyst)",
+STATUS = {"accepted_auto": "No finding (Report²)", "accepted_manual": "Accepted (analyst)",
           "control": "Control needed", "rejected": "Rejected", "not_processed": "Not processed",
           "failed": "Failed", "waiting": "Waiting", "queued": "Queued", "processing": "Processing"}
 
@@ -60,6 +60,32 @@ def summary_workbook(batch_name: str, entries: list[dict], target: Path) -> Path
     target.parent.mkdir(parents=True, exist_ok=True)
     wb.save(target)
     return target
+
+
+def report_groups(jobs: list, out_dir: Path, batch_name: str, formats=("batch_docx", "batch_xlsx"),
+                  progress=lambda text: None) -> tuple[list[dict], dict, list[str]]:
+    """GC Workspace's batch report (worker thread): every sample's report, judged by the Report²
+    rules, then all together. ``jobs``: ``[(group, ReportJob, evidence)]`` prepared on the GUI
+    thread. Returns ``(entries, batch files, warnings)``."""
+    from gcws.automation import pipeline as PL
+    from gcws.automation import rules as RU
+    from gcws.report import service as RS
+    rules = RU.load_default_rules()
+    entries, warnings = [], []
+    for n, (group, job, ev) in enumerate(jobs, 1):
+        progress(f"{n}/{len(jobs)} {group['name']}")
+        try:
+            res = RS.generate(job)
+        except Exception as exc:  # noqa: BLE001 - the other samples are still reported
+            warnings.append(f"{group['name']}: {exc}")
+            entries.append({"name": group["name"], "state": "failed", "findings": [{"text": str(exc)}]})
+            continue
+        ev = dict(ev, rows=PL.slim_rows(res), summary=res.summary, warnings=list(res.warnings))
+        result = RU.evaluate(rules, ev)
+        entries.append({"name": group["name"], "state": result.status, "findings": result.to_list(),
+                        "xlsx": str(res.target), "report": str(res.word or res.target)})
+    files, more = batch_report(batch_name, entries, out_dir, formats)
+    return entries, files, warnings + more
 
 
 def batch_report(batch_name: str, entries: list[dict], out_dir: Path, formats, *,

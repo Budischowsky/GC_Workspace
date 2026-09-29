@@ -78,6 +78,7 @@ def to_dict(ws, project_path: Path) -> dict:
         "replicate_groups": ws.replicate_groups,
         "quant": ws.quant,
         "audit": ws.audit.to_list(),
+        **({"automation": ws.automation} if getattr(ws, "automation", None) else {}),
     }
 
 

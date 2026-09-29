@@ -245,6 +245,8 @@ def run_job(spec: dict, *, progress: Callable[[str], None] = log.info,
         timings[f"report {kind}"] = round(time.time() - t1, 1)
     # project for the analyst
     project = Path(spec.get("project_out") or (out_dir / f"{stem}.gcws"))
+    ws.automation = {"job_id": spec.get("job_id", ""), "revision": spec.get("revision", 1),
+                     "workflow_id": spec.get("workflow_id", ""), "sample": group["name"]}
     ws.log("Automation: processed", ", ".join(names), f"job {spec.get('job_id', '')} revision "
            f"{spec.get('revision', 1)}")
     try:
@@ -253,23 +255,10 @@ def run_job(spec: dict, *, progress: Callable[[str], None] = log.info,
         warnings.append(f"Project not saved: {exc}")
         project = None
     # evidence and the Report² rules
-    from gcws.quant.nias_bridge import make_settings
-    s = make_settings((ws.quant or {}).get("settings"))
-    members_ev = []
-    for rid in members:
-        st = ws.runs[rid]
-        sample = ws.nias_sample(rid)
-        chk = ws.blank_readiness(st, spec.get("require_blank", "auto"))
-        members_ev.append({
-            "name": st.name, "standards": _standards(sample), "mean_factor": getattr(sample, "mean_factor", None),
-            "quantified": sample is not None, "quant_error": (ws.quant_result.errors.get(rid) if ws.quant_result
-                                                              else ""),
-            "blank_ok": chk.ok, "blank_text": chk.text, "blanks": chk.assigned,
-            "istd_detection": detection.get(rid, {})})
-    evidence = {"kind": (spec.get("reports") or [{}])[0].get("kind"), "members": members_ev, "rows": rows,
-                "summary": summary, "warnings": warnings + sample_warn, "errors": errors_ev, "reported": reported,
-                "settings": {"reporting_limit": getattr(s, "reporting_limit", 0.01),
-                             "duplicate_max_reldiff": getattr(s, "duplicate_max_reldiff", 30.0)}}
+    evidence = evidence_for(ws, members, kind=(spec.get("reports") or [{}])[0].get("kind"),
+                            require=spec.get("require_blank", "auto"), detection=detection)
+    evidence.update(rows=rows, summary=summary, warnings=warnings + sample_warn, errors=errors_ev,
+                    reported=reported)
     if spec.get("has_review", True):
         ev = RU.evaluate(RU.from_list(spec.get("rules")) if spec.get("rules") is not None else RU.default_rules(),
                          evidence, bool(spec.get("auto_accept", True)))
@@ -284,6 +273,39 @@ def run_job(spec: dict, *, progress: Callable[[str], None] = log.info,
     timings["total"] = round(time.time() - t0, 1)
     return JobResult(state, "", files, str(project) if project else "", _json_safe(evidence), findings,
                      warnings + sample_warn + errors_ev, timings)
+
+
+def evidence_for(ws, members: list, *, kind: str = "nias", require: str = "auto",
+                 detection: Optional[dict] = None) -> dict:
+    """What the Report² rules look at for the determinations ``members`` of one sample (without the
+    report's rows, summary and warnings, which the caller adds)."""
+    from gcws.quant.nias_bridge import make_settings
+    s = make_settings((ws.quant or {}).get("settings"))
+    out = []
+    for rid in members:
+        st = ws.runs[rid]
+        sample = ws.nias_sample(rid)
+        chk = ws.blank_readiness(st, require)
+        out.append({
+            "name": st.name, "standards": _standards(sample), "mean_factor": getattr(sample, "mean_factor", None),
+            "quantified": sample is not None,
+            "quant_error": (ws.quant_result.errors.get(rid) if ws.quant_result else "") or "",
+            "blank_ok": chk.ok, "blank_text": chk.text, "blanks": chk.assigned,
+            "istd_detection": (detection or {}).get(rid, {})})
+    return {"kind": kind, "members": out, "rows": [], "summary": {}, "warnings": [], "errors": [],
+            "settings": {"reporting_limit": getattr(s, "reporting_limit", 0.01),
+                         "duplicate_max_reldiff": getattr(s, "duplicate_max_reldiff", 30.0)}}
+
+
+def slim_rows(result, cas_info: Optional[dict] = None) -> list[dict]:
+    """The merged rows of a report result with their SML (for the rules)."""
+    if cas_info is None:
+        try:
+            from gcws.quant.service import cas_lookup
+            cas_info = cas_lookup()
+        except Exception:  # noqa: BLE001
+            cas_info = {}
+    return _slim_rows(getattr(result, "combined", []) or [], cas_info)
 
 
 def _json_safe(obj):

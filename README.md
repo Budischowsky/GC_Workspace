@@ -252,8 +252,12 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
    - Lib2NIST is found automatically in a NIST MS Search installation; otherwise set its path in
      *Edit > Preferences*.
 7. **Roles and blanks**: right-click a loaded sample and set its role (Sample / Blank / Blank + ISTD / Standard /
-   Alkane ladder). Blanks are suggested from the injection order; blanks you assign yourself are never
-   re-suggested.
+   Alkane ladder). Blanks are suggested from the injection order of the sample's **own batch folder**
+   (a sequence log that writes into several folders is read per folder); a blank of another folder is never
+   suggested. The suggestion is made again once all runs of a load have arrived, so the order in which
+   they finish loading does not matter. Blanks you assign yourself are never re-suggested. A report of a
+   sample without a blank from its batch lists that as a warning (the automation does not process such a
+   sample at all).
    - **Blank subtraction**: the **subtract blank** switch under *Chromatogramm > Chromatogram 1/2*
      shows "FID − Blank" / "TIC − Blank"
      there. You decide per panel which trace is blank-subtracted.
@@ -286,6 +290,19 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
    - **Area %**.
 
    Edits of the Internal standards table apply at once and can be undone.
+
+   **Automatic ISTD detection** (*Detect ISTDs...* in the panel, or *Quantify > Detect internal
+   standards...*): every standard of the table is looked for by its library names (all hits, not only the
+   first; a labelled standard such as DBP-d4 never matches the native compound), by its **reference
+   spectrum** and by retention time. The RT evidence allows a common shift of the whole run, estimated from
+   the standards that are certain by name or spectrum (a shortened column moves all of them alike). Each
+   peak serves one standard; the area only breaks ties. The dialog shows the peak found, its RT against the
+   target, the evidence and a confidence (high / medium / low) for the active chromatogram or all loaded
+   samples; the checked standards (high confidence is pre-checked) are bound in one undo step, optionally
+   with the target RTs moved to where they were found. **Learn spectrum** keeps the spectrum of a bound
+   standard's peak as its reference (saved with the processing method); later runs then find the standards
+   by spectrum and RT even without a library search. The automation binds high-confidence results and
+   reports a standard quantified with another peak than the detection found.
 
    **Migration conditions** (inside the NIAS Quantification panel): analyst, simulant (EtOH 95 %, 50 %, 20 %,
    Tenax, or *Other...* to type one), temperature, duration, cell area, coverage factor, volume and
@@ -325,6 +342,83 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
     colleagues (ID, label, RT, samples, status and note are in the MSP comment). *Add to library...* stores an
     unknown in one of your libraries.
 
+## Automation and Report²
+
+GC Workspace can process new data **unattended**: a workflow watches a folder, processes every finished
+sample with a processing method, judges the report (Report²) and delivers the files.
+
+**Workflows** (*Automation* menu, **Automation** panel): *New* starts from a template; *Edit chart...*
+opens the process chart:
+
+```
+Watched folder  ->  Method  ->  Report²  ->  Report  ->  Target folder(s)
+```
+
+- **Watched folder**: the folder the instrument writes into, one folder per batch below it (or deeper),
+  optional name pattern, how often it is checked (every x minutes) and the quiet time. What is in the folder
+  when watching starts is not processed (unless chosen).
+- **Method**: a saved processing method (*Method > Save current settings as Method...*, including migration
+  conditions for NIAS), library search on/off, automatic ISTD detection, which blank is required, time limit.
+- **Report²**: the rules (see below) and whether a report without findings is accepted automatically.
+- **Report**: NIAS / Fingerprint / Total extraction / HS-Screening and its files: Excel, Word, PDF (needs
+  Microsoft Word), double determination workbook, and per batch folder a combined Word/PDF report of all
+  samples and a Report² summary workbook.
+- **Target folder**: path, subfolder with placeholders `{batch} {sample} {kind} {status} {date} {workflow}`,
+  what happens when a file exists. A target inside the watched raw-data folder is refused unless allowed.
+- **Arrows** carry filters (double-click an arrow): report status (accepted automatically / by the analyst /
+  control needed), file formats, sample and batch-folder name patterns. Only what matches passes. Example
+  (template "NIAS"): Report² -> Report lets only accepted reports through; Report -> folder A takes Excel,
+  Report -> folder B takes Word and PDF. Add an arrow with status *control needed* to a review folder to get
+  drafts of the reports that need checking.
+- The checks list names what is missing; only a complete workflow can be switched *Active*.
+
+**When a sample is processed**: a sample is a replicate group (the A/B determinations of one sample number).
+It is processed once all its determinations **and the blanks it is compared with, from the same batch
+folder**, are finished. The sequence log (written when the sequence starts) tells which runs are still
+coming, e.g. `07 A` waits for `11 B` and then for the blank `13_EtOH` after it. Without a log the folder
+must be quiet for the quiet time. A run counts as finished when it did not change over the checks, is old
+enough and the instrument moved on (`checksum.xml` written, next run started, sequence completed). A sample
+without the required blank in its batch folder is **not processed** (Report² lists it under *Not processed*;
+*More > Process without a blank* overrides it, marked as a finding).
+
+**The watcher** (*Automation > Start the watcher*, or the panel's *Start*) is a separate background process
+with a tray icon: it keeps processing when GC Workspace is closed, processes one sample at a time in its own
+job process (a crash or a hanging Office program cannot stop it), and shows a message when a report needs
+control. *Start with Windows* (panel or tray menu) puts a shortcut into your Startup folder. Each job works in
+`data/automation/jobs/<job>/r<revision>`; the raw-data folders are only read. The log is
+`data/logs/watcher.log`.
+
+**Report²** (*Automation > Report²*): how many samples were processed, accepted (automatically / by the
+analyst), need control, were not processed, are waiting or failed - per workflow, period and search text.
+- Two areas, **Control needed** and **Accepted**, grouped by batch folder; further tabs for waiting and
+  not processed / failed / rejected samples.
+- Selecting a report shows its **findings** (rule, determination, substance, RT, what was found), its files
+  (with where they were delivered) and its history.
+- **Accept...** / **Reject...** record your name, the time and a comment (required with findings); an accepted
+  report is delivered along the arrows. *Open report* opens Word / Excel / PDF; **Open in GC Workspace** opens
+  the sample as processed (runs, integration, names, ISTDs, blanks) to check or correct it: save the project,
+  then *More > Report again from the (edited) project*. *Process again from the raw data* starts over.
+- **Rules...**: what sends a report to *Control needed*. Default: substances to check manually (uncertain or
+  unknown identification, identification conflict, relative difference of the determinations above the
+  limit, artefacts - the NIAS *Manuell_pruefen* criteria, at or above the reporting limit), SML exceeded, ISTD
+  QC (not found, ISTD areas differing between the determinations by more than 50 %, no ISTD factor, a
+  standard quantified with another peak than the automatic detection found), processing problems, processed
+  without a blank. Optional: no SML above the reporting limit, a substance above a concentration (name / CAS
+  pattern), too many unidentified substances, a fixed ISTD area window. Each rule can be *control needed* or
+  *note only*; a workflow's Report² step can have its own rules.
+
+**Batch report from GC Workspace** (*Report > Batch report of this folder...*): every sample of the active
+chromatogram's batch folder (its replicate groups, else the suggested ones) is reported into a folder you
+choose, judged by the Report² rules, and all samples go into one Word document plus a summary workbook
+(sample, status, findings, report).
+
+**Trying a workflow**: `tools\simulate_acquisition.py` copies a finished batch into a watched folder run by
+run, the way the instrument writes it (the source is only read):
+
+```
+.venv\Scripts\python.exe tools\simulate_acquisition.py --source "..\NIAS Working\samples\26016605_GIOSUN1635" --target C:\temp\watch --delay 30
+```
+
 ## Processing methods
 
 *Method > Save current settings as Method...* stores all processing settings under a name
@@ -335,6 +429,7 @@ and peak type, own-library options, report options and the peak table's columns 
 undo step; the integration methods also become the default for runs loaded later. Methods can be exported
 and imported as `.json` files to share them. Things that belong to single runs (ISTD peak bindings, manual
 integration, blank assignments) are not part of a method. The status bar shows the current method.
+Reference spectra learned for the ISTDs and the ISTD detection options are part of the quantification section.
 
 ## Layout
 

@@ -35,7 +35,7 @@ DOCKS = [  # key, title
     ("tree", "Folders"), ("chrom", "Chromatogram 1"), ("zoom", "Chromatogram 2"),
     ("table", "Peaks / substances"), ("spectrum", "Mass spectrum"), ("events", "Integration method"),
     ("props", "Properties"), ("audit", "Audit trail"), ("quant", "Quantification"),
-    ("replicates", "Replicates / results"), ("automation", "Automation"),
+    ("replicates", "Replicates / results"), ("automation", "Automation"), ("report2", "Report²"),
 ]
 
 
@@ -91,9 +91,12 @@ class MainWindow(QMainWindow):
         self.replicates = ReplicatesDock(self.ws)
         from gcws.ui.docks.automation import AutomationDock
         self.automation = AutomationDock(self)
+        from gcws.ui.docks.report2 import Report2Dock
+        self.report2 = Report2Dock(self)
         widgets = {"tree": self.folder_split, "chrom": self.chrom, "zoom": self.chrom2, "table": self.table,
                    "spectrum": self.spectrum, "events": self.events, "props": self.props, "audit": self.audit,
-                   "quant": self.quant, "replicates": self.replicates, "automation": self.automation}
+                   "quant": self.quant, "replicates": self.replicates, "automation": self.automation,
+                   "report2": self.report2}
         self.overlay = DropOverlay(self)
         for key, title in DOCKS:
             self._add_dock(key, title, widgets[key])
@@ -123,7 +126,7 @@ class MainWindow(QMainWindow):
         from gcws.ui.layout.title_bar import RightTitleDock
         d = RightTitleDock(title, self) if key in ("chrom", "zoom", "spectrum") else QDockWidget(title, self)
         d.setObjectName("dock." + key)
-        if key in ("events", "automation"):
+        if key in ("events", "automation", "report2"):
             # form-heavy panels scroll instead of forcing a wide minimum on the whole dock column
             from PySide6.QtWidgets import QScrollArea
             area = QScrollArea()
@@ -337,6 +340,8 @@ class MainWindow(QMainWindow):
             self.report_menu.addAction(label + "...", lambda k=kind: self.report(k))
             self.report_menu.addAction(label + " - preview", lambda k=kind: self.report(k, preview=True))
             self.report_menu.addSeparator()
+        self.report_menu.addAction("Batch report of this folder...", self.batch_report)
+        self.report_menu.addSeparator()
         a = self.report_menu.addAction("Keep intermediate workbook")
         self.a_keep_middle = a
         a.setCheckable(True)
@@ -345,6 +350,7 @@ class MainWindow(QMainWindow):
 
         self.automation_menu = m = mb.addMenu("&Automation")
         m.addAction("Automation panel", lambda: self._show_dock("automation"))
+        m.addAction("Report²", lambda: self._show_dock("report2"))
         new = m.addMenu("New workflow")
         from gcws.automation.templates import TEMPLATES
         for key, label in TEMPLATES.items():
@@ -453,6 +459,8 @@ class MainWindow(QMainWindow):
         self.spectrum.libraryRequested.connect(lambda: self.edit_library(True))
         self.replicates.reportRequested.connect(lambda kind, gid: self.report(kind, gid))
         self.replicates.previewRequested.connect(lambda kind, gid: self.report(kind, gid, preview=True))
+        self.automation.showReport2.connect(lambda: self._show_dock("report2"))
+        self.report2.openProject.connect(self.open_project)
         self._tool_changed("select")
 
     # -- helpers -------------------------------------------------------------
@@ -649,6 +657,7 @@ class MainWindow(QMainWindow):
     def close_all(self):
         for rid in list(self.ws.order):
             self.ws.remove_run(rid)
+        self.ws.automation = {}
 
     # -- integration -------------------------------------------------------------
 
@@ -1181,6 +1190,94 @@ class MainWindow(QMainWindow):
         workers.submit(work, on_done=lambda r: self._report_done(kind, job, r[0], r[1], preview),
                        on_error=lambda e: self._report_failed(e))
 
+    def _batch_groups(self, folder: str) -> list[dict]:
+        """The samples of a batch folder: its replicate groups, else the suggested ones."""
+        from gcws.quant.grouping import for_workspace
+        groups, _ = for_workspace(self.ws)
+        inside = lambda g: all(m in self.ws.runs and self.ws.folder_key(self.ws.runs[m]) == folder
+                               for m in g["members"]) and g["members"]
+        return [g for g in groups if inside(g)]
+
+    def batch_report(self, kind=None, out_dir=None):
+        """Report > Batch report of this folder: every sample of the active chromatogram's batch folder
+        reported, judged by the Report² rules, and all together (one Word document, a summary)."""
+        from gcws.automation import batch as BA
+        from gcws.automation import pipeline as PL
+        from gcws.report import assemble as AS
+        from gcws.report import service as RS
+        st = self.ws.active
+        if st is None:
+            QMessageBox.information(self, "Batch report", "Load the batch and select one of its chromatograms.")
+            return
+        hs = self.ws.quant.get("mode") == "hs_screening"
+        if kind is None:
+            kinds = [k for k in RS.KINDS if (k == "hs_screening") == hs]
+            labels = [RS.KINDS[k] for k in kinds]
+            label, ok = QInputDialog.getItem(self, "Batch report", "Report of every sample:", labels, 0, False)
+            if not ok:
+                return
+            kind = kinds[labels.index(label)]
+        folder = self.ws.folder_key(st)
+        groups = self._batch_groups(folder)
+        if not groups:
+            QMessageBox.information(self, "Batch report", "No sample (role Sample) is loaded from this folder.")
+            return
+        if out_dir is None:
+            out_dir = QFileDialog.getExistingDirectory(self, "Batch report - folder for the reports",
+                                                       str(st.run.path.parent))
+            if not out_dir:
+                return
+        out_dir, jobs, skipped, used = Path(out_dir), [], [], set()
+        for g in groups:
+            try:
+                try:
+                    members, samples = AS.prepare(self.ws, kind, g)
+                except AS.ReportNotPossible as exc:
+                    if exc.code != "no_migration":
+                        raise
+                    self.quant.edit_migration()
+                    members, samples = AS.prepare(self.ws, kind, g)
+            except AS.ReportNotPossible as exc:
+                skipped.append(f"{g['name']}: {exc.message.splitlines()[0]}")
+                continue
+            stem = RS.report_stem([self.ws.runs[m].name for m in members])
+            if stem in used:
+                from gcws.automation.store import safe_name
+                stem = safe_name(g["name"])
+            used.add(stem)
+            job = AS.build_job(self.ws, kind, g, out_dir / f"{stem}{RS.SUFFIXES[kind]}.xlsx", members=members,
+                               samples=samples)
+            jobs.append((g, job, PL.evidence_for(self.ws, members, kind=kind)))
+        if not jobs:
+            QMessageBox.warning(self, "Batch report", "No sample can be reported:\n" + "\n".join(skipped))
+            return
+        name = st.run.path.parent.name
+        self.progress.setRange(0, 0)
+        self.progress.setFormat("Batch report")
+        self.progress.show()
+        self.statusBar().showMessage(f"Batch report of {name}: {len(jobs)} sample(s) ...")
+        workers.submit(BA.report_groups, jobs, out_dir, name,
+                       on_done=lambda r: self._batch_done(name, out_dir, r, skipped),
+                       on_error=lambda e: self._report_failed(e))
+
+    def _batch_done(self, name, out_dir, result, skipped):
+        entries, files, warnings = result
+        self.progress.hide()
+        self.ws.log("Batch report", name, str(out_dir), "", f"{len(entries)} samples")
+        flagged = [e["name"] for e in entries if e.get("state") != "accepted_auto"]
+        lines = [f"Batch report of {name}: {len(entries)} sample(s) reported to", str(out_dir), ""]
+        lines += [f"{Path(p).name}" for p in files.values()]
+        if flagged:
+            lines += ["", "Report² findings (see the summary workbook): " + ", ".join(flagged)]
+        if skipped:
+            lines += ["", "Not reported:"] + skipped
+        lines += warnings[:8]
+        self.last_batch = (entries, files)
+        if QMessageBox.question(self, "Batch report", "\n".join(lines + ["", "Open the folder?"])) \
+                == QMessageBox.Yes:
+            import os
+            os.startfile(str(out_dir))
+
     def _report_failed(self, err):
         self.progress.hide()
         QMessageBox.warning(self, "Report", err.splitlines()[0] + "\n\n" + "\n".join(err.splitlines()[1:6]))
@@ -1255,6 +1352,11 @@ class MainWindow(QMainWindow):
         self.audit.reload()
         self.ws.replicate_groups = data.get("replicate_groups", [])
         self.ws.quant = data.get("quant", {})
+        self.ws.automation = data.get("automation") or {}
+        if self.ws.automation:
+            self.statusBar().showMessage(
+                f"Processed by the automation ({self.ws.automation.get('sample', '')}): after changes, save the "
+                "project and choose 'Report again' in Report²", 20000)
         panels = data.get("panels") or {}
         if panels.get("keys"):
             self.ws.set_panels(panels["keys"], panels.get("blank") or [False, False], panels.get("table", 0))

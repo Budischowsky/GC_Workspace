@@ -56,6 +56,7 @@ def open_project(ws, path) -> list[str]:
     ws.audit.load(data.get("audit"))
     ws.replicate_groups = data.get("replicate_groups", [])
     ws.quant = data.get("quant", {})
+    ws.automation = data.get("automation") or {}
     panels = data.get("panels") or {}
     if panels.get("keys"):
         ws.set_panels(panels["keys"], panels.get("blank") or [False, False], panels.get("table", 0))
