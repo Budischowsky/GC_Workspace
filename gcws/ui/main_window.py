@@ -1106,84 +1106,36 @@ class MainWindow(QMainWindow):
         return None
 
     def report(self, kind, group_id=None, preview=False):
-        from gcws.quant.nias_bridge import make_settings
-        from gcws.quant.service import cas_lookup
+        from gcws.report import assemble as AS
         from gcws.report import service as RS
-        from gcws import paths
-        hs = self.ws.quant.get("mode") == "hs_screening"
-        if hs != (kind == "hs_screening"):
-            QMessageBox.information(self, "Report", "Select HS-Screening mode and its report together. "
-                                    "For other reports, select the corresponding quantification mode.")
-            return
         g = self._group_for_report(group_id)
-        if g is None or not g["members"]:
-            QMessageBox.information(self, "Report", "Choose a replicate group (Replicates panel) or activate a "
-                                    "sample chromatogram.")
-            self._show_dock("replicates")
-            return
-        self.ws.recompute_quant()
-        members = [m for m in g["members"] if m in self.ws.runs]
-        samples = [self.ws.nias_sample(m) for m in members]
-        if hs:
-            errors = [self.ws.quant_result.errors[m] for m in members if m in self.ws.quant_result.errors]
-            if errors:
-                QMessageBox.warning(self, "HS-Screening report", "\n".join(errors))
-                return
-        if not samples or any(s is None for s in samples):
-            errs = [self.ws.quant_result.errors.get(m, "") for m in members]
-            from gcws.quant.service import quant_detector
-            QMessageBox.warning(self, "Report", "Every determination needs role Sample and an "
-                                + quant_detector(self.ws.quant) + " integration.\n"
-                                + "\n".join(e for e in errs if e))
-            return
-        if kind == "nias" and not any(s.mean_factor for s in samples):
-            QMessageBox.warning(self, "Report", "No ISTD factor: identify or bind the internal standards first.")
-            return
-        cas = None
-        if kind == "nias":
-            from gcws.ui.dialogs.preferences import load_settings
-            raw = Path(load_settings().get("standard_cas_path", "CASINFO.xlsx"))
-            cas = raw if raw.is_absolute() else next((b / raw for b in (paths.RESOURCES, paths.ROOT, paths.DATA)
-                                                      if (b / raw).exists()), None)
-            if cas is None or not cas.exists():
-                QMessageBox.warning(self, "Report", "The NIAS report needs the CAS reference CASINFO.xlsx "
-                                    "(Edit > Preferences).")
-                return
-            if not self.ws.quant.get("migration"):
+        try:
+            try:
+                members, samples = AS.prepare(self.ws, kind, g)
+            except AS.ReportNotPossible as exc:
+                if exc.code != "no_migration":
+                    raise
                 self.quant.edit_migration()
                 if not self.ws.quant.get("migration"):
                     return
-        names = [self.ws.runs[m].name for m in members]
-        stem = RS.report_stem(names)
-        folder = self.ws.runs[members[0]].run.path.parent
+                members, samples = AS.prepare(self.ws, kind, g)
+        except AS.ReportNotPossible as exc:
+            title = "HS-Screening report" if exc.code == "hs_errors" else "Report"
+            (QMessageBox.information if exc.level == "information" else QMessageBox.warning)(self, title, exc.message)
+            if exc.code == "no_group":
+                self._show_dock("replicates")
+            return
+        default = AS.default_target(self.ws, kind, members)
         if preview:
             import tempfile
-            tmp = Path(tempfile.mkdtemp(prefix="gcws_preview_"))
-            target = tmp / f"{stem}{RS.SUFFIXES[kind]}.xlsx"
+            target = Path(tempfile.mkdtemp(prefix="gcws_preview_")) / default.name
         else:
-            fn, _ = QFileDialog.getSaveFileName(self, f"Save {RS.KINDS[kind]}",
-                                                str(folder / f"{stem}{RS.SUFFIXES[kind]}.xlsx"), "Excel (*.xlsx)")
+            fn, _ = QFileDialog.getSaveFileName(self, f"Save {RS.KINDS[kind]}", str(default), "Excel (*.xlsx)")
             if not fn:
                 return
             target = Path(fn)
-        blank_ids = [b for m in members for b in self.ws.runs[m].blanks]
-        blank_istd_ids = [b for m in members for b in self.ws.runs[m].blanks_istd]
-        # every blank used by any determination of the group (display only in the report)
-        bname = lambda ids: "; ".join(dict.fromkeys(str(self.ws.runs[i].run.path) for i in ids if i in self.ws.runs))
-        from gcws.quant import migration as MG
-        job = RS.ReportJob(
-            kind=kind, samples=samples, names=names,
-            settings=make_settings(self.ws.quant.get("hs" if hs else "settings")),
-            target=target, word=target.with_suffix(".docx"), cas_path=cas,
-            migration={} if hs else MG.current(self.ws.quant), blank_names=(bname(blank_ids), bname(blank_istd_ids)),
-            audit=[r for r in self.ws.audit.records if r.run in names or not r.run],
-            policy=g.get("policy", "all"),
-            batch_target=(target.parent / f"{stem}_Doppelbestimmung.xlsx") if kind == "nias" else None,
-            keep_middle=(target.with_name(target.stem + "_intermediate.xlsx")
-                         if QSettings().value("report/keep_middle", False, type=bool) and not preview else None),
-            sample_key=stem, record_seen=not preview,
-            ri_options={k: bool((self.ws.quant.get("ri") or {}).get(k)) for k in ("report_ri", "replace_rt")},
-            edits=dict(g.get("hs_edits:" + self.ws.quant_unit() if hs else "edits") or {}))
+        job = AS.build_job(self.ws, kind, g, target, members=members, samples=samples, preview=preview,
+                           keep_middle=QSettings().value("report/keep_middle", False, type=bool))
         self.progress.setRange(0, 0)
         self.progress.setFormat(RS.KINDS[kind])
         self.progress.show()

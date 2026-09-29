@@ -58,6 +58,10 @@ class ReportResult:
     middle: Optional[Path] = None
     warnings: list = field(default_factory=list)
     reported: list = field(default_factory=list)
+    #: what the NIAS main script found (``process_workbook``'s result: SML exceedances, unidentified count, ...)
+    summary: dict = field(default_factory=dict)
+    #: the merged rows of the determinations (rt, name, cas, mean, c1, c2, reldiff, status, id_status, review)
+    combined: list = field(default_factory=list)
 
 
 def report_stem(names: list[str]) -> str:
@@ -166,7 +170,7 @@ def generate(job: ReportJob, progress: Callable[[str], None] = lambda s: None) -
     if job.migration and job.kind == "nias":
         main.write_migration_metadata_to_workbook(middle, job.migration)
     job.target.parent.mkdir(parents=True, exist_ok=True)
-    main.process_workbook(middle, job.cas_path if job.kind == "nias" else None, job.target)
+    summary = main.process_workbook(middle, job.cas_path if job.kind == "nias" else None, job.target)
     progress("3/4 Word document")
     word = None
     try:
@@ -194,7 +198,29 @@ def generate(job: ReportJob, progress: Callable[[str], None] = lambda s: None) -
         kept = job.keep_middle
         shutil.copy2(middle, kept)
     shutil.rmtree(tmp, ignore_errors=True)
-    return ReportResult(job.target, word, len(rows), batch, kept, warnings, rows)
+    return ReportResult(job.target, word, len(rows), batch, kept, warnings, rows, json_safe(summary or {}),
+                        slim_rows(combined, job.overrides))
+
+
+def json_safe(value):
+    """``value`` with paths, sets and other objects as JSON-compatible values."""
+    import json
+    return json.loads(json.dumps(value, default=lambda o: sorted(o) if isinstance(o, (set, frozenset)) else str(o)))
+
+
+SLIM_KEYS = ("rt", "name", "cas", "mean", "c1", "c2", "reldiff", "status", "id_status", "review", "n")
+
+
+def slim_rows(combined, overrides: dict | None = None) -> list[dict]:
+    """The merged rows as plain values, with the analyst's values where set."""
+    out = []
+    for i, r in enumerate(combined or []):
+        d = {k: r.get(k) for k in SLIM_KEYS}
+        for k, v in ((overrides or {}).get(i) or {}).items():
+            if k in d and v is not None:
+                d[k] = v
+        out.append(json_safe(d))
+    return out
 
 
 def record_seen(kind: str, rows: list, target: Path, sample_key: str = "") -> str:
