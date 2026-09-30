@@ -273,19 +273,35 @@ def pending(ws, members: list[str], table: FeatureTable) -> list:
 
 
 def run(ws, members: list[str], cfg: Optional[Settings] = None, *, apply_auto: Optional[bool] = None,
-        stack=None) -> FeatureTable:
+        stack=None, apply_boundaries: bool = False) -> FeatureTable:
     """Build the table, make its automatic proposals (``cfg.apply_auto``) -- each only once, so an
-    analyst's undo sticks -- build again and keep the ids."""
+    analyst's undo sticks -- build again and keep the ids. ``apply_boundaries`` (the automation)
+    also makes the harmonised boundaries, which the panel only proposes, as a second undo step.
+    ``table.applied`` counts what was made (gapfill / identity / boundary)."""
     cfg = cfg or settings(ws)
     group = group_of(ws, members)
     table = build(ws, members, group, cfg)
+    applied = {"gapfill": 0, "identity": 0, "boundary": 0}
     auto = cfg.apply_auto if apply_auto is None else apply_auto
     props = pending(ws, members, table) if auto else []
     if props and apply(ws, table, props, stack=stack):
+        for p in props:
+            applied[p.kind] = applied.get(p.kind, 0) + 1
         _remember_done(ws, members, {signature(p) for p in props})
         remember_ids(ws, members, table)
         table = build(ws, members, group_of(ws, members), cfg)
+    if apply_boundaries:
+        done = auto_done(ws, members)
+        bounds = [p for p in proposals(table, ("boundary",), auto_only=False) if signature(p) not in done]
+        n_peaks = len({(p.run_id, round(p.rt or 0.0, 4)) for p in bounds})
+        if bounds and apply(ws, table, bounds, stack=stack,
+                            label=f"double determination: {n_peaks} boundaries harmonised"):
+            applied["boundary"] = n_peaks
+            _remember_done(ws, members, {signature(p) for p in bounds})
+            remember_ids(ws, members, table)
+            table = build(ws, members, group_of(ws, members), cfg)
     remember_ids(ws, members, table)
+    table.applied = applied
     return table
 
 

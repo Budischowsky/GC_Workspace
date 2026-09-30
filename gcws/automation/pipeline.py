@@ -180,16 +180,19 @@ def run_job(spec: dict, *, progress: Callable[[str], None] = log.info,
                 ws.push_quant("Automation: ISTDs detected", ID.with_bindings(ws, found), "ISTD bindings")
     ws.replicate_groups = [{"id": group.get("key") or "g", "name": group["name"], "members": members,
                             "policy": group.get("policy", "all")}]
+    dd: dict = {"members": [ws.runs[m].name for m in members], "planned": list(group.get("members") or []),
+                "pairing": "single" if len(members) < 2 else ""}
     ws.recompute_quant()
     # the feature double determination: gap fills and one name per substance, as the analyst's Compare
     if len(members) >= 2 and mode != "rereport":
         t1 = time.time()
         try:
-            note = run_features(ws, members)
-            if note:
-                warnings.append(note)
+            dd = run_features(ws, members)
+            if dd.get("note"):
+                warnings.append(dd["note"])
         except Exception as exc:  # noqa: BLE001 - reported as a finding, the reports are still made
             warnings.append(f"Double determination (features) failed: {exc}")
+            dd = {"members": [ws.runs[m].name for m in members], "pairing": "failed", "error": str(exc)}
         timings["features"] = round(time.time() - t1, 1)
     if detection:
         from gcws.quant import istd_detect as ID
@@ -268,7 +271,7 @@ def run_job(spec: dict, *, progress: Callable[[str], None] = log.info,
     evidence = evidence_for(ws, members, kind=(spec.get("reports") or [{}])[0].get("kind"),
                             require=spec.get("require_blank", "auto"), detection=detection)
     evidence.update(rows=rows, summary=summary, warnings=warnings + sample_warn, errors=errors_ev,
-                    reported=reported)
+                    reported=reported, double_determination=dd)
     if spec.get("has_review", True):
         ev = RU.evaluate(RU.from_list(spec.get("rules")) if spec.get("rules") is not None else RU.default_rules(),
                          evidence, bool(spec.get("auto_accept", True)))
@@ -285,23 +288,33 @@ def run_job(spec: dict, *, progress: Callable[[str], None] = log.info,
                      warnings + sample_warn + errors_ev, timings)
 
 
-def run_features(ws, members: list) -> str:
-    """Pair the determinations by features and make the automatic changes (gap fills, names);
-    returns a note for the job ("" when there is nothing to say)."""
+def run_features(ws, members: list) -> dict:
+    """The double determination of an unattended job: pair the determinations by features, make
+    the automatic changes (gap fills, names) and harmonise the boundaries (which the panel only
+    proposes), then compare. Returns what was done for Report² (``note``: a line for the job)."""
     from gcws.features import service as SV
     from gcws.features.model import PAIRING_FEATURES
+    names = [ws.runs[m].name for m in members if m in ws.runs]
+    out = {"members": names, "pairing": SV.pairing(ws)}
     if SV.pairing(ws) != PAIRING_FEATURES or (ws.quant or {}).get("mode") == "hs_screening":
-        return ""
+        return out
     stack = ws.project_undo
     before = stack.count()
-    table = SV.run(ws, members, stack=stack)
+    table = SV.run(ws, members, stack=stack, apply_boundaries=True)
     if stack.count() != before:
         ws.recompute_quant()
-    names = " / ".join(ws.runs[m].name for m in members if m in ws.runs)
+    applied = getattr(table, "applied", {}) or {}
     gap = sum(1 for f in table.features for m in f.members if m.origin == "gapfill")
-    ws.log("Automation: double determination (features)", names,
-           f"{len(table.features)} features, {gap} gap fill(s); " + "; ".join(table.notes))
-    return next((n for n in table.notes if n.startswith("consensus")), "")
+    counts = table.counts()
+    out.update(features=len(table.features), gap_fills=gap, names=applied.get("identity", 0),
+               boundaries=applied.get("boundary", 0), lights=counts, notes=list(table.notes))
+    text = (f"{' + '.join(names)}: {len(table.features)} features, {gap} gap fill(s), "
+            f"{applied.get('identity', 0)} name(s), {applied.get('boundary', 0)} boundaries harmonised; "
+            f"{counts.get('red', 0)} red, {counts.get('yellow', 0)} yellow")
+    ws.log("Automation: double determination (features)", " / ".join(names), text + "; " + "; ".join(table.notes))
+    out["text"] = text
+    out["note"] = next((n for n in table.notes if n.startswith("consensus")), "")
+    return out
 
 
 def feature_evidence(ws, members: list) -> list[dict]:

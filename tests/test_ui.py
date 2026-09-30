@@ -1207,6 +1207,50 @@ def test_processing_method_save_and_load(qtbot, win, samples, tmp_path, monkeypa
     ws.methods.set_default("FID", None)
 
 
+def test_processing_method_saves_every_setting(qtbot, win, samples, tmp_path, monkeypatch):
+    """P73: the double determination (every parameter, also defaults) and the library search's
+    spectrum / skip / rescan choices are saved with a method and come back with it."""
+    import copy
+    from PySide6.QtCore import QSettings
+    from gcws import paths
+    from gcws.core import proc_method as PM
+    from gcws.features.model import Settings as FS
+    monkeypatch.setattr(paths, "DATA", tmp_path / "data")
+    _load(qtbot, win, samples, ["07_"])
+    ws = win.ws
+    ws.methods.folder = tmp_path / "data" / "methods"
+    q = copy.deepcopy(ws.quant)
+    q.pop("features", None)
+    ws.push_quant("no feature settings", q)
+    assert PM.collect(win, "x")["sections"]["features"] == FS().to_dict()        # defaults written out
+    q = copy.deepcopy(ws.quant)
+    q["features"] = dict(FS().to_dict(), min_sim=0.7, harmonise=False, gap_min_fraction=0.3)
+    ws.push_quant("feature settings", q)
+    qs = QSettings()
+    old = {k: qs.value(f"search/{k}") for k in ("mode", "skip", "rescan", "rescan_limit")}
+    try:
+        for k, v in (("mode", "raw_average_bg"), ("skip", True), ("rescan", True), ("rescan_limit", 65)):
+            qs.setValue(f"search/{k}", v)
+        method = PM.collect(win, "all")
+        assert method["sections"]["search"]["mode"] == "raw_average_bg"
+        assert "harmonised" not in PM.summary(method) and "Double determination" in PM.summary(method)
+        PM.save(method)
+        q = copy.deepcopy(ws.quant)
+        q["features"] = FS().to_dict()
+        ws.push_quant("reset", q)
+        for k, v in (("mode", "average_bg"), ("skip", False), ("rescan", False), ("rescan_limit", 80)):
+            qs.setValue(f"search/{k}", v)
+        PM.apply(win, PM.load("all"))
+        f = FS.from_dict(ws.quant["features"])
+        assert (f.min_sim, f.harmonise, f.gap_min_fraction) == (0.7, False, 0.3)
+        assert qs.value("search/mode") == "raw_average_bg" and qs.value("search/skip", type=bool)
+        assert qs.value("search/rescan", type=bool) and int(qs.value("search/rescan_limit")) == 65
+        assert PM.search_config(PM.load("all")).mode == "raw_average_bg"      # the automation searches alike
+    finally:
+        for k, v in old.items():
+            qs.remove(f"search/{k}") if v is None else qs.setValue(f"search/{k}", v)
+
+
 def _contrast(a, b) -> float:
     from PySide6.QtGui import QColor
 

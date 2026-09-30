@@ -226,3 +226,23 @@ def test_job_makes_the_feature_double_determination(qapp, samples, data, tmp_pat
     assert g["features"]["ids"] and g["features"]["auto_done"]
     gap = [e for st in ws.states() for e in st.events("FID") if e.option == "gapfill"]
     assert gap and all("gap fill" in e.comment for e in gap)
+    # P73: the two determinations were found, harmonised and compared; Report² tells what was done
+    dd = res.evidence["double_determination"]
+    assert len(dd["members"]) == 2 and dd["pairing"] == "features" and dd["features"] == len(feats)
+    info = [f for f in res.findings if f["rule"] == "double_determination"]
+    assert [f["level"] for f in info] == ["info"] and "boundaries harmonised" in info[0]["text"]
+    moved = [e for st in ws.states() for e in st.events("FID") if "as in" in (e.comment or "")]
+    assert dd["boundaries"] == len({(round(e.ref_rt or 0, 4), st.id) for st in ws.states()
+                                    for e in st.events("FID") if "as in" in (e.comment or "")})
+    assert dd["boundaries"] > 0 and moved
+    assert any(s.startswith("boundary|") for s in g["features"]["auto_done"])
+
+
+def test_single_determination_rule():
+    from gcws.automation import rules as RU
+    ev = {"double_determination": {"members": ["07_x_A.D"], "pairing": "single"}}
+    res = RU.evaluate(RU.default_rules(), ev)
+    assert res.status == RU.CONTROL and "one determination only" in res.findings[0].text
+    ev = {"double_determination": {"members": ["a", "b"], "pairing": "features", "text": "a + b: 3 features"}}
+    res = RU.evaluate(RU.default_rules(), ev)
+    assert res.status == RU.ACCEPTED_AUTO and res.findings[0].level == "info"

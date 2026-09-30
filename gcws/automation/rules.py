@@ -52,6 +52,11 @@ RULES = {
                        "as one peak here and two there, or a difference above 1.5 x the limit. Yellow substances "
                        "(made consistent automatically: gap fill, name from both hit lists) can be listed too.",
                        True, {"yellow": False}),
+    "double_determination": ("Double determination incomplete",
+                             "The sample has one determination only, or its determinations could not be paired "
+                             "(feature double determination failed). What the automation did (pairing, gap fills, "
+                             "names, harmonised boundaries) is listed as information.",
+                             True, {"single": True, "summary": True}),
 }
 
 
@@ -326,10 +331,28 @@ def _feature_review(rule: Rule, ev: dict) -> list[Finding]:
     return out
 
 
+def _double_determination(rule: Rule, ev: dict) -> list[Finding]:
+    dd = ev.get("double_determination")
+    if not dd:
+        return []
+    out = []
+    members = ", ".join(dd.get("members") or [])
+    if dd.get("pairing") == "single" and rule.p("single"):
+        out.append(Finding(rule.id, rule.level, f"one determination only ({members}); no double determination",
+                           member=members))
+    elif dd.get("pairing") == "failed":
+        out.append(Finding(rule.id, rule.level, f"the determinations could not be paired: {dd.get('error', '')}",
+                           member=members))
+    if dd.get("text") and rule.p("summary"):
+        out.append(Finding(rule.id, "info", "done automatically: " + dd["text"], member=members))
+    return out
+
+
 CHECKS = {"manual_check": _manual_check, "sml_exceeded": _sml_exceeded,
           "istd_qc": lambda r, ev: _istd_qc(r, ev) + _istd_spread(r, ev),
           "processing_warnings": _processing, "no_sml_above_limit": _no_sml, "substance_above": _substance_above,
-          "unidentified_over": _unidentified, "no_blank": _no_blank, "feature_review": _feature_review}
+          "unidentified_over": _unidentified, "no_blank": _no_blank, "feature_review": _feature_review,
+          "double_determination": _double_determination}
 
 
 def evaluate(rules: list[Rule], evidence: dict, auto_accept: bool = True) -> Evaluation:

@@ -45,17 +45,21 @@ class SearchStartDialog(QDialog):
                                    "filter, text filter, hidden blank peaks) - in every searched chromatogram. "
                                    "Fewer peaks, faster search.")
         self.only_shown.setEnabled(bool(filter_text))
+        from PySide6.QtCore import QSettings
+        qs = QSettings()
         self.mode = QComboBox()
         for k, v in MODES.items():
             self.mode.addItem(v, k)
+        self.mode.setCurrentIndex(max(0, self.mode.findData(qs.value("search/mode", "average_bg"))))
         self.skip = QCheckBox("Skip peaks that already have a name")
+        self.skip.setChecked(qs.value("search/skip", False, type=bool))
         self.rescan = QCheckBox("Only peaks with a score below")
+        self.rescan.setChecked(qs.value("search/rescan", False, type=bool))
         self.rescan_limit = QSpinBox()
         self.rescan_limit.setRange(0, 100)
-        self.rescan_limit.setValue(80)
+        self.rescan_limit.setValue(int(qs.value("search/rescan_limit", 80)))
         self.review = QCheckBox("Review hits before applying (compound table)")
         self.review.setChecked(True)
-        from PySide6.QtCore import QSettings
         has_ms = any(s.run.ms is not None for s in ws.states())
         has_fid = any(s.run.fid is not None for s in ws.states())
         self.target_tic = QRadioButton("TIC peaks (the qualitative trace)")
@@ -128,6 +132,11 @@ class SearchStartDialog(QDialog):
         target = "TIC" if self.target_tic.isChecked() else "FID"
         QSettings().setValue("search/target", target)
         QSettings().setValue("search/transfer", self.transfer.isChecked())
+        # remembered for the next search and saved with a processing method
+        QSettings().setValue("search/mode", self.mode.currentData())
+        QSettings().setValue("search/skip", self.skip.isChecked())
+        QSettings().setValue("search/rescan", self.rescan.isChecked())
+        QSettings().setValue("search/rescan_limit", self.rescan_limit.value())
         return {"method": self.store.get(self.method.currentText()),
                 "target": target,
                 "transfer": target == "TIC" and self.transfer.isChecked() and self.transfer.isEnabled(),

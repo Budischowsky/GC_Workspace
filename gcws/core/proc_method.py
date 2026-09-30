@@ -74,6 +74,10 @@ def collect(win, name: str, comment: str = "") -> dict:
         sections["quant"]["hs"].pop("istd_bindings", None)
     for sec, key in QUANT_SECTIONS.items():
         sections[sec] = copy.deepcopy(q.get(key))
+    # the double determination with every parameter (also those left at their default), so a
+    # method gives the same pairing, gap fills and harmonisation in any installation
+    from gcws.features.model import Settings as FeatureSettings
+    sections["features"] = FeatureSettings.from_dict(q.get("features")).to_dict()
     from gcws.identify.service import is_fast, search_methods
     store = search_methods()
     gc_method = st.run.meta.method if st is not None and st.run.meta else ""
@@ -81,7 +85,11 @@ def collect(win, name: str, comment: str = "") -> dict:
     sections["search"] = {"method": search.as_dict(),
                           "fast": is_fast(search),
                           "target": s.value("search/target", "TIC"),
-                          "transfer": s.value("search/transfer", True, type=bool)}
+                          "transfer": s.value("search/transfer", True, type=bool),
+                          "mode": s.value("search/mode", "average_bg") or "average_bg",
+                          "skip": s.value("search/skip", False, type=bool),
+                          "rescan": s.value("search/rescan", False, type=bool),
+                          "rescan_limit": int(s.value("search/rescan_limit", 80))}
     from gcws.ui.dialogs.own_search import load_options
     sections["own_search"] = load_options()
     sections["report"] = {"keep_middle": s.value("report/keep_middle", False, type=bool)}
@@ -161,6 +169,12 @@ def summary(method: dict) -> str:
     own = sec.get("own_search") or {}
     if own.get("library"):
         lines.append(f"Own library: {own['library']}")
+    feats = sec.get("features") or {}
+    if feats:
+        lines.append(f"Double determination: {feats.get('pairing', 'features')} pairing"
+                     + (", gap fill" if feats.get("gap_fill", True) else "")
+                     + (", consensus names" if feats.get("consensus_search", True) else "")
+                     + (", harmonised boundaries" if feats.get("harmonise", True) else ""))
     mig = sec.get("migration") or {}
     if mig:
         lines.append(f"Migration: {mig.get('simulant', '')}, {mig.get('temperature', '')}, {mig.get('duration', '')}")
@@ -318,6 +332,6 @@ def _apply_search(d: dict) -> None:
         if "fast" in d:                    # methods saved before Fast search existed leave it as it is
             set_fast(m.name, bool(d["fast"]))
     s = QSettings()
-    for k in ("target", "transfer"):
+    for k in ("target", "transfer", "mode", "skip", "rescan", "rescan_limit"):
         if k in d:
             s.setValue(f"search/{k}", d[k])
