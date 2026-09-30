@@ -476,6 +476,26 @@ and imported as `.json` files to share them. Things that belong to single runs (
 integration, blank assignments) are not part of a method. The status bar shows the current method.
 Reference spectra learned for the ISTDs and the ISTD detection options are part of the quantification section.
 
+## User manual
+
+*Help > User manual* (**F1**) opens the manual in its own window, beside the work: a chapter list with a
+search box on the left, the text on the right. Links between chapters, **Back** / **Forward** (Alt+Left /
+Alt+Right), Ctrl+F for the search. It follows the theme.
+
+- **Getting started**, **Workflows** (from loading data to the report and the automation), **How it works**
+  (the library search and Fast search; the double determination: drift, pairing, gap filling, one name,
+  harmonised boundaries, traffic light - in plain words with pictures) and the **Reference** (every menu item,
+  button, panel, dialog and setting).
+- The chapters are Markdown files in `gcws/manual`; the table of contents is `PARTS` in
+  `gcws/manual/__init__.py`. `{{Features.rt_tol}}` in a chapter shows the default the code has now
+  (`{{Features.gap_min_fraction %}}` as a percentage), so a retuned default cannot leave a wrong number in
+  the manual.
+- The pictures (`gcws/manual/img/*.svg`) are drawn by `tools\manual_pictures.py` in the light theme's colours;
+  the window recolours them for the dark themes.
+- `tests/test_manual_coverage.py` fails when a menu item, toolbar button, panel control, dialog control,
+  right-click item or setting has no entry in the manual, and when a link or picture is missing.
+  `tools\ui_inventory.py` lists everything the interface shows in `docs/manual/INVENTORY.md`.
+
 ## Layout
 
 The *View* menu stays open while you switch panels on and off; a click elsewhere closes it.

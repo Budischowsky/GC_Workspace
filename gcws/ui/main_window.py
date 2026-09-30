@@ -1576,7 +1576,7 @@ class MainWindow(QMainWindow):
 
     def show_shortcuts(self):
         lines = [f"{key:>6}   {label}" for name, label, key, tip in TOOLS]
-        lines += ["", "    F5   Integrate active", "Shift+F5   Integrate all", "Ctrl+F   Library search",
+        lines += ["", "    F1   User manual", "    F5   Integrate active", "Shift+F5   Integrate all", "Ctrl+F   Library search",
                   "Ctrl+E   Library hit list", "Ctrl+N   NIST search", "Ctrl+I   Extracted ion chromatogram",
                   "Ctrl+K   Deconvolution: split the selected peak into its components",
                   "Ctrl+Z / Ctrl+Y   Undo / Redo",
