@@ -4,7 +4,8 @@ The chapters are plain Markdown so they can be edited and read on their own. Two
 resolved when a chapter is loaded:
 
 * ``{{IntegrationMethod.skim_mode}}`` becomes the default of that setting as the code has it
-  now, so the manual cannot show an outdated number;
+  now, so the manual cannot show an outdated number (``{{Features.gap_min_fraction %}}`` shows a
+  fraction as a percentage);
 * pictures are SVG files in ``img/``, drawn in the light theme's colours and recoloured by the
   viewer for the other themes.
 """
@@ -21,9 +22,10 @@ DIR = Path(__file__).resolve().parent
 #: the table of contents: part -> chapter files (without ``.md``), in reading order
 PARTS: list[tuple[str, list[str]]] = [
     ("Getting started", ["welcome"]),
+    ("How it works", ["library-search", "double-determination"]),
 ]
 
-_PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_]+)(?:\.([A-Za-z_0-9]+))?\s*\}\}")
+_PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_]+)(?:\.([A-Za-z_0-9]+))?\s*(%)?\s*\}\}")
 _HEADING = re.compile(r"^(#{1,4})\s+(.*?)\s*#*\s*$")
 _LINK = re.compile(r"(!?)\[([^\]]*)\]\(([^)\s]+)\)")
 
@@ -49,7 +51,7 @@ def _show(value) -> str:
     return str(value)
 
 
-def value(name: str, attr: str | None = None) -> str:
+def value(name: str, attr: str | None = None, percent: bool = False) -> str:
     """The text a placeholder stands for; ``KeyError`` when the code has no such setting."""
     if attr is None:
         import gcws
@@ -57,10 +59,8 @@ def value(name: str, attr: str | None = None) -> str:
     cls = _sources()[name]
     for f in dataclasses.fields(cls):
         if f.name == attr:
-            if f.default is not dataclasses.MISSING:
-                return _show(f.default)
-            if f.default_factory is not dataclasses.MISSING:
-                return _show(f.default_factory())
+            default = f.default if f.default is not dataclasses.MISSING else                 f.default_factory() if f.default_factory is not dataclasses.MISSING else None
+            return f"{default * 100:g} %" if percent else _show(default)
     raise KeyError(f"{name}.{attr}")
 
 
@@ -71,7 +71,7 @@ def placeholders(text: str) -> list[tuple[str, str | None]]:
 def expand(text: str) -> str:
     def sub(m):
         try:
-            return value(m.group(1), m.group(2))
+            return value(m.group(1), m.group(2), bool(m.group(3)))
         except KeyError:
             return "?"
     return _PLACEHOLDER.sub(sub, text)
