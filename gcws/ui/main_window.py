@@ -277,7 +277,9 @@ class MainWindow(QMainWindow):
         m.addAction("Load Method...", self.load_method)
         self.method_menu = m
 
-        self.view_menu = mb.addMenu("&View")
+        from gcws.ui.widgets.stay_open_menu import StayOpenMenu
+        self.view_menu = StayOpenMenu("&View", self)          # stays open while panels are switched
+        mb.addMenu(self.view_menu)
         for key, d in self.docks.items():
             self.view_menu.addAction(d.toggleViewAction())
         self.view_menu.addSeparator()

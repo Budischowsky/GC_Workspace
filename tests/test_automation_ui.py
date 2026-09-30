@@ -176,3 +176,26 @@ def test_queue_remove_and_process_again(qtbot, data, monkeypatch):
     assert r2.remove_from_queue(confirm=False) and jr.job(first).state == J.REMOVED
     r2.select(first)
     assert not r2.a_remove.isEnabled()
+
+
+def test_view_menu_stays_open_while_panels_are_switched(qtbot, win):
+    """P74: a click on a panel in View toggles it and leaves the menu open; a click elsewhere closes it."""
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    from gcws.ui.widgets.stay_open_menu import StayOpenMenu
+    menu = win.view_menu
+    assert isinstance(menu, StayOpenMenu)
+    act = next(a for a in menu.actions() if a.text() == "Automation")
+    before = act.isChecked()
+    menu.popup(win.mapToGlobal(QPoint(40, 40)))
+    qtbot.waitUntil(menu.isVisible)
+    try:
+        pos = menu.actionGeometry(act).center()
+        QTest.mouseClick(menu, Qt.LeftButton, Qt.NoModifier, pos)
+        assert act.isChecked() != before and menu.isVisible()
+        QTest.mouseClick(menu, Qt.LeftButton, Qt.NoModifier, pos)
+        assert act.isChecked() == before and menu.isVisible()
+        QTest.keyClick(menu, Qt.Key_Escape)
+        qtbot.waitUntil(lambda: not menu.isVisible())
+    finally:
+        menu.close()

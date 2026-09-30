@@ -409,6 +409,12 @@ enough and the instrument moved on (`checksum.xml` written, next run started, se
 without the required blank in its batch folder is **not processed** (Report² lists it under *Not processed*;
 *More > Process without a blank* overrides it, marked as a finding).
 
+**The queue** (Automation panel): the samples that are waiting, queued, being processed, failed or not
+processed, with the reason. A sample that cannot be processed (e.g. its B run is never measured) would hold
+up the batch report: select it and **Remove from queue** (several at once; also *More > Remove from the
+queue...* in Report²). A removed sample is skipped by the watcher, not added again by later checks and not
+waited for by the batch report; *Show removed* lists it and **Process again** brings it back.
+
 **The watcher** (*Automation > Start the watcher*, or the panel's *Start*) is a separate background process
 with a tray icon: it keeps processing when GC Workspace is closed, processes one sample at a time in its own
 job process (a crash or a hanging Office program cannot stop it), and shows a message when a report needs
@@ -434,10 +440,15 @@ analyst), need control, were not processed, are waiting or failed - per workflow
   without a blank. Optional: no SML above the reporting limit, a substance above a concentration (name / CAS
   pattern), too many unidentified substances, a fixed ISTD area window. Each rule can be *control needed* or
   *note only*; a workflow's Report² step can have its own rules.
-- **Double determination: substances to decide** (default on): with the feature pairing the job makes the
-  automatic gap fills and names (as *Compare* does) before the reports are made. Every **red** substance sends
+- **Double determination: substances to decide** (default on): with the feature pairing the job pairs the
+  two determinations of the sample, makes the automatic gap fills and names (as *Compare* does) and also
+  **harmonises the integration boundaries** (which the panel only proposes; one undo step in the saved
+  project, made only once) before the reports are made. Every **red** substance sends
   the report to *Control needed*, including those not reported because they were found in one injection only.
   The yellow ones can be listed too.
+- **Double determination incomplete** (default on): control for a sample with one determination only or when
+  its determinations could not be paired. What the automation did (which runs were paired, features, gap
+  fills, names, harmonised boundaries, red / yellow) is listed as information with every report.
 
 **Batch report from GC Workspace** (*Report > Batch report of this folder...*): every sample of the active
 chromatogram's batch folder (its replicate groups, else the suggested ones) is reported into a folder you
@@ -455,8 +466,10 @@ run, the way the instrument writes it (the source is only read):
 
 *Method > Save current settings as Method...* stores all processing settings under a name
 (`data/processing_methods`): integration methods (FID and MS), quantification (mode, unit, ISTD table, NIAS
-parameters and solvent cut), blank subtraction, deconvolution, retention index, migration conditions, library search method
-and peak type, own-library options, report options and the peak table's columns and value filter.
+parameters and solvent cut), blank subtraction, deconvolution, retention index, the double determination
+(every parameter, also those left at their default), migration conditions, library search method, peak type,
+spectrum and the *skip named* / *score below* choices of the search, own-library options, report options and
+the peak table's columns and value filter.
 *Method > Load Method...* lists the saved methods with a summary; tick which parts to apply. Loading is one
 undo step; the integration methods also become the default for runs loaded later. Methods can be exported
 and imported as `.json` files to share them. Things that belong to single runs (ISTD peak bindings, manual
@@ -464,6 +477,8 @@ integration, blank assignments) are not part of a method. The status bar shows t
 Reference spectra learned for the ISTDs and the ISTD detection options are part of the quantification section.
 
 ## Layout
+
+The *View* menu stays open while you switch panels on and off; a click elsewhere closes it.
 
 Every panel can be docked, tabbed or detached, for example onto a second screen. Both chromatograms and
 the mass spectrum use narrow title strips on the right, leaving their full height for plotting. Scan
