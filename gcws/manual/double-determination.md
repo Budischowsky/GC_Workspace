@@ -124,7 +124,7 @@ its largest ion. This cleaner spectrum is searched in the libraries again. Its f
 
 - leads the next candidate by at least **A name must lead by** ({{Features.id_margin}} score points),
 - is among the first three hits of *each* determination, and
-- reaches the quality limit (70 unless the NIAS parameters say otherwise).
+- reaches the quality limit (the NIAS parameter **Quality threshold**, 70 unless changed).
 
 If the retention index is known (alkane ladder) and the library entry has one, a candidate whose index fits
 within {{Features.ri_tol}} units gets a better score.

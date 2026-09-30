@@ -21,8 +21,11 @@ DIR = Path(__file__).resolve().parent
 
 #: the table of contents: part -> chapter files (without ``.md``), in reading order
 PARTS: list[tuple[str, list[str]]] = [
-    ("Getting started", ["welcome"]),
+    ("Getting started", ["welcome", "window"]),
+    ("Workflows", ["wf-overview", "wf-load", "wf-integrate", "wf-identify", "wf-quantify", "wf-double",
+                   "wf-report", "wf-automation", "wf-methods"]),
     ("How it works", ["library-search", "double-determination"]),
+    ("Reference", ["ref-menus", "ref-tools", "ref-panels", "ref-dialogs", "ref-settings"]),
 ]
 
 _PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z_]+)(?:\.([A-Za-z_0-9]+))?\s*(%)?\s*\}\}")
@@ -39,6 +42,13 @@ def _sources() -> dict:
     from gcws.signal.blank import BlankOptions
     return {"IntegrationMethod": IntegrationMethod, "BlankOptions": BlankOptions,
             "DeconvSettings": DeconvSettings, "Features": Settings}
+
+
+def _labels() -> dict:
+    """Settings whose stored value is a key: the text the window shows for it."""
+    from gcws.ui.dialogs.blank import MODES, SOURCES
+    return {("BlankOptions", "source"): SOURCES, ("BlankOptions", "mode_fid"): MODES,
+            ("BlankOptions", "mode_ms"): MODES, ("BlankOptions", "align"): {"auto": "on", "off": "off"}}
 
 
 def _show(value) -> str:
@@ -60,7 +70,9 @@ def value(name: str, attr: str | None = None, percent: bool = False) -> str:
     for f in dataclasses.fields(cls):
         if f.name == attr:
             default = f.default if f.default is not dataclasses.MISSING else                 f.default_factory() if f.default_factory is not dataclasses.MISSING else None
-            return f"{default * 100:g} %" if percent else _show(default)
+            if percent:
+                return f"{default * 100:g} %"
+            return _labels().get((name, attr), {}).get(default) or _show(default)
     raise KeyError(f"{name}.{attr}")
 
 

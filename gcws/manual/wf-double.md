@@ -1,0 +1,92 @@
+# Double determination
+
+A sample measured twice is reported as one result: the mean of determination A and B, for every substance
+found in both. This chapter is the practical guide. What the program does inside is explained in
+[How the double determination works](double-determination.md).
+
+## Start
+
+- Right-click one of the two runs in **Loaded samples** and choose **Double determination with**, then the
+  partner. The run with the same sample number is offered first.
+- Or **Quantify > Double determination...** and choose **A** and **B** at the top of the tab. **⇄** swaps them.
+
+Press **Compare**.
+
+## Read the result
+
+The line above the list sums it up, for example: *3 of 84 substances need your decision (red; F3 = next); 9
+were made consistent automatically (yellow), 72 are confirmed.*
+
+| Colour | Meaning | You |
+|---|---|---|
+| **Green** | Confirmed: in both determinations, same substance, difference within the limit. | do nothing. |
+| **Yellow** | Made consistent automatically - a gap fill, a name chosen from both hit lists, two candidate names, boundaries proposed. | take a quick look. |
+| **Red** | Needs a decision - only in one determination, spectra differ, unclear pairing, difference too large. | decide. |
+| **Grey** | Not reported anyway - below the reporting limit or at blank level. | do nothing. |
+
+The column with the verdict says why a row has its colour, and the notes beside it give the evidence.
+
+- **Only red** shows just the rows to decide; `F3` jumps to the next red row.
+- **Only red and yellow** adds the rows for a quick look.
+- Click a row: both chromatograms below show that substance, A upwards and B downwards, and beside them the
+  two spectra, mirrored the same way.
+
+## Decide
+
+Right-click a row:
+
+| Item | When it is offered | What it does |
+|---|---|---|
+| **Name: ...** | two candidate names, or differing spectra | Gives both determinations that name. |
+| **Remove the gap fill** | the row has a gap fill | Takes the gap-filled peak out again. |
+| **Harmonise the boundaries** | boundaries are proposed | Moves the peak boundaries of one determination to match the other. |
+
+**Harmonise boundaries** below the list takes over all proposed boundaries at once.
+
+You can also edit the list directly, as in a spreadsheet:
+
+- the **Report** box of a substance decides whether it goes into the report. By default, substances found in
+  one determination only and values below the reporting limit are not reported;
+- **Substance** and **CAS** become the name of the peak in both determinations;
+- the areas, the values of A and B, the mean and a comment can be changed.
+
+Move with the arrow keys, mark several cells with `Shift` or by dragging, type or press `F2` to edit.
+`Enter` puts the marked substances into the report and `Delete` takes them out. `Ctrl+C` / `Ctrl+V` copy and
+paste, `Ctrl+D` copies a value down. A changed cell is marked and shows its old value. Every edit is one undo
+step and is written to the audit trail.
+
+**Reset row** takes back your changes of the selected substance, **Reset all** every change of this double
+determination.
+
+## The limit
+
+**Accept a difference up to** is the largest relative difference between A and B (as a percentage of their
+mean) that counts as agreement. It is the report parameter *Duplicate difference limit* - changing it here
+changes the report too.
+
+## Report
+
+**NIAS report - preview** shows the report of this pair with exactly the rows that have the **Report** box
+ticked and the values set here. The other report buttons are at the top of the panel and in the **Report**
+menu. **Export...** writes the list as a worksheet.
+
+## Settings
+
+**Settings…** opens the pairing, gap filling and naming parameters. They are explained, with their defaults,
+in [How the double determination works](double-determination.md#settings). **Pairing: Classic** switches back
+to the pairing by name and retention time of earlier versions.
+
+## Three or more determinations
+
+The **Groups (N-fold)** tab is for triplicates and more.
+
+| Control | What it does |
+|---|---|
+| **Suggest** | Groups runs with the same sample number that differ only by _A, _B, _C. |
+| **New...** | Makes a group by hand. |
+| **Members...** | Ticks the determinations of the group and puts them in order: the first is A, the second B ... |
+| **Delete** | Removes the group (not the runs). |
+| **A peak counts as valid when** | **Found in all determinations**, **Found in the majority** or **Found in at least one**. |
+| **Export worksheet...** | Writes the averaged results of the group. |
+
+A right-click on a group offers **Rename...**, **Members...** and **Delete**.

@@ -1,0 +1,261 @@
+# Panels
+
+Every control of every panel. The buttons in a panel's title (maximize, detach, close) are the same everywhere
+and are described in [Toolbars, tools, keys and mouse](ref-tools.md#panel-title-buttons).
+
+## Folders
+
+The upper part is the folder tree, the lower part the **Loaded samples** list.
+
+| Control | What it does |
+|---|---|
+| Folder box | The root folder of the tree; the list remembers the folders used before. |
+| **↑** | Goes to the parent folder. |
+| **Choose the root folder...** | Picks the folder where the tree starts. |
+| **Load** | Loads the runs marked in the tree. A double-click on a run does the same. |
+| **◀** | Collapses the panel. |
+
+Right-click in the tree: **Load as** (with a role), **Load all runs in folder**, **Set as tree root**,
+**Open in Explorer**.
+
+**Loaded samples**: click a run to make it the active chromatogram; drag to reorder. The right-click menu is
+described in [Load and view data](wf-load.md#the-loaded-samples-list).
+
+## Chromatogram 1 and Chromatogram 2
+
+Two chromatogram panels with the same controls. They share one time axis.
+
+| Control | What it does |
+|---|---|
+| Signal box | The signal shown: FID, TIC, BPC or an extracted ion. |
+| **subtract blank** | Shows and integrates this signal minus the assigned blank. |
+| **Solvent cut** | Leaves out everything before the solvent end time. |
+| **Overlay** | Shows the other loaded chromatograms behind the active one. |
+| **Normalize** | Scales every trace to its own maximum. |
+| **Stack** | Offsets the traces vertically. |
+| Labels box | **Labels: RT**, **Labels: #**, **Labels: name** or **Labels: off**. |
+| **Export...** | Saves this chromatogram as a picture. |
+| **⋯** | More plot controls. |
+
+In the plot: the baseline and the start and end marks of each integrated peak, drop lines where peaks were
+split, peak labels, a cursor with the time and intensity under the mouse, and the regions used for the
+spectrum of the selected peak. A peak split by deconvolution is drawn as its fitted curve.
+
+## Peaks / substances
+
+The peak table of one chromatogram.
+
+| Control | What it does |
+|---|---|
+| **Chromatogram 1 · ...** / **Chromatogram 2 · ...** | Which chromatogram's peaks the table lists. The button names the signal. |
+| **Filter...** | Shows only rows that contain the typed text. |
+| **Delete peak(s)** | Deletes the marked peaks (one undo step). `Delete` does the same. |
+| **Integrate** | Integrates the active chromatogram again. |
+| **Integrate all** | Integrates all loaded chromatograms again. |
+| **Library search** | Opens the automatic library search. |
+| **Export** | Writes the table as shown to an Excel or CSV file. |
+| **Columns** | Chooses and orders the columns. |
+| **Hide blank peaks** | Hides peaks that are at blank level. |
+| **Show only peaks with** | A value filter: choose the column, a comparison (<, ≤, =, ≥, >, **between**, **outside**) and one or two values. **Clear** shows all peaks again. |
+
+The line below the table says how many peaks are shown and how many are identified.
+
+Click a row to select the peak; both chromatograms zoom to it. **Name** and **CAS** can be typed into
+directly. Click a column header to sort; right-click it for **Choose columns...**.
+
+Right-click a row:
+
+| Item | What it does |
+|---|---|
+| **Copy** | Copies the marked rows. |
+| **Clear identification** | Removes the name of the peak. |
+| **Use library hit** | Chooses another hit of the peak's stored hit list. |
+| **Search selected peak in NIST** | Sends the spectrum to NIST MS Search. |
+| **Library hit list (selected peak)** | Searches this peak and shows all hits. |
+| **Register selected peak as unknown...** | Stores it in the unknown register. |
+| **Set selected peak as ISTD** | Binds it to an internal standard. |
+| **Split by deconvolution...** | Splits the peak into its components. |
+| **Delete peak(s)** | Deletes the marked peaks. |
+
+### Columns
+
+Columns marked * are shown unless you change it.
+
+| Column | Meaning |
+|---|---|
+| **#** * | Peak number. |
+| **RT [min]** * | Retention time of the apex. |
+| **RT MS [min]** | The time in the MS for an FID peak (delay-corrected), or of its assigned component. |
+| **Type** * | How the peak starts and ends: B baseline, V valley, P penetration, H hold. Added letters: S solvent, T tangent skim, X exponential skim, F / R front or rear shoulder, N negative, M manual, + area sum. |
+| **Start**, **End** | The integration boundaries. |
+| **Area** *, **Area %** *, **Height** * | The integration result. |
+| **W½ [s]** | Width at half height. |
+| **Symmetry** | USP tailing factor. |
+| **S/N** | Signal-to-noise ratio. |
+| **Name** *, **CAS** * | The identification; editable. |
+| **Score** * | Library score of the chosen hit. |
+| **ID status** * | Accepted, Manual review, Unknown ... |
+| **Library** | The library the hit is from. |
+| **RI** | Retention index, if an alkane ladder is set up. |
+| **RRT** | Retention time relative to the chosen reference ISTD. |
+| **ISTD** * | Which internal standard the peak is. |
+| **Blank area** | NIAS quantification: the blank area subtracted. |
+| **Corr. area** * | NIAS quantification: the area after its blank correction. |
+| **In blank** * | Whether the peak is also in the assigned blank. |
+| **Blank ratio** | Sample area ÷ blank area of the matching blank peak. |
+| **Area − blank** | Area minus the matching blank peak's area. |
+| **mg/dm²** | |
+| **µg/HS**, **µg/dm²**, **µg/g** | The HS-Screening quantities. |
+| **Conc.** * | Concentration in the unit of the quantification mode. |
+| **SML** | The specific migration limit of the substance. |
+| **Status** * | Status of the quantification. |
+| **Integration** | How the peak came about: automatic, manual, gap fill ... |
+| **Class hint** | The substance class suggested by the interpretation of the spectrum. |
+
+## Mass spectrum
+
+| Control | What it does |
+|---|---|
+| Mode box | How the spectrum of a selected peak is formed. See [Identify the peaks](wf-identify.md#how-the-spectrum-of-a-peak-is-formed). |
+| **subtract blank** | Subtracts the blank's spectrum at the same time. |
+| **⋯** | More plot controls. |
+
+The plot shows the spectrum as sticks with m/z labels on the strongest ions. The caption names the source:
+peak, scan or range, and what was subtracted. When a library hit is chosen, its reference spectrum is drawn
+downwards below the measured one.
+
+The tabs below the spectrum:
+
+| Tab | What it shows |
+|---|---|
+| **Interpretation** | Clues about an unknown: molecular ion candidate, isotope patterns, ion series, neutral losses, substance class, similar NIAS substances, formula suggestions. |
+| **Library hits** | The hit list of the last search of this spectrum: Name, CAS, Score, Fwd, Rev, Library. Click a hit to compare it. |
+| **m/z table** | The spectrum as numbers: m/z, Abundance, Rel. %. |
+| **Scans** | The scans around the peak with two regions to drag: blue = averaged, red = subtracted as background. **Use these scans** fixes them for the selected peak; **Automatic** returns to the automatic choice. |
+
+The menu of the panel is the **Mass Spectrum** menu, see [Menus](ref-menus.md#mass-spectrum).
+
+## Integration method
+
+| Control | What it does |
+|---|---|
+| **Method:** box | The stored integration methods for the signal of the table's chromatogram. |
+| **Save as...** | Stores the present parameters and timed events under a name. |
+| **Apply to active** | Integrates the active chromatogram with these settings. |
+| **Apply to all** | Uses these settings for all loaded chromatograms. |
+| **Auto parameters** | Sets peak width, slope sensitivity, threshold and smoothing back to automatic. |
+
+**Parameters** tab: see [Settings and defaults](ref-settings.md#integration-method). A value with **Auto**
+ticked is chosen by the program from the signal.
+
+**Timed events** tab: a table of **Time [min]**, **Event** and **Value**. **Add event** adds a row,
+**Remove** deletes the selected one. See [Settings and defaults](ref-settings.md#timed-events).
+
+**Manual events** tab: your manual integration changes and the gap fills of the double determination, with
+**On**, **Event**, **User**, **When** and **Comment**. Untick **On** to switch one off.
+**Delete selected** removes the marked events, **Remove all manual changes** all of them.
+
+## Properties
+
+Facts about the active chromatogram.
+
+| Group | Contents |
+|---|---|
+| **Chromatogram** | **Sample**, **Folder**, **Acquired**, **Acq. method**, **Raw data** (which files were read) and **Notes** from loading. |
+| **Role and blanks** | **Role** box, the assigned **Blanks**, and **Assign blanks...**. |
+| **FID → MS retention time offset** | **Estimated**: the delay the program found and how reliable it is. Tick **Manual value**, enter a number and press **Apply** to set it yourself. |
+| **Integration** | **Noise** of the signal, the **Parameters used** by the integrator, and the **Result digest**, a checksum of the integration result. |
+
+The digest changes whenever the peaks change. A project stores it, so a result that differs after an update
+of the program is noticed when the project is opened.
+
+## Audit trail
+
+A list of every change in this project: time, user, action, run, details, the value before and after, and
+the reason if one was given. It is saved with the project and cannot be edited.
+
+## Quantification
+
+Described task by task in [Blanks, internal standards and quantification](wf-quantify.md).
+
+| Control | What it does |
+|---|---|
+| **Mode** | The quantification mode. |
+| **Detector** | **FID** or **TIC (MS)**: the peaks the quantities are computed from. |
+| **ISTD concentration**, **Unit** | For the mode **Internal standard concentration** only. |
+| **Result unit** | For **HS-Screening** only. |
+| **NIAS parameters** | A table of **Parameter**, **Value** and **Unit**: the numbers of the NIAS calculation and of the reports (solvent end, reporting limit, quality limit, duplicate difference limit ...). Edit a value in place. |
+| **Migration conditions...** | Opens the migration conditions. |
+| **Internal standards** | The table of standards: **Code**, **Name**, **Conc.**, **Target RT**, **Quantify**. |
+| **Factor from the mean of the ISTD areas** | Uses the mean of the quantifying standards. |
+| **RRT reference ISTD** | The standard for the relative retention time. |
+| **Add**, **Remove** | Add or remove a standard. |
+| **ISTDs in the active chromatogram** | For each standard: **Code**, **Name**, **RT**, **Area**, **Deviation %**, **Status**. |
+| **Bind selected peak** | Binds the peak selected in the peak table to the selected standard. |
+| **Unbind** | Releases it. |
+| **Automatic** | Finds the standards by name and target RT again. |
+| **Detect ISTDs...** | Finds them by name, spectrum and retention time and shows the evidence. |
+| **Learn spectrum** | Keeps the bound peak's spectrum as the standard's reference. |
+
+In the mode **HS-Screening** the panel shows instead: **Result unit**, **Use mean of activated ISTD areas**,
+**Subtract matching Blank / Blank+ISTD (larger area)**, **Sample area (dm²)**, **Sample mass (g)**, the table
+of HS standards, and **Bind selected TIC peak**, **Automatic**, **Detect...**, **Learn spectrum**.
+
+## Replicates / results
+
+Two tabs. Described in [Double determination](wf-double.md).
+
+**Double determination** tab:
+
+| Control | What it does |
+|---|---|
+| **A**, **B** boxes | The two determinations. |
+| **⇄** | Swaps A and B. |
+| **Compare** | Pairs the two determinations and fills the list. |
+| **3+ determinations…** | Goes to the **Groups (N-fold)** tab. |
+| **Accept a difference up to** | The difference limit in percent (a report parameter). |
+| **Only red and yellow** | Shows only the substances that need attention. |
+| **Only red** | Shows only what you have to decide. |
+| **Settings…** | Pairing, gap filling, consensus name. |
+| **NIAS report - preview** | The NIAS report of this pair. |
+| **Harmonise boundaries** | Takes over every proposed integration boundary. Shown when there are proposals. |
+| **Reset row** | Undoes your changes of the selected substance. |
+| **Reset all** | Undoes every change made in this double determination. |
+| **Export...** | Writes the list as a worksheet. |
+
+Below the list: the two chromatograms of the selected substance, A upwards and B downwards, and the two
+spectra, mirrored the same way.
+
+**Groups (N-fold)** tab: **Suggest**, **New...**, **Members...**, **Delete**, the box
+**A peak counts as valid when**, the averaged results, and the buttons **NIAS report...**,
+**Fingerprint report...**, **Total extraction report...**, **HS-Screening report...** and
+**Export worksheet...**.
+
+## Automation
+
+Described in [Unattended processing](wf-automation.md).
+
+| Group | Controls |
+|---|---|
+| **Watcher (background processing)** | The state of the watcher; **Start**, **Pause**, **Check now**, **Stop**; **Start with Windows**. |
+| **Workflows** | The table of workflows (**Active**, **Name**, **Watched folder**, **Every**, **Waiting**, **To check**); **New**, **Edit chart...**, **Duplicate**, **Delete**, **Import...**, **Export...**, **Report²**. |
+| **Queue** | The samples waiting, in work, failed or not processed (**Sample**, **Batch**, **Workflow**, **State**, **Why**); **Remove from queue**, **Process again**, **Show removed**. |
+| **Activity** | What the watcher did, with the time. |
+
+## Report²
+
+Described in [Unattended processing](wf-automation.md#report²-what-needs-your-control).
+
+| Control | What it does |
+|---|---|
+| **Start watcher** | Shown when the watcher is not running. |
+| Workflow box | **All workflows** or one of them. |
+| **Search sample or batch** | Filters the lists. |
+| **Rules...** | The rules that decide *control needed*. |
+| **Control needed**, **Accepted** | The two lists of reports, grouped by batch folder. |
+| **Waiting / processing**, **Not processed / failed / rejected / removed** | Tabs with the other samples. |
+| **Accept...**, **Reject...** | Your decision on the selected report. |
+| **Open report** | Opens one of its files. |
+| **Open in GC Workspace** | Opens the sample as it was processed. |
+| **More** | **Report again from the (edited) project**, **Process again from the raw data**, **Process without a blank...**, **Remove from the queue...**, **Open the job folder**, **Deliver to the target folders now**. |
+| **Findings**, **Files**, **History** | The details of the selected report. |
