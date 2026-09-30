@@ -395,6 +395,10 @@ class MainWindow(QMainWindow):
         self.a_next_theme.setShortcut("Ctrl+Shift+D")
 
         m = mb.addMenu("&Help")
+        self.a_manual = m.addAction("User manual", self.show_manual)
+        self.a_manual.setShortcut(QKeySequence.HelpContents)
+        self.a_manual.setStatusTip("Every function, button and setting explained; how the library search and "
+                                   "the double determination work")
         m.addAction("Keyboard shortcuts", self.show_shortcuts)
         m.addAction("About GC Workspace", self.about)
 
@@ -1598,11 +1602,24 @@ class MainWindow(QMainWindow):
                   "Spectrum panel: ← / → step one scan, Esc returns to the peak."]
         QMessageBox.information(self, "Keyboard shortcuts", "\n".join(lines))
 
+    def show_manual(self, chapter: str = "", section: str = ""):
+        """Help > User manual (F1): one window, kept open beside the work."""
+        from gcws.ui.dialogs.manual import ManualWindow
+        if getattr(self, "manual", None) is None:
+            self.manual = ManualWindow(self)
+        if chapter:
+            self.manual.open(chapter, section)
+        self.manual.show()
+        self.manual.raise_()
+        self.manual.activateWindow()
+        return self.manual
+
     def about(self):
         QMessageBox.about(self, "GC Workspace",
                           f"<b>GC Workspace {gcws.__version__}</b><br>Integrator version {gcws.INTEGRATOR_VERSION}"
                           "<br><br>Standalone GC-FID / GC-MS integration, SpectrAtlas / NIST identification and NIAS "
-                          "reporting. Reads Agilent data.ms, *.ch and MassHunter AcqData directly.")
+                          "reporting. Reads Agilent data.ms, *.ch and MassHunter AcqData directly."
+                          "<br><br>Help &gt; User manual (F1) explains every function.")
 
 
 def QTabWidgetNorth():
