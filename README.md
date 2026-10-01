@@ -230,6 +230,27 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
      - *Settings*: presets for resolution, sensitivity and shape, and the NIAS parameters. *Save as default*
        makes them apply to the "deconvoluted" spectrum mode and the library search.
      - Splits saved by earlier versions replay unchanged (MS component proportions).
+   - **Automatic deconvolution split** (*Integration method* panel, group *Automatic deconvolution split*,
+     **Deconvolution split: Automatic**): the integration method splits co-eluted peaks of the whole run by
+     itself, so fewer mixed spectra end up as unknowns and fewer summed areas above the reporting limit.
+     - After the integration and the analyst's manual events, the run is deconvoluted once (whole run, cached;
+       in the background in the window) and every peak holding two or more components is split exactly like
+       *Split peak*: the components are fitted to the trace, the peak's area is divided by the fitted areas
+       (the total kept exactly), below *Min. fit R²* (0.97) by the MS component proportions.
+     - Gates taken from mzmine's GC spectral deconvolution (`featdet_spectraldeconvolutiongc`): a component is
+       only split off with at least *Min. component share* (1 %) and *Min. component S/N* (20), when its
+       model ion is not an *Excluded model m/z* (bleed 73, 207, 281, 355), when its fitted curve follows the
+       trace (*Min. shape correlation*, Pearson r 0.8) and when its spectrum differs from a neighbour within
+       two scans (cosine ≤ 0.9).
+     - The splits are made again at every integration (not stored as manual events); each fragment keeps a
+       stable id, so its identification survives re-integration. The panel shows how many peaks were split.
+     - The library search also searches every FID fragment directly with its component spectrum (when it
+       searches the TIC peaks too), so each FID peak gets its own name.
+     - *Keep unsplit (no automatic deconvolution split)* in the peak table's right-click menu keeps a peak
+       whole (a manual event; *Allow automatic deconvolution split* removes it). A peak split by hand is
+       never split automatically. Timed events *Deconvolution split off / on* switch it off for a stretch.
+     - Internal standard peaks are split too; the ISTD detection binds the fragment with the standard's
+       spectrum, and Report² notes the split.
 6. **Edit library** (*Identify > Edit library...*, or *Add to library...* in the spectrum panel, the hit list
    and the unknown register) stores a spectrum in one of your libraries, as in ChemStation. The window stays
    open while you work: a new entry gets its spectrum with **Take current spectrum** (select a peak or
@@ -449,6 +470,12 @@ analyst), need control, were not processed, are waiting or failed - per workflow
 - **Double determination incomplete** (default on): control for a sample with one determination only or when
   its determinations could not be paired. What the automation did (which runs were paired, features, gap
   fills, names, harmonised boundaries, red / yellow) is listed as information with every report.
+- **Automatic deconvolution split** (default on, note only): a peak split automatically whose areas come from
+  the MS component proportions (at or above the reporting limit), or a split internal standard. How many peaks
+  were split is listed with every report.
+- With the feature pairing, a deconvolution split found in one determination only is **carried over** to the
+  other one when the components fit its trace (yellow *Check: split as in A*; otherwise the row stays red),
+  before the gap fills. Boundaries of split peaks are never harmonised: their cuts come from the fit.
 
 **Batch report from GC Workspace** (*Report > Batch report of this folder...*): every sample of the active
 chromatogram's batch folder (its replicate groups, else the suggested ones) is reported into a folder you

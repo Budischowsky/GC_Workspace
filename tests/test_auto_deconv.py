@@ -1,0 +1,258 @@
+"""The automatic deconvolution split of a whole run (integration stage), its gates, the analyst's
+overrides, the double determination (split carried over) and the Report² rule."""
+import math
+from pathlib import Path
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+
+from gcws.core.model import FID, Run, Signal
+
+pytest.importorskip("pytestqt")
+
+DELAY = 0.006
+SPEC_C = {55: 100, 69: 80, 83: 50, 97: 20, 111: 10}
+
+
+@pytest.fixture
+def app(qapp):
+    return qapp
+
+
+def _fid(t, seed, parts):
+    from test_deconv import DT, RT
+    y = np.full(t.size, 50.0) + np.random.default_rng(seed).normal(0, 2, t.size)
+    for scan, height in parts:
+        y += height * np.exp(-0.5 * ((t - (RT[0] + scan * DT) - DELAY) / (4 / 2.355 * DT)) ** 2)
+    return y
+
+
+def make_run(name, seed=1, ms_parts=None, fid_parts=None):
+    """A run with two co-eluting compounds (MS scans 200 and 203, FID response 1:2) and one alone."""
+    from test_deconv import SPEC_A, SPEC_B, build
+    ms_parts = ms_parts if ms_parts is not None else [(200.0, SPEC_A, 60000.0), (203.0, SPEC_B, 45000.0),
+                                                      (120.0, SPEC_C, 50000.0)]
+    fid_parts = fid_parts if fid_parts is not None else [(200, 3000), (203, 6000), (120, 5000)]
+    t = np.arange(9.5, 13.5, 1 / 1200)
+    from gcws.io.metadata import RunMetadata
+    meta = RunMetadata(Path(f"/tmp/{name}.D"), sample_name=name)
+    return Run(Path(f"/tmp/{name}.D"), meta, fid=Signal(FID, t, _fid(t, seed, fid_parts)),
+               ms=build(ms_parts, background=False, seed=seed))
+
+
+def workspace(mode="auto", **changes):
+    from gcws.ui.workspace import Workspace
+    ws = Workspace()
+    ws.default_methods[FID] = ws.default_method(FID).copy(deconv_split=mode, timed_events=[], **changes)
+    return ws
+
+
+def load(ws, run):
+    from gcws.integration.engine import integrate
+    st = ws.add_run(run, {FID: integrate(run.fid, ws.default_method(FID))})
+    st.delay_override = DELAY
+    ws.integrate(st.id, FID)
+    return st
+
+
+def fragments(ws, st):
+    return [p for p in ws.result(st.id, FID).peaks if p.extra.get("deconv_component")]
+
+
+def test_coeluted_fid_peak_is_split_by_the_fid_fit_and_keeps_its_area(app):
+    ws = workspace()
+    st = load(ws, make_run("S_A"))
+    parts = fragments(ws, st)
+    assert len(parts) == 2 and all(p.origin == "deconvoluted" for p in parts)
+    parent = next(p for p in st.presplit[FID].peaks if p.start <= parts[0].apex_rt <= p.end)
+    assert math.fsum(p.area for p in parts) == parent.area
+    # FID response 1:2 (the MS says 60000:45000): the areas follow the FID
+    assert parts[0].area / parent.area == pytest.approx(1 / 3, abs=0.03)
+    assert all(p.extra["deconv_component"]["basis"] == "fit" for p in parts)
+    plan = st.auto_split[FID]
+    assert len(plan.events) == 1 and plan.ms_basis == 0
+    assert not st.events(FID)                      # nothing is stored as a manual event
+    # the fragments keep their identity over re-integrations (identifications bind to it)
+    ids = [p.extra["spectrum_id"] for p in parts]
+    assert all(i.startswith("auto-") for i in ids)
+    ws.integrate(st.id, FID)
+    assert [p.extra["spectrum_id"] for p in fragments(ws, st)] == ids
+
+
+def test_fragments_are_searched_with_their_component_spectrum(app):
+    from gcws.identify.service import fragment_items
+    from test_deconv import SPEC_A, SPEC_B
+    ws = workspace()
+    st = load(ws, make_run("S_A"))
+    items, _protected = fragment_items(ws, [st.id], FID)
+    assert len(items) == 2 and all(it.spectrum_mode == "deconvoluted" for it in items)
+    assert [it.peak_id for it in items] == [p.extra["spectrum_id"] for p in fragments(ws, st)]
+    for it, spec in zip(items, (SPEC_A, SPEC_B)):
+        base = max(it.job.spectrum, key=lambda x: x[1])[0]
+        assert round(base) == max(spec, key=spec.get)        # each fragment: its own compound's spectrum
+
+
+def test_switched_off_nothing_is_split(app):
+    ws = workspace("off")
+    st = load(ws, make_run("S_A"))
+    assert not fragments(ws, st) and FID not in st.auto_split
+
+
+def test_keep_unsplit_marker_and_timed_events_leave_the_peak_alone(app):
+    from gcws.integration import auto_deconv as AD
+    from gcws.integration.method import EventKind, TimedEvent
+    ws = workspace()
+    st = load(ws, make_run("S_A"))
+    parent = st.presplit[FID].peaks[-1]
+    st.events(FID).append(AD.keep_marker(parent))
+    ws.integrate(st.id, FID)
+    assert not fragments(ws, st) and not ws.result(st.id, FID).unresolved
+    assert st.auto_split[FID].skipped[0][1] == "kept unsplit by the analyst"
+    assert "Keep unsplit" in st.events(FID)[0].describe()
+    st.events(FID).clear()
+    st.methods[FID] = st.methods[FID].copy(timed_events=[TimedEvent(11.0, EventKind.DECONV_SPLIT_OFF),
+                                                         TimedEvent(12.0, EventKind.DECONV_SPLIT_ON)])
+    ws.integrate(st.id, FID)
+    assert not fragments(ws, st)
+    st.methods[FID] = st.methods[FID].copy(timed_events=[])
+    ws.integrate(st.id, FID)
+    assert len(fragments(ws, st)) == 2
+
+
+def _plan(comps, parts=((10.0, 400.), (10.022, 700.)), **method):
+    """plan_peaks on the synthetic trace of test_component_fit (one integrated parent peak)."""
+    from test_component_fit import trace
+    from gcws.core.model import Baseline, Peak
+    from gcws.integration.auto_deconv import plan_peaks
+    from gcws.integration.method import IntegrationMethod
+    t, y = trace(list(parts), 0.0066, 0.9, noise=1.0)
+    lo, hi = 9.95, 10.08
+    use = (t >= lo) & (t <= hi)
+    area = float(np.trapezoid(y[use], t[use] * 60))
+    peak = Peak(start=lo, end=hi, apex_rt=10.03, baseline=Baseline("hold", lo, 100.0, hi, 100.0),
+                area=area, area_raw=area)
+    result = SimpleNamespace(peaks=[peak])
+    m = IntegrationMethod(deconv_split="auto", **method)
+    return plan_peaks(Signal(FID, t, y + 100.0), result, FID, 0.0066, comps, m)
+
+
+def test_bleed_components_and_identical_spectra_are_not_split_off():
+    from test_component_fit import component
+    assert len(_plan([component(10.0, mz=57), component(10.022, mz=91)]).events) == 1
+    # a column bleed component (model ion 207) is never a fragment of its own
+    bleed = _plan([component(10.0, mz=57), component(10.022, mz=207)])
+    assert not bleed.events
+    assert len(_plan([component(10.0, mz=57), component(10.022, mz=207)], deconv_exclude_mz=[]).events) == 1
+    # the same spectrum within two scans: one compound
+    a, b = component(10.0, mz=57), component(10.012, mz=57)
+    assert not _plan([a, b], parts=((10.0, 400.), (10.012, 700.))).events
+
+
+def test_poor_fit_splits_by_ms_proportions_and_is_flagged():
+    from test_component_fit import component
+    plan = _plan([component(10.0, area=300, mz=57), component(10.022, area=700, mz=91)], deconv_fit_r2=1.0,
+                 deconv_min_r=0.0)
+    assert len(plan.events) == 1 and plan.ms_basis == 1
+    assert "MS component proportions" in plan.events[0].comment
+
+
+def test_method_keeps_the_settings():
+    from gcws.integration.method import IntegrationMethod
+    m = IntegrationMethod(deconv_split="auto", deconv_min_share=0.05, deconv_exclude_mz=[73, 207])
+    back = IntegrationMethod.from_dict(m.to_dict())
+    assert back.deconv_split == "auto" and back.deconv_min_share == 0.05 and back.deconv_exclude_mz == [73, 207]
+    assert IntegrationMethod().deconv_split == "off"
+
+
+def test_split_in_one_determination_is_carried_over_to_the_other(app):
+    from gcws.features import service as SV
+    ws = workspace()
+    a, b = load(ws, make_run("S_A", 1)), load(ws, make_run("S_B", 2))
+    b.methods[FID] = b.methods[FID].copy(deconv_split="off")      # B's MS "does not resolve" them
+    ws.integrate(b.id, FID)
+    assert len(fragments(ws, a)) == 2 and not fragments(ws, b)
+    ws.replicate_groups = [{"id": "g", "name": "S", "members": [a.id, b.id], "policy": "all"}]
+    before = SV.build(ws, [a.id, b.id])
+    assert any(f.split and any(p.kind == "split" for p in f.proposals) for f in before.features)
+    total = next(p.area for p in ws.result(b.id, FID).peaks if 11.4 < p.apex_rt < 11.6)
+    table = SV.run(ws, [a.id, b.id])
+    assert table.applied["split"] == 1
+    parts = fragments(ws, b)
+    assert len(parts) == 2 and all(p.extra["spectrum_id"].startswith("sync-") for p in parts)
+    assert math.fsum(p.area for p in parts) == pytest.approx(total)
+    assert not any(f.split for f in table.features)
+    from gcws.features.split_sync import is_sync
+    assert any(is_sync(m.peak.fragment) for f in table.features for m in f.found)
+
+
+def test_harmonise_leaves_fragments_alone():
+    from gcws.features import harmonise as HM
+    from gcws.features.model import DETECTED, Feature, Member, PeakInfo, Settings
+    p = lambda run, rt, start, end: PeakInfo(0, rt, start, end, 100.0, 10.0, 0.01, origin="deconvoluted")
+    f = Feature([Member("a", "A", p("a", 10.0, 9.95, 10.05), DETECTED, 10.0),
+                 Member("b", "B", p("b", 10.0, 9.90, 10.10), DETECTED, 10.0)], 10.0)
+    assert HM.propose(f, SimpleNamespace(input=lambda _r: None), Settings(), runs={}) == []
+
+
+def test_report2_rule_lists_ms_proportion_splits_and_split_istds():
+    from gcws.automation import rules as RU
+    ev = {"settings": {"reporting_limit": 0.01}, "members": [{"name": "S_A", "deconvolution": {
+        "fragments": 4, "splits": [
+            {"rt": 11.5, "basis": "ms", "note": "fit R² 0.9 < 0.97", "names": "x / y", "max_conc": 0.05},
+            {"rt": 12.0, "basis": "ms", "note": "", "names": "a / b", "max_conc": 0.001},
+            {"rt": 13.0, "basis": "fit", "istd": "IS1", "istd_share": 0.9}]}}]}
+    rule = next(r for r in RU.default_rules() if r.id == "deconvolution")
+    assert rule.enabled and rule.level == "info"
+    found = RU.CHECKS["deconvolution"](rule, ev)
+    texts = [f.text for f in found]
+    assert sum("MS component proportions" in t for t in texts) == 1        # the one below the limit is left out
+    assert any("IS1" in t and "90 %" in t for t in texts)
+    assert any("3 peak(s) split automatically into 4 fragments (2 by MS proportions)" in t for t in texts)
+    assert RU.evaluate([rule], ev).status == RU.ACCEPTED_AUTO              # note only by default
+    assert next(r for r in RU.from_list([]) if r.id == "deconvolution").level == "info"
+
+
+@pytest.fixture
+def win(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtCore import QCoreApplication, QSettings
+    from PySide6.QtWidgets import QMessageBox
+    QCoreApplication.setOrganizationName("GCWorkspaceTest")
+    QCoreApplication.setApplicationName("pytest")
+    QSettings.setDefaultFormat(QSettings.IniFormat)
+    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path))
+    QSettings().clear()
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: QMessageBox.Ok))
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.No))
+    from gcws.ui.main_window import MainWindow
+    w = MainWindow()
+    qtbot.addWidget(w)
+    yield w
+    w.ws.dirty = False
+    w.close()
+
+
+def test_panel_switches_the_split_and_the_analyst_keeps_a_peak_unsplit(win):
+    ws = win.ws
+    ws.deconv_background = False
+    st = load(ws, make_run("S_A"))
+    ws.set_active(st.id)
+    events = win.events
+    events.load()
+    assert events.deconv_mode.currentText() == "Off"
+    events.deconv_mode.setCurrentText("Automatic")
+    events.deconv_exclude.setText("73, 207 281")
+    m = events.collect()
+    assert m.deconv_split == "auto" and m.deconv_exclude_mz == [73, 207, 281]
+    events._apply(False)
+    parts = fragments(ws, st)
+    assert len(parts) == 2 and "split into 2 fragments" in events.deconv_status.text()
+    ws.select_peak(ws.result(st.id, FID).peaks.index(parts[1]))
+    win.keep_unsplit(True)
+    assert not fragments(ws, st) and len(st.events(FID)) == 1
+    whole = next(i for i, p in enumerate(ws.result(st.id, FID).peaks) if p.start < 11.51 < p.end)
+    ws.select_peak(whole)
+    win.keep_unsplit(False)
+    assert len(fragments(ws, st)) == 2 and not st.events(FID)
+    st.undo.undo()
+    assert not fragments(ws, st)

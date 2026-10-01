@@ -32,6 +32,22 @@ Settings are saved with the project, and as a whole by
 | **Baseline tracking (end peaks only at the baseline)** | {{IntegrationMethod.baseline_tracking}} | A peak may only end where the signal is back near the baseline. | peaks end too early on a drifting baseline. |
 | **Area factor** | {{IntegrationMethod.area_unit_factor}} | Reported area = integral (signal × seconds) × factor. 10 gives the area units of ChemStation for the FID. | the areas must match another system. |
 
+### Automatic deconvolution split
+
+The group **Automatic deconvolution split** on the same tab. See
+[Co-eluting peaks: the automatic deconvolution split](wf-integrate.md#co-eluting-peaks-the-automatic-deconvolution-split).
+The deconvolution itself (which components the MS shows) uses the settings of
+[Deconvolution](ref-settings.md#deconvolution).
+
+| Setting | Default | What it does | Change it when |
+|---|---|---|---|
+| **Deconvolution split** | {{IntegrationMethod.deconv_split}} | **Automatic**: after the integration, every peak that holds several deconvoluted MS components is split into one peak per component. The areas come from fitting the components to this trace. **Off**: peaks are only split by hand. | co-eluting substances make mixed spectra, unknowns and too large areas. |
+| **Min. component share** | {{IntegrationMethod.deconv_min_share %}} | A component with a smaller share of the fitted signal is not split off; its signal stays with its neighbours. | small impurities are split off that you do not want as peaks (higher). |
+| **Min. component S/N** | {{IntegrationMethod.deconv_min_sn}} | A component with a smaller signal-to-noise ratio in the MS is not split off. | as above. |
+| **Min. fit R²** | {{IntegrationMethod.deconv_fit_r2}} | Below this fit quality the areas are divided in the proportions of the MS components instead of by the fit. Such splits are listed by the Report² rule **Automatic deconvolution split**. | - |
+| **Min. shape correlation** | {{IntegrationMethod.deconv_min_r}} | A component is only split off when its fitted curve follows the trace (Pearson r, as mzmine's GC spectral deconvolution). | components are split off that the FID does not show (higher). |
+| **Excluded model m/z** | {{IntegrationMethod.deconv_exclude_mz}} | Components whose model ion is one of these masses (column bleed) are never split off. | another background ion produces components. |
+
 ## Timed events
 
 **Integration method** panel, **Timed events** tab. An event takes effect from its time on.
@@ -52,6 +68,7 @@ Settings are saved with the project, and as a whole by
 | **Area sum on** / **Area sum off** | | Sums everything between the two into one peak. |
 | **Negative peaks on** / **Negative peaks off** | | Integrates negative peaks between the two. |
 | **Solvent peak on** / **Solvent peak off** | | Marks the peaks between the two as solvent peaks (type S). |
+| **Deconvolution split off** / **Deconvolution split on** | | No automatic deconvolution split between the two (for example over an oligomer hump). |
 
 ## Solvent cut
 

@@ -57,7 +57,16 @@ RULES = {
                              "(feature double determination failed). What the automation did (pairing, gap fills, "
                              "names, harmonised boundaries) is listed as information.",
                              True, {"single": True, "summary": True}),
+    "deconvolution": ("Automatic deconvolution split",
+                      "A peak split automatically by deconvolution whose areas come from the MS component "
+                      "proportions (the elution shapes did not fit the FID; at or above the reporting limit), or an "
+                      "internal standard peak that was split. The splits of the determinations are listed as "
+                      "information.",
+                      True, {"only_above_limit": True, "summary": True}),
 }
+
+#: rules that only list their findings unless the analyst sets them to "control needed"
+INFO_BY_DEFAULT = {"deconvolution"}
 
 
 @dataclass
@@ -97,7 +106,8 @@ class Evaluation:
 
 
 def default_rules() -> list[Rule]:
-    return [Rule(rid, spec[2], CONTROL, copy.deepcopy(spec[3])) for rid, spec in RULES.items()]
+    return [Rule(rid, spec[2], "info" if rid in INFO_BY_DEFAULT else CONTROL, copy.deepcopy(spec[3]))
+            for rid, spec in RULES.items()]
 
 
 def from_list(data) -> list[Rule]:
@@ -348,11 +358,37 @@ def _double_determination(rule: Rule, ev: dict) -> list[Finding]:
     return out
 
 
+def _deconvolution(rule: Rule, ev: dict) -> list[Finding]:
+    limit = (ev.get("settings") or {}).get("reporting_limit", 0.01)
+    out = []
+    for m in ev.get("members") or []:
+        d = m.get("deconvolution") or {}
+        name = m.get("name", "")
+        for s in d.get("splits") or []:
+            if s.get("istd"):
+                out.append(Finding(rule.id, rule.level, f"internal standard {s['istd']} split by deconvolution: "
+                                   f"{100 * (s.get('istd_share') or 0):.0f} % of the original peak area",
+                                   member=name, substance=s["istd"], rt=_num(s.get("rt"))))
+            if s.get("basis") != "ms":
+                continue
+            conc = _num(s.get("max_conc"))
+            if rule.p("only_above_limit") and conc is not None and conc < limit:
+                continue
+            out.append(Finding(rule.id, rule.level, "split by MS component proportions (the elution shapes did "
+                               f"not fit the FID: {s.get('note') or 'fit not trusted'})", member=name,
+                               substance=s.get("names") or "", rt=_num(s.get("rt")), value=conc))
+        if rule.p("summary") and d.get("splits"):
+            n_ms = sum(1 for s in d["splits"] if s.get("basis") == "ms")
+            out.append(Finding(rule.id, "info", f"{len(d['splits'])} peak(s) split automatically into "
+                               f"{d.get('fragments', 0)} fragments ({n_ms} by MS proportions)", member=name))
+    return out
+
+
 CHECKS = {"manual_check": _manual_check, "sml_exceeded": _sml_exceeded,
           "istd_qc": lambda r, ev: _istd_qc(r, ev) + _istd_spread(r, ev),
           "processing_warnings": _processing, "no_sml_above_limit": _no_sml, "substance_above": _substance_above,
           "unidentified_over": _unidentified, "no_blank": _no_blank, "feature_review": _feature_review,
-          "double_determination": _double_determination}
+          "double_determination": _double_determination, "deconvolution": _deconvolution}
 
 
 def evaluate(rules: list[Rule], evidence: dict, auto_accept: bool = True) -> Evaluation:

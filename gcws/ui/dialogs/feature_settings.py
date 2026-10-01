@@ -96,8 +96,13 @@ class FeatureSettingsDialog(QDialog):
         self.auto.setChecked(settings.apply_auto)
         self.harmonise = QCheckBox("Propose harmonised integration boundaries")
         self.harmonise.setChecked(settings.harmonise)
+        self.split_sync = QCheckBox("Carry deconvolution splits over to the other determination")
+        self.split_sync.setToolTip("A peak split by deconvolution in one determination is split the same way "
+                                   "in the other when the components fit its trace")
+        self.split_sync.setChecked(settings.split_sync)
         lay.addWidget(self.auto)
         lay.addWidget(self.harmonise)
+        lay.addWidget(self.split_sync)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel | QDialogButtonBox.RestoreDefaults)
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
@@ -118,6 +123,7 @@ class FeatureSettingsDialog(QDialog):
         self.search.setChecked(d.consensus_search)
         self.auto.setChecked(d.apply_auto)
         self.harmonise.setChecked(d.harmonise)
+        self.split_sync.setChecked(d.split_sync)
 
     def settings(self) -> Settings:
         d = self.base.to_dict()
@@ -127,5 +133,6 @@ class FeatureSettingsDialog(QDialog):
                  gap_min_sn=self.gap_sn.value(), gap_min_ions=self.gap_ions.value(),
                  gap_min_cos=self.gap_cos.value(), gap_min_fraction=self.gap_frac.value() / 100.0,
                  consensus_search=self.search.isChecked(), id_margin=self.margin.value(),
-                 apply_auto=self.auto.isChecked(), harmonise=self.harmonise.isChecked())
+                 apply_auto=self.auto.isChecked(), harmonise=self.harmonise.isChecked(),
+                 split_sync=self.split_sync.isChecked())
         return Settings.from_dict(d)

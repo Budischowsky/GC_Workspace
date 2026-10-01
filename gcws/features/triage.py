@@ -65,6 +65,12 @@ def classify(feature: Feature, row: dict, limit: float, reporting_limit: float, 
         return "red", "Check pairing", reasons
     # yellow: (verdict text, reason) in order of importance; the first one names the row
     tagged: list[tuple[str, str]] = []
+    from gcws.features.split_sync import is_sync
+    for m in found:
+        if is_sync(m.peak.fragment):
+            others = "/".join(x.label for x in found if x is not m)
+            tagged.append((f"Check: split as in {others}",
+                           f"{m.label}: deconvolution split carried over from {others} (fitted to the trace)"))
     gap = [m for m in found if m.origin == GAPFILL]
     for m in gap:
         tagged.append(("Check: gap fill", f"gap fill in {m.label}" + (f": {m.note}" if m.note else "")))

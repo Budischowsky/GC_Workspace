@@ -75,6 +75,10 @@ def propose(feature: Feature, table, settings: Settings, runs: Optional[dict] = 
     ref = reference(feature)
     if ref is None or len(feature.found) < 2 or feature.mismatch or feature.split or runs is None:
         return []
+    if any(m.peak.origin == "deconvoluted" for m in feature.found):
+        # the cuts of a deconvolution split come from the fit, and moving a fragment's boundary
+        # would replace its allocated area by a trace integral
+        return []
     w = _width(feature)
     lo_ref = ref.peak.rt - ref.peak.start
     hi_ref = ref.peak.end - ref.peak.rt

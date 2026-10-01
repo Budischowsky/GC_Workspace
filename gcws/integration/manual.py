@@ -183,6 +183,9 @@ def _clip_around(peaks: list[WP], t0: float, t1: float) -> None:
 def _apply_one(peaks: list[WP], sig: WorkSignal, e: ManualEvent, tol: float, width: float) -> str:
     k = e.kind
     if k == K.SPLIT:
+        from gcws.integration.auto_deconv import KEEP_OPTION
+        if e.option == KEEP_OPTION:          # only blocks the automatic deconvolution split
+            return ""
         from gcws.integration.deconv_split import decode
         payload = decode(e)
         if payload is not None:

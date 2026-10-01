@@ -212,7 +212,8 @@ of step 3 and the names of step 4 by itself, as **one undo step**, and writes ea
 | **Search the consensus spectrum in the libraries** | {{Features.consensus_search}} | Step 4, case B. Off: the two hit lists alone decide. | no library is available. |
 | **A name must lead by** | {{Features.id_margin}} points | How clearly a candidate must be the best to be chosen (case B instead of C). | too many "name 1 / name 2" rows (lower), or wrong names chosen (higher). |
 | **Apply gap fills and names automatically** | {{Features.apply_auto}} | Off: **Compare** changes nothing in the runs by itself. | you want the runs to stay exactly as integrated and searched. |
-| **Propose harmonised integration boundaries** | {{Features.harmonise}} | Switches step 5 on or off. | - |
+| **Propose harmonised integration boundaries** | {{Features.harmonise}} | Switches step 5 on or off. Peaks split by deconvolution keep their boundaries: their cuts come from the fit. | - |
+| **Carry deconvolution splits over to the other determination** | {{Features.split_sync}} | When one injection has a peak split by deconvolution and the other the same place as one peak, the components of the first are fitted to the second's trace. With a good fit the peak is split the same way (yellow: *Check: split as in A*), otherwise the row stays red. Made automatically with the gap fills. | you want each injection's own integration only. |
 
 ## Three or more determinations
 

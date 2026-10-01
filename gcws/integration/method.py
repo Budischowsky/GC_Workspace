@@ -43,6 +43,8 @@ class EventKind(str, Enum):
     NEGATIVE_OFF = "Negative peaks off"
     SOLVENT_ON = "Solvent peak on"
     SOLVENT_OFF = "Solvent peak off"
+    DECONV_SPLIT_OFF = "Deconvolution split off"
+    DECONV_SPLIT_ON = "Deconvolution split on"
 
 
 #: Events that carry a numeric value.
@@ -61,7 +63,12 @@ RANGE_PAIRS = {
     EventKind.AREA_SUM_ON: EventKind.AREA_SUM_OFF,
     EventKind.NEGATIVE_ON: EventKind.NEGATIVE_OFF,
     EventKind.SOLVENT_ON: EventKind.SOLVENT_OFF,
+    EventKind.DECONV_SPLIT_OFF: EventKind.DECONV_SPLIT_ON,
 }
+
+#: Model ions that never make a deconvoluted component its own fragment (column bleed;
+#: mzmine's "Exclude m/z values" of the GC spectral deconvolution).
+DECONV_EXCLUDE_MZ = (73, 207, 281, 355)
 
 
 @dataclass(frozen=True)
@@ -115,6 +122,13 @@ class IntegrationMethod:
     baseline_tolerance: Optional[float] = None  # signal units above the envelope (auto: 2 x threshold)
     solvent_height_factor: float = 0.0          # >0: peaks higher than f x median height are solvent
     area_unit_factor: float = 10.0              # counts*s -> reported area
+    #: automatic deconvolution split (FID/TIC): "off" | "auto" (see gcws.integration.auto_deconv)
+    deconv_split: str = "off"
+    deconv_min_share: float = 0.01              # a component below this share of the fit stays with its neighbours
+    deconv_min_sn: float = 20.0                 # ... and one below this MS S/N
+    deconv_fit_r2: float = 0.97                 # below: areas from MS component proportions
+    deconv_min_r: float = 0.8                   # shape correlation component profile <-> trace
+    deconv_exclude_mz: list[int] = field(default_factory=lambda: list(DECONV_EXCLUDE_MZ))
     timed_events: list[TimedEvent] = field(default_factory=list)
     version: int = 1
 
@@ -148,7 +162,21 @@ class IntegrationMethod:
     def copy(self, **changes) -> "IntegrationMethod":
         m = replace(self, **changes)
         m.timed_events = list(changes.get("timed_events", self.timed_events))
+        m.deconv_exclude_mz = list(changes.get("deconv_exclude_mz", self.deconv_exclude_mz))
         return m
+
+    def deconv_off_ranges(self, t_end: float = 1e9) -> list[tuple[float, float]]:
+        """``(t0, t1)`` where the automatic deconvolution split is switched off by timed events."""
+        out, start = [], None
+        for e in self.events():
+            if e.kind == EventKind.DECONV_SPLIT_OFF and start is None:
+                start = e.time
+            elif e.kind == EventKind.DECONV_SPLIT_ON and start is not None:
+                out.append((start, e.time))
+                start = None
+        if start is not None:
+            out.append((start, t_end))
+        return out
 
     def events(self) -> list[TimedEvent]:
         return sorted((e for e in self.timed_events if e.enabled), key=lambda e: e.time)

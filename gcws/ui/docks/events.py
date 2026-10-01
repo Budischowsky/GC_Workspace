@@ -3,13 +3,23 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox,
-                               QHBoxLayout, QHeaderView, QInputDialog, QLabel, QMessageBox, QPushButton,
+                               QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton,
                                QSpinBox, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from gcws.core.model import FID, parse_key
 from gcws.integration.method import CHOICE_EVENTS, EventKind, IntegrationMethod, TimedEvent, VALUE_EVENTS
 from gcws.ui.icons import icon
 from gcws.ui.undo import ManualEventsCommand, SetMethodCommand
+
+
+#: stored value -> text of the automatic deconvolution split
+DECONV_MODES = {"off": "Off", "auto": "Automatic"}
+
+
+def parse_masses(text: str) -> list[int]:
+    """``"73, 207 281"`` -> ``[73, 207, 281]`` (anything else is ignored)."""
+    import re
+    return sorted({int(x) for x in re.findall(r"\d+", text or "") if 0 < int(x) < 10000})
 
 
 class AutoSpin(QWidget):
@@ -118,8 +128,54 @@ class EventsDock(QWidget):
         form.addRow("", self.negative)
         form.addRow("", self.tracking)
         form.addRow("Area factor", self.area_factor)
+
+        # automatic deconvolution split (gcws.integration.auto_deconv)
+        self.deconv_mode = QComboBox()
+        self.deconv_mode.addItems(list(DECONV_MODES.values()))
+        self.deconv_mode.setToolTip("Automatic: every peak holding several deconvoluted MS components is split "
+                                    "into one peak per component (areas fitted to this trace)")
+        self.deconv_share = QDoubleSpinBox()
+        self.deconv_share.setRange(0, 50)
+        self.deconv_share.setDecimals(1)
+        self.deconv_share.setSuffix(" %")
+        self.deconv_share.setToolTip("A component with a smaller share of the fitted signal is not split off")
+        self.deconv_sn = QDoubleSpinBox()
+        self.deconv_sn.setRange(0, 1e4)
+        self.deconv_sn.setDecimals(0)
+        self.deconv_sn.setToolTip("A component with a smaller MS S/N is not split off")
+        self.deconv_r2 = QDoubleSpinBox()
+        self.deconv_r2.setRange(0, 1)
+        self.deconv_r2.setDecimals(3)
+        self.deconv_r2.setSingleStep(0.005)
+        self.deconv_r2.setToolTip("Below this fit quality the areas come from the MS component proportions")
+        self.deconv_r = QDoubleSpinBox()
+        self.deconv_r.setRange(0, 1)
+        self.deconv_r.setDecimals(2)
+        self.deconv_r.setSingleStep(0.05)
+        self.deconv_r.setToolTip("A component whose fitted curve does not follow the trace this closely "
+                                 "(Pearson r) is not split off")
+        self.deconv_exclude = QLineEdit()
+        self.deconv_exclude.setToolTip("Components with one of these model ions (column bleed) are not split off")
+        dform = QFormLayout()
+        dform.addRow("Deconvolution split", self.deconv_mode)
+        dform.addRow("Min. component share", self.deconv_share)
+        dform.addRow("Min. component S/N", self.deconv_sn)
+        dform.addRow("Min. fit R²", self.deconv_r2)
+        dform.addRow("Min. shape correlation", self.deconv_r)
+        dform.addRow("Excluded model m/z", self.deconv_exclude)
+        self.deconv_status = QLabel()
+        self.deconv_status.setObjectName("hint")
+        self.deconv_status.setWordWrap(True)
+        dform.addRow(self.deconv_status)
+        dbox = QGroupBox("Automatic deconvolution split")
+        dbox.setLayout(dform)
+        pl = QVBoxLayout()
+        pl.setContentsMargins(0, 0, 0, 0)
+        pl.addLayout(form)
+        pl.addWidget(dbox)
+        pl.addStretch(1)
         params = QWidget()
-        params.setLayout(form)
+        params.setLayout(pl)
 
         # timed events
         self.timed = QTableWidget(0, 3)
@@ -228,10 +284,17 @@ class EventsDock(QWidget):
         self.negative.setChecked(m.negative_peaks)
         self.tracking.setChecked(m.baseline_tracking)
         self.area_factor.setValue(m.area_unit_factor)
+        self.deconv_mode.setCurrentText(DECONV_MODES.get(m.deconv_split, DECONV_MODES["off"]))
+        self.deconv_share.setValue(100 * m.deconv_min_share)
+        self.deconv_sn.setValue(m.deconv_min_sn)
+        self.deconv_r2.setValue(m.deconv_fit_r2)
+        self.deconv_r.setValue(m.deconv_min_r)
+        self.deconv_exclude.setText(" ".join(str(x) for x in m.deconv_exclude_mz))
         self.timed.setRowCount(0)
         for e in m.timed_events:
             self._timed_row(e)
         self._load_manual(st, res)
+        self._show_deconv(st, m)
         self._loading = False
 
     def _on_result(self, rid, key):
@@ -240,7 +303,31 @@ class EventsDock(QWidget):
             return
         self._loading = True
         self._load_manual(st, st.results.get(key))
+        self._show_deconv(st, self.ws.method_for(st, key))
         self._loading = False
+
+    def _show_deconv(self, st, method):
+        """What the automatic deconvolution split did on the active chromatogram."""
+        from gcws.integration.auto_deconv import enabled
+        if not enabled(method):
+            self.deconv_status.setText("")
+            return
+        if st.run.ms is None:
+            self.deconv_status.setText("No MS data: nothing is split.")
+            return
+        plan = st.auto_split.get(self.ws.active_key)
+        if plan is None:
+            self.deconv_status.setText("Deconvoluting the run ...")
+            return
+        n = len(plan.events)
+        frags = sum(len(p.checked) for p in plan.plans)
+        text = f"{n} peak(s) split into {frags} fragments"
+        if plan.ms_basis:
+            text += f", {plan.ms_basis} by MS component proportions"
+        if plan.skipped:
+            text += f"; {len(plan.skipped)} left unsplit"
+        self.deconv_status.setText(text + ".")
+        self.deconv_status.setToolTip("\n".join(f"{t:.3f} min: {why}" for t, why in plan.skipped[:30]))
 
     def _load_manual(self, st, res):
         self.manual.blockSignals(True)
@@ -313,6 +400,12 @@ class EventsDock(QWidget):
         m.negative_peaks = self.negative.isChecked()
         m.baseline_tracking = self.tracking.isChecked()
         m.area_unit_factor = self.area_factor.value()
+        m.deconv_split = next(k for k, v in DECONV_MODES.items() if v == self.deconv_mode.currentText())
+        m.deconv_min_share = self.deconv_share.value() / 100
+        m.deconv_min_sn = self.deconv_sn.value()
+        m.deconv_fit_r2 = self.deconv_r2.value()
+        m.deconv_min_r = self.deconv_r.value()
+        m.deconv_exclude_mz = parse_masses(self.deconv_exclude.text())
         events = []
         for r in range(self.timed.rowCount()):
             t = self.timed.cellWidget(r, 0).value()

@@ -83,6 +83,35 @@ The areas come from fitting the component curves to the chromatogram itself - fo
 signal. If that fit is not good enough, the proportions of the MS components are used instead, and the status
 line says so. The split can be undone.
 
+## Co-eluting peaks: the automatic deconvolution split
+
+Instead of splitting peak by peak, the integration method can do it for the whole run. Set **Deconvolution
+split** to **Automatic** in the group **Automatic deconvolution split** of the **Integration method** panel
+(**Parameters** tab) and click **Apply to all**. The setting is part of the integration method, so it is saved
+with processing methods and used by the automation.
+
+1. The whole run is deconvoluted once (in the background; the panel says *Deconvoluting the run ...*).
+2. After the integration and your manual changes, every peak that holds two or more components is split, the
+   same way as **Split peak** does it: the component curves are fitted to the trace, the peak's area is divided
+   by the fitted areas, and the total stays exactly the same. If the fit is below **Min. fit R²**, the MS
+   component proportions are used.
+3. Components that are too weak, whose model ion is a bleed ion, whose curve the trace does not show, or whose
+   spectrum is the same as their neighbour's are not split off.
+4. Each fragment keeps its component spectrum. The library search searches the fragments with these clean
+   spectra, also when it searches the TIC peaks, so every FID peak gets its own name.
+
+The panel shows how many peaks were split. The automatic splits are not listed among the manual events: they are
+made again at every integration from the present settings.
+
+- **Keep unsplit (no automatic deconvolution split)** in the right-click menu of the peak table integrates the
+  selected peak (for a fragment: its whole peak) as one peak again. **Allow automatic deconvolution split**
+  removes that mark. The mark is a manual event and can be undone.
+- To split a peak differently, keep it unsplit first and then split it by hand with
+  **Identify > Deconvolution...**. A peak you split by hand is never split automatically.
+- The timed events **Deconvolution split off** / **Deconvolution split on** switch it off for a stretch.
+- In a double determination a split found in one injection only is carried over to the other one when the
+  components fit its trace (see [How the double determination works](double-determination.md#settings)).
+
 **Visible range** and **Whole run** in the same window list the components of a stretch of the chromatogram or
 of the whole run. **Add as peaks** integrates ticked components as new peaks, **Use for peak spectrum** gives
 the selected peak the spectrum of a component, and **Library hits...** searches a component.

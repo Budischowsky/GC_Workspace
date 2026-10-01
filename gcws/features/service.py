@@ -17,6 +17,7 @@ from gcws.features import consensus as CO
 from gcws.features import gapfill as GF
 from gcws.features import harmonise as HM
 from gcws.features import ids as IDS
+from gcws.features import split_sync as SS
 from gcws.features.inputs import collect
 from gcws.features.model import FeatureTable, Settings
 
@@ -169,6 +170,8 @@ def build(ws, members: list[str], group: Optional[dict] = None, cfg: Optional[Se
     previous = ((group or {}).get("features") or {}).get("ids")
     IDS.stable_ids(table.features, previous, cfg.rt_tol)
     table.inputs = inputs
+    if gapfill and cfg.split_sync and len(inputs) > 1:
+        SS.propose_table(ws, table, cfg)
     if gapfill and cfg.gap_fill and len(inputs) > 1:
         runs = {r.run_id: ws.runs[r.run_id].run for r in inputs}
         noise = {r.run_id: noise_pp(ws, r.run_id, key) for r in inputs}
@@ -180,7 +183,7 @@ def build(ws, members: list[str], group: Optional[dict] = None, cfg: Optional[Se
     return table
 
 
-def proposals(table: FeatureTable, kinds=("gapfill", "identity"), auto_only: bool = True) -> list:
+def proposals(table: FeatureTable, kinds=("split", "gapfill", "identity"), auto_only: bool = True) -> list:
     return [p for f in table.features for p in f.proposals if p.kind in kinds and (p.auto or not auto_only)]
 
 
@@ -200,7 +203,7 @@ def commands(ws, props: list) -> list:
         st = ws.runs.get(rid)
         if st is None:
             continue
-        text = ps[0].text if len(ps) == 1 else f"{len(ps)} gap fills (double determination)"
+        text = ps[0].text if len(ps) == 1 else f"{len(ps)} automatic changes (double determination)"
         out.append(ManualEventsCommand(ws, rid, key, st.events(key) + [p.event for p in ps], text))
     for (rid, key), ps in idents.items():
         if rid not in ws.runs:
@@ -222,7 +225,9 @@ def apply(ws, table: FeatureTable, props: Optional[list] = None, stack=None, lab
     names = " / ".join(ws.runs[m].name for m in table.members if m in ws.runs)
     n_gap = sum(1 for p in props if p.kind == "gapfill")
     n_id = sum(1 for p in props if p.kind == "identity")
-    parts = [f"{n_gap} gap fill(s)" if n_gap else "", f"{n_id} name(s)" if n_id else ""]
+    n_split = sum(1 for p in props if p.kind == "split")
+    parts = [f"{n_split} split(s) as in the other determination" if n_split else "",
+             f"{n_gap} gap fill(s)" if n_gap else "", f"{n_id} name(s)" if n_id else ""]
     label = label or "double determination: " + ", ".join(x for x in parts if x)
     stack = stack or ws.undo_group.activeStack() or ws.project_undo
     stack.push(MultiCommand(label, cmds))
@@ -281,15 +286,20 @@ def run(ws, members: list[str], cfg: Optional[Settings] = None, *, apply_auto: O
     cfg = cfg or settings(ws)
     group = group_of(ws, members)
     table = build(ws, members, group, cfg)
-    applied = {"gapfill": 0, "identity": 0, "boundary": 0}
+    applied = {"split": 0, "gapfill": 0, "identity": 0, "boundary": 0}
     auto = cfg.apply_auto if apply_auto is None else apply_auto
-    props = pending(ws, members, table) if auto else []
-    if props and apply(ws, table, props, stack=stack):
+    # a carried-over split changes the peaks the gap fills and names are made for: one more round
+    for _round in range(2):
+        props = pending(ws, members, table) if auto else []
+        if not (props and apply(ws, table, props, stack=stack)):
+            break
         for p in props:
             applied[p.kind] = applied.get(p.kind, 0) + 1
         _remember_done(ws, members, {signature(p) for p in props})
         remember_ids(ws, members, table)
         table = build(ws, members, group_of(ws, members), cfg)
+        if not any(p.kind == "split" for p in props):
+            break
     if apply_boundaries:
         done = auto_done(ws, members)
         bounds = [p for p in proposals(table, ("boundary",), auto_only=False) if signature(p) not in done]

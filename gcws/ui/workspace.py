@@ -27,6 +27,11 @@ from gcws.signal.delay import DelayEstimate, estimate_delay, refine_with_peaks
 from gcws.ui.theme import RUN_COLORS as PALETTE
 
 
+def json_key(d: dict) -> str:
+    import json
+    return json.dumps(d, sort_keys=True)
+
+
 @dataclass
 class RunState:
     run: Run
@@ -46,6 +51,10 @@ class RunState:
     blanks_manual: bool = False                       # blanks set by the analyst: never re-suggested
     deconv: dict = field(default_factory=dict)        # deconvolution results (see gcws.ms.deconv_cache)
     blank_alignment: dict = field(default_factory=dict)   # base key -> [Alignment] of the derived trace
+    # the automatic deconvolution split (gcws.integration.auto_deconv) per signal key: what it did,
+    # and the integration before it (the parents of the fragments)
+    auto_split: dict = field(default_factory=dict)
+    presplit: dict = field(default_factory=dict)
 
     @property
     def id(self) -> str:
@@ -116,6 +125,10 @@ class Workspace(QObject):
         self.table_panel: int = 0
         self.selected: int = -1
         self.methods = MethodStore()
+        # the whole-run deconvolution for the automatic split: on the thread pool (main window) or
+        # right away (unattended processing, tests)
+        self.deconv_background = False
+        self._deconv_jobs: set = set()
         # integration methods for runs loaded later, set by a processing method applied without
         # saving it (unattended processing); otherwise the method store's defaults
         self.default_methods: dict[str, IntegrationMethod] = {}
@@ -173,8 +186,9 @@ class Workspace(QObject):
         if results:
             st.results.update(results)
         self.runs[run.id] = st
+        from gcws.integration.auto_deconv import enabled
         for key in list(st.results):
-            if self.solvent_cut(st, key) is not None:
+            if self.solvent_cut(st, key) is not None or enabled(self._method_of(st, key)):
                 self.integrate(st.id, key, emit=False)
         self.order.append(run.id)
         self._sort_order()
@@ -440,8 +454,10 @@ class Workspace(QObject):
         if sig is None:
             st.results.pop(key, None)
             return None
-        res = integrate(sig, self._derived_method(st, key, sig) if is_derived(key) else self.method_for(st, key),
-                        st.events(key), t_min=self.solvent_cut(st, key))
+        method = self._derived_method(st, key, sig) if is_derived(key) else self.method_for(st, key)
+        t_min = self.solvent_cut(st, key)
+        res = integrate(sig, method, st.events(key), t_min=t_min)
+        res = self._auto_split(st, key, sig, method, res, t_min)
         st.results[key] = res
         stale = [] if is_derived(key) or not self.blank_options().auto else self._drop_derived_of(run_id, key)
         if key == FID and st.run.ms is not None and st.delay is not None and st.delay_override is None:
@@ -454,6 +470,74 @@ class Workspace(QObject):
             for rid, dk in stale:
                 self.resultChanged.emit(rid, dk)
         return res
+
+    def _auto_split(self, st: RunState, key: str, sig, method: IntegrationMethod, res: IntegrationResult,
+                    t_min) -> IntegrationResult:
+        """The automatic deconvolution split stage (after the manual events): ``res`` with every
+        co-eluted peak split into its components, when the method asks for it."""
+        from gcws.integration import auto_deconv as AD
+        st.auto_split.pop(key, None)
+        st.presplit.pop(key, None)
+        if not AD.enabled(method) or base_key(key) not in (FID, TIC) or st.run.ms is None:
+            return res
+        background = self.deconv_background and AD.components_for(self, st, compute=False) is None
+        if background:
+            self._deconvolute_in_background(st)
+            return res
+        try:
+            plan = AD.plan_run(self, st, key, res, method)
+        except Exception as exc:  # noqa: BLE001 - the integration itself must never fail on it
+            import logging
+            logging.getLogger(__name__).exception("automatic deconvolution split failed")
+            self.message.emit(f"Automatic deconvolution split of {st.name} failed: {exc}")
+            return res
+        if plan is None:
+            return res
+        st.auto_split[key] = plan
+        if not plan.events:
+            return res
+        st.presplit[key] = res
+        return integrate(sig, method, list(st.events(key)) + plan.events, t_min=t_min)
+
+    def _deconvolute_in_background(self, st: RunState) -> None:
+        """Whole-run deconvolution of ``st`` on the thread pool; the signals with an automatic
+        split are integrated again when it is done."""
+        from gcws.integration import auto_deconv as AD
+        from gcws.ms import deconv_cache as DC
+        from gcws.ui import workers
+        settings = DC.settings_of(self)
+        job = (st.id, json_key(settings.to_dict()), self.solvent_cut(st, "TIC"))
+        if job in self._deconv_jobs:
+            return
+        self._deconv_jobs.add(job)
+        run_id, cut = st.id, job[2]
+
+        def done(comps):
+            self._deconv_jobs.discard(job)
+            s = self.runs.get(run_id)
+            if s is None or json_key(DC.settings_of(self).to_dict()) != job[1] or self.solvent_cut(s, "TIC") != cut:
+                return
+            DC.store_whole_run(s, settings, comps)
+            self.deconvChanged.emit(run_id)
+            for key in list(s.results):
+                if AD.enabled(self._method_of(s, key)):
+                    self.integrate(run_id, key)
+
+        def failed(error):
+            self._deconv_jobs.discard(job)
+            self.message.emit(f"Deconvolution of {st.name} failed: {error.splitlines()[0]}")
+
+        self.message.emit(f"Deconvoluting {st.name} for the automatic split ...")
+        workers.submit(DC.compute_whole_run, st, settings, t_min=cut, on_done=done, on_error=failed)
+
+    def split_pending(self, st: RunState, key: str) -> bool:
+        """True while the automatic deconvolution split of ``key`` waits for the whole-run deconvolution."""
+        from gcws.integration.auto_deconv import enabled
+        return (enabled(self._method_of(st, key)) and st.run.ms is not None and key not in st.auto_split
+                and base_key(key) in (FID, TIC))
+
+    def _method_of(self, st: RunState, key: str) -> IntegrationMethod:
+        return self.method_for(st, base_key(key))
 
     def _drop_derived_of(self, run_id: str, base: str) -> list[tuple[str, str]]:
         """A new integration of ``base`` in ``run_id`` changes the blank-subtracted traces built on
@@ -611,6 +695,8 @@ class Workspace(QObject):
                 QSettings().setValue("integration/solvent_cut", bool(new.get("solvent_cut", False)))
             # Snapshot all keys first: base integrations invalidate derived results in other runs.
             keys = {st.id: list(st.results) for st in self.states()}
+            for st in self.states():
+                st.deconv = {}               # the whole-run deconvolution starts at the cut
             for derived in (False, True):
                 for st in self.states():
                     for key in keys[st.id]:
@@ -622,9 +708,15 @@ class Workspace(QObject):
                                       for k in ("blank_sub", "istd_defs", "istd_bindings", "hs", "detector")):
             self.invalidate_blank(None)             # the ISTD windows are kept out of the subtraction
         if cut_changed or (old or {}).get("deconv") != (new or {}).get("deconv"):
+            from gcws.integration.auto_deconv import enabled
             for st in self.states():
                 st.deconv = {}
                 self.deconvChanged.emit(st.id)
+                # the automatic split follows the new components (the cut re-integrated above)
+                if not cut_changed:
+                    for key in list(st.results):
+                        if enabled(self._method_of(st, key)):
+                            self.integrate(st.id, key)
         if cut_changed:
             self.solventCutChanged.emit()
 

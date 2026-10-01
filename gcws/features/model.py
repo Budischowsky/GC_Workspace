@@ -58,6 +58,7 @@ class Settings:
     id_topk: int = 5
     ri_tol: float = 20.0
     harmonise: bool = True                # propose harmonised boundaries
+    split_sync: bool = True               # carry a deconvolution split over to the other determination
     apply_auto: bool = True               # apply gap fills and consensus names automatically
 
     @classmethod
@@ -159,11 +160,11 @@ class Member:
 class Proposal:
     """A change the workflow makes (``auto``) or suggests to the analyst."""
 
-    kind: str                             # gapfill | identity | boundary
+    kind: str                             # gapfill | identity | boundary | split
     run_id: str
     key: str
     text: str
-    event: Any = None                     # ManualEvent (gapfill, boundary)
+    event: Any = None                     # ManualEvent (gapfill, boundary, split)
     ident: Any = None                     # Identification (identity)
     rt: Optional[float] = None            # the peak the identification belongs to
     auto: bool = True

@@ -117,6 +117,27 @@ def build_items(ws, run_ids: list[str], key: str, spectrum_mode: str,
     return items, protected
 
 
+def fragment_items(ws, run_ids: list[str], fid_key: str = "FID", rescan_below: Optional[float] = None,
+                   skip_identified: bool = False, only: Optional[dict] = None) -> tuple[list[SearchItem], int]:
+    """Jobs for the FID fragments of deconvolution splits, searched with their own component
+    spectrum. A TIC search names the FID by copying names over; a TIC peak that holds several
+    resolved components cannot choose between their fragments, so these are searched directly
+    (one name per FID peak). ``only``: run id -> FID peak indices that may be searched."""
+    wanted = {}
+    for rid in run_ids:
+        res = ws.result(rid, fid_key) if rid in ws.runs else None
+        if res is None:
+            continue
+        indices = {i for i, p in enumerate(res.peaks) if p.extra.get("deconv_component")}
+        if only is not None:
+            indices &= set(only.get(rid, set()))
+        if indices:
+            wanted[rid] = indices
+    if not wanted:
+        return [], 0
+    return build_items(ws, list(wanted), fid_key, "deconvoluted", rescan_below, skip_identified, wanted)
+
+
 #: largest distance (min) between a TIC apex + FID-MS delay and the FID apex that takes its name
 TRANSFER_TOL = 0.03
 

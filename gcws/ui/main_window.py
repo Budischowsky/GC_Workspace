@@ -212,6 +212,11 @@ class MainWindow(QMainWindow):
                           "components of the visible range or the whole run")
         self.splitDeconvAction = A("Split by deconvolution...", lambda: self.deconvolution("peak"), None, None,
                                    "Fit the deconvoluted components to the peak and split it into them")
+        self.keepUnsplitAction = A("Keep unsplit (no automatic deconvolution split)", lambda: self.keep_unsplit(True),
+                                   None, None, "Integrate the selected peak as one peak although the "
+                                   "integration method splits co-eluted peaks automatically")
+        self.allowSplitAction = A("Allow automatic deconvolution split", lambda: self.keep_unsplit(False), None,
+                                  None, "Remove the Keep unsplit mark of the selected peak")
         self.tool_actions = {}
         group = QActionGroup(self)
         group.setExclusive(True)
@@ -444,7 +449,8 @@ class MainWindow(QMainWindow):
         self.props.assignBlanksRequested.connect(self.assign_blanks)
         self.props.roleRequested.connect(self.set_role)
         self.table.set_context_actions([self.spectrumSearchNistAction, self.spectrumSearchAtlasAction,
-                                        self.registerUnknownAction, self.setIstdAction, self.splitDeconvAction])
+                                        self.registerUnknownAction, self.setIstdAction, self.splitDeconvAction,
+                                        self.keepUnsplitAction, self.allowSplitAction])
         self.table.searchRequested.connect(self.library_search)
         self.table.integrateRequested.connect(self.integrate)
         for plot in self.chroms:
@@ -773,6 +779,11 @@ class MainWindow(QMainWindow):
         v["key"] = self.search_key(v.get("target", "TIC"))
         only = self.shown_peaks(ids, v["key"]) if v.get("only_shown") else None
         items, protected = build_items(self.ws, ids, v["key"], v["mode"], v["rescan"], v["skip"], only)
+        from gcws.core.keys import is_fid
+        if not is_fid(v["key"]):         # deconvoluted FID fragments: their own component spectrum
+            from gcws.identify.service import fragment_items
+            items += fragment_items(self.ws, ids, FID, v["rescan"], v["skip"],
+                                    self.shown_peaks(ids, FID) if v.get("only_shown") else None)[0]
         if not items:
             QMessageBox.information(self, "Library search", "No peaks with MS data to search.")
             return
@@ -1108,6 +1119,16 @@ class MainWindow(QMainWindow):
             return
         if scope == "peak" and self.ws.selected_peak() is None:
             scope = "run"
+        if scope == "peak":
+            from gcws.integration.auto_deconv import AUTO_UID
+            dc = self.ws.selected_peak().extra.get("deconv_component") or {}
+            if str(dc.get("id", "")).startswith(AUTO_UID + "-"):
+                QMessageBox.information(self, "Deconvolution", "This peak was split automatically by the "
+                                        "integration method (Automatic deconvolution split). To split it "
+                                        "differently, choose Keep unsplit (no automatic deconvolution split) "
+                                        "in the right-click menu of the peak table first, then split the "
+                                        "whole peak here.")
+                return
         old = getattr(self, "_deconv_dialog", None)
         if old is not None:
             try:
@@ -1117,6 +1138,38 @@ class MainWindow(QMainWindow):
         self._deconv_dialog = dlg = DeconvolutionDialog(self, scope)
         dlg.setAttribute(Qt.WA_DeleteOnClose)
         dlg.show()
+
+    def keep_unsplit(self, keep: bool):
+        """Mark the selected peak (an automatically split peak: its parent) as *Keep unsplit*, or
+        remove the mark (``keep`` False)."""
+        from gcws.integration import auto_deconv as AD
+        st, key, peak = self.ws.active, self.ws.active_key, self.ws.selected_peak()
+        if st is None or peak is None:
+            return
+        dc = peak.extra.get("deconv_component") or {}
+        auto = str(dc.get("id", "")).startswith(AD.AUTO_UID + "-")
+        span = tuple(dc["parent_span"]) if auto and dc.get("parent_span") else (peak.start, peak.end)
+        events = list(st.events(key))
+        marks = [e for e in events if e.kind.name == "SPLIT" and e.option == AD.KEEP_OPTION and e.enabled
+                 and e.t0 - 1e-6 <= peak.apex_rt <= (e.t1 if e.t1 is not None else e.t0) + 1e-6]
+        if keep:
+            if marks:
+                self.statusBar().showMessage("The peak is already kept unsplit.", 6000)
+                return
+            if dc and not auto:
+                self.statusBar().showMessage("The peak was split by hand: undo or delete that split in the "
+                                             "Manual events tab instead.", 8000)
+                return
+            parent = next((p for p in (st.presplit.get(key).peaks if st.presplit.get(key) else [])
+                           if abs(p.start - span[0]) < 1e-6 and abs(p.end - span[1]) < 1e-6), peak)
+            st.undo.push(ManualEventsCommand(self.ws, st.id, key, events + [AD.keep_marker(parent)],
+                                             f"keep peak {parent.apex_rt:.3f} unsplit"))
+            return
+        if not marks:
+            self.statusBar().showMessage("The peak has no Keep unsplit mark.", 6000)
+            return
+        st.undo.push(ManualEventsCommand(self.ws, st.id, key, [e for e in events if e not in marks],
+                                         f"allow the automatic split of peak {peak.apex_rt:.3f}"))
 
     def register_unknown(self):
         from gcws.ui.dialogs.register import save_unknown
@@ -1404,7 +1457,8 @@ class MainWindow(QMainWindow):
         for st in self.ws.states():
             for key, dig in st.saved_digests.items():
                 res = self.ws.result(st.id, key)
-                if res is not None and res.digest != dig:
+                # a split still being deconvoluted in the background is compared when it is done
+                if res is not None and res.digest != dig and not self.ws.split_pending(st, key):
                     changed.append(f"{st.name} ({key})")
         if data.get("active") in self.ws.runs:
             self.ws.set_active(data["active"])

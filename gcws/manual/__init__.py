@@ -47,7 +47,8 @@ def _sources() -> dict:
 def _labels() -> dict:
     """Settings whose stored value is a key: the text the window shows for it."""
     from gcws.ui.dialogs.blank import MODES, SOURCES
-    return {("BlankOptions", "source"): SOURCES, ("BlankOptions", "mode_fid"): MODES,
+    from gcws.ui.docks.events import DECONV_MODES
+    return {("IntegrationMethod", "deconv_split"): DECONV_MODES,("BlankOptions", "source"): SOURCES, ("BlankOptions", "mode_fid"): MODES,
             ("BlankOptions", "mode_ms"): MODES, ("BlankOptions", "align"): {"auto": "on", "off": "off"}}
 
 
@@ -58,6 +59,8 @@ def _show(value) -> str:
         return "on" if value else "off"
     if isinstance(value, float):
         return f"{value:g}"
+    if isinstance(value, (list, tuple)):
+        return ", ".join(_show(v) for v in value)
     return str(value)
 
 
@@ -72,7 +75,8 @@ def value(name: str, attr: str | None = None, percent: bool = False) -> str:
             default = f.default if f.default is not dataclasses.MISSING else                 f.default_factory() if f.default_factory is not dataclasses.MISSING else None
             if percent:
                 return f"{default * 100:g} %"
-            return _labels().get((name, attr), {}).get(default) or _show(default)
+            labels = _labels().get((name, attr), {})
+            return (labels.get(default) if isinstance(default, str) else None) or _show(default)
     raise KeyError(f"{name}.{attr}")
 
 

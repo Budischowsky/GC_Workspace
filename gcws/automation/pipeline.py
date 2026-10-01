@@ -306,9 +306,12 @@ def run_features(ws, members: list) -> dict:
     applied = getattr(table, "applied", {}) or {}
     gap = sum(1 for f in table.features for m in f.members if m.origin == "gapfill")
     counts = table.counts()
-    out.update(features=len(table.features), gap_fills=gap, names=applied.get("identity", 0),
+    out.update(features=len(table.features), gap_fills=gap, splits=applied.get("split", 0),
+               names=applied.get("identity", 0),
                boundaries=applied.get("boundary", 0), lights=counts, notes=list(table.notes))
-    text = (f"{' + '.join(names)}: {len(table.features)} features, {gap} gap fill(s), "
+    text = (f"{' + '.join(names)}: {len(table.features)} features, "
+            + (f"{applied.get('split', 0)} split(s) carried over, " if applied.get("split") else "")
+            + f"{gap} gap fill(s), "
             f"{applied.get('identity', 0)} name(s), {applied.get('boundary', 0)} boundaries harmonised; "
             f"{counts.get('red', 0)} red, {counts.get('yellow', 0)} yellow")
     ws.log("Automation: double determination (features)", " / ".join(names), text + "; " + "; ".join(table.notes))
@@ -348,7 +351,8 @@ def evidence_for(ws, members: list, *, kind: str = "nias", require: str = "auto"
             "quantified": sample is not None,
             "quant_error": (ws.quant_result.errors.get(rid) if ws.quant_result else "") or "",
             "blank_ok": chk.ok, "blank_text": chk.text, "blanks": chk.assigned,
-            "istd_detection": (detection or {}).get(rid, {})})
+            "istd_detection": (detection or {}).get(rid, {}),
+            "deconvolution": _safe(deconvolution_evidence, ws, rid, sample)})
     try:
         features = feature_evidence(ws, members)
     except Exception:  # noqa: BLE001 - the other rules still work
@@ -357,6 +361,50 @@ def evidence_for(ws, members: list, *, kind: str = "nias", require: str = "auto"
             "features": features,
             "settings": {"reporting_limit": getattr(s, "reporting_limit", 0.01),
                          "duplicate_max_reldiff": getattr(s, "duplicate_max_reldiff", 30.0)}}
+
+
+def _safe(fn, *args) -> dict:
+    try:
+        return fn(*args)
+    except Exception:  # noqa: BLE001 - the other evidence still counts
+        log.error(traceback.format_exc())
+        return {}
+
+
+def deconvolution_evidence(ws, run_id: str, sample=None) -> dict:
+    """What the automatic deconvolution split did in ``run_id`` (quantification signal): per split
+    parent its time, area basis, fragment names, the highest fragment concentration and a split
+    internal standard."""
+    from gcws.ms.assignment import fragment_id
+    from gcws.quant.service import quant_detector
+    st = ws.runs.get(run_id)
+    key = quant_detector(ws.quant)
+    plan = (getattr(st, "auto_split", None) or {}).get(key) if st is not None else None
+    res = ws.result(run_id, key) if st is not None else None
+    if plan is None or res is None or not plan.events:
+        return {}
+    idents, _ = st.ident_set(key).bind(res.peaks)
+    conc = {}
+    for row in getattr(sample, "rows", None) or []:
+        d = getattr(row, "derived", None) or {}
+        if d.get("gcws_index") is not None and d.get("mg_kg") is not None:
+            conc[d["gcws_index"]] = d["mg_kg"]
+    standards = [(s.get("code") or s.get("name"), float(s["fid_rt"]))
+                 for s in getattr(sample, "standards", None) or [] if s.get("fid_rt")]
+    splits, fragments = [], 0
+    for event, p in zip(plan.events, plan.plans):
+        parts = [i for i, pk in enumerate(res.peaks) if fragment_id(pk).startswith(event.uid + ":")]
+        fragments += len(parts)
+        entry = {"rt": p.peak.apex_rt, "basis": p.basis, "note": p.basis_note, "fragments": len(parts),
+                 "names": " / ".join((idents[i].name if i in idents and idents[i].name else "?") for i in parts),
+                 "max_conc": max((conc[i] for i in parts if conc.get(i) is not None), default=None)}
+        for i in parts:
+            pk = res.peaks[i]
+            code = next((c for c, rt in standards if abs(rt - pk.apex_rt) <= 0.02), None)
+            if code:
+                entry["istd"], entry["istd_share"] = code, pk.extra["deconv_component"].get("weight")
+        splits.append(entry)
+    return {"splits": splits, "fragments": fragments}
 
 
 def slim_rows(result, cas_info: Optional[dict] = None) -> list[dict]:

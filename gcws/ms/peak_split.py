@@ -56,6 +56,7 @@ class SplitPlan:
     areas: list[float] = field(default_factory=list)
     points: list[float] = field(default_factory=list)
     problem: str = ""                       # why the peak cannot be split ("" = it can)
+    limits: Optional["Limits"] = None       # thresholds (None: the component_fit defaults)
 
     @property
     def ok(self) -> bool:
@@ -119,6 +120,14 @@ class SplitPlan:
                             profiles=[c.shape.points() if c.shape is not None else None for c in comps])
 
 
+@dataclass(frozen=True)
+class Limits:
+    """Thresholds of a split plan (the automatic split takes them from the integration method)."""
+    min_sn: float = F.SUGGEST_MIN_SN
+    min_share: float = F.SUGGEST_MIN_SHARE
+    fit_r2: float = F.FIT_MIN_R2
+
+
 def _get(item, key, default=None):
     return item.get(key, default) if isinstance(item, dict) else getattr(item, key, default)
 
@@ -141,17 +150,18 @@ def candidates_in(components, peak, key: str, delay: float) -> list:
                   key=lambda c: float(_get(c, "rt")))
 
 
-def _weak_reason(component, share: float) -> str:
+def _weak_reason(component, share: float, limits: Optional[Limits] = None) -> str:
+    limits = limits or Limits()
     sn = _get(component, "s_n")
-    if sn is not None and math.isfinite(float(sn)) and 0 < float(sn) < F.SUGGEST_MIN_SN:
-        return f"S/N {float(sn):.0f} < {F.SUGGEST_MIN_SN:.0f}"
-    if math.isfinite(share) and share < F.SUGGEST_MIN_SHARE:
+    if sn is not None and math.isfinite(float(sn)) and 0 < float(sn) < limits.min_sn:
+        return f"S/N {float(sn):.0f} < {limits.min_sn:.0f}"
+    if math.isfinite(share) and share < limits.min_share:
         return f"{100 * share:.1f} % of the signal"
     return ""
 
 
 def plan_split(signal, peak, key: str, delay: float, components, checked: Optional[Sequence[int]] = None,
-               riders: Sequence[tuple[float, float]] = ()) -> SplitPlan:
+               riders: Sequence[tuple[float, float]] = (), limits: Optional[Limits] = None) -> SplitPlan:
     """Plan the split of ``peak`` on ``signal`` (the trace of ``key``).
 
     ``components`` may be all components of the deconvolution window; only those
@@ -161,7 +171,7 @@ def plan_split(signal, peak, key: str, delay: float, components, checked: Option
     delay = float(delay)
     shift0 = delay if is_fid(key) else 0.0
     cands = [Candidate(c, F.Shape.of(c)) for c in candidates_in(components, peak, key, delay)]
-    plan = SplitPlan(key, delay, peak, cands, [])
+    plan = SplitPlan(key, delay, peak, cands, [], limits=limits)
     if base_key(key) not in ("FID", "TIC"):
         plan.problem = "Splitting by components supports FID and TIC peaks only."
         return plan
@@ -185,7 +195,7 @@ def plan_split(signal, peak, key: str, delay: float, components, checked: Option
         for c, a in zip(cands, areas):
             c.share = float(a / areas.sum()) if areas.sum() > 0 else math.nan
     for c in cands:
-        c.reason = _weak_reason(c.component, c.share)
+        c.reason = _weak_reason(c.component, c.share, limits)
         c.suggested = not c.reason
     plan.checked = sorted(set(checked)) if checked is not None else [i for i, c in enumerate(cands) if c.suggested]
     plan.checked = [i for i in plan.checked if 0 <= i < len(cands)]
@@ -197,7 +207,7 @@ def replan(plan: SplitPlan, checked: Sequence[int]) -> SplitPlan:
     """``plan`` with other checked candidates: one fit, the same candidates and suggestions."""
     new = SplitPlan(plan.key, plan.delay, plan.peak, plan.candidates,
                     sorted({i for i in checked if 0 <= i < len(plan.candidates)}),
-                    t=plan.t, y=plan.y, mask=plan.mask, first=plan.first)
+                    t=plan.t, y=plan.y, mask=plan.mask, first=plan.first, limits=plan.limits)
     if plan.t.size < 3:                  # refused before any fit: nothing a selection can change
         new.problem = plan.problem
         return new
@@ -224,8 +234,8 @@ def _allocate(plan: SplitPlan, shift0: float) -> None:
     fit = plan.fit
     if fit is None:
         plan.basis_note = "no elution profile"
-    elif fit.r2 < F.FIT_MIN_R2:
-        plan.basis_note = f"fit R² {fit.r2:.3f} < {F.FIT_MIN_R2:.2f}"
+    elif fit.r2 < (plan.limits or Limits()).fit_r2:
+        plan.basis_note = f"fit R² {fit.r2:.3f} < {(plan.limits or Limits()).fit_r2:.2f}"
     elif fit.collinear is not None:
         i, j = fit.collinear
         plan.basis_note = (f"components {float(_get(used[i].component, 'rt')):.3f} and "

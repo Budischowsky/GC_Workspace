@@ -181,6 +181,7 @@ save the project, **More > Report again from the (edited) project**, then **Acce
 | **No SML above the reporting limit** | no | a substance at or above the reporting limit has no SML. |
 | **Substance above a concentration** | no | any substance, or those matching a name or CAS pattern, is above a concentration you set. |
 | **Many unidentified substances** | no | there are more unidentified substances than allowed. |
+| **Automatic deconvolution split** | yes (note only) | a peak split automatically had its areas divided by the MS component proportions (at or above the reporting limit), or an internal standard peak was split. How many peaks were split is listed too. |
 
 With **Also make these the default rules for new Report² steps** the rules become the starting point for new
 workflows. A workflow's Report² step can have its own.

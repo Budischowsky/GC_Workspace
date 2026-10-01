@@ -93,9 +93,11 @@ def identify(ws, run_ids: list[str], cfg, progress: Callable[[str], None] = lamb
              timeout: Optional[float] = None):
     """Library search of every peak of ``run_ids`` (``cfg``: :class:`gcws.core.proc_method.SearchConfig`);
     the names are applied as the interactive search does (TIC names copied to the FID peaks)."""
-    from gcws.identify.service import apply_search_results, build_items, run_search_blocking
+    from gcws.identify.service import apply_search_results, build_items, fragment_items, run_search_blocking
     key = cfg.target if cfg.target in (FID, TIC) else TIC
     items, protected = build_items(ws, run_ids, key, cfg.mode)
+    if key != FID:                   # deconvoluted FID fragments: their own component spectrum
+        items += fragment_items(ws, run_ids, FID)[0]
     if not items:
         return None
     done = run_search_blocking(items, cfg.method, fast=cfg.fast, progress=progress, timeout=timeout)

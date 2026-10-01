@@ -75,6 +75,8 @@ Right-click a row:
 | **Register selected peak as unknown...** | Stores it in the unknown register. |
 | **Set selected peak as ISTD** | Binds it to an internal standard. |
 | **Split by deconvolution...** | Splits the peak into its components. |
+| **Keep unsplit (no automatic deconvolution split)** | The automatic deconvolution split leaves this peak as one peak. |
+| **Allow automatic deconvolution split** | Removes that mark. |
 | **Delete peak(s)** | Deletes the marked peaks. |
 
 ### Columns
@@ -146,7 +148,9 @@ The menu of the panel is the **Mass Spectrum** menu, see [Menus](ref-menus.md#ma
 | **Auto parameters** | Sets peak width, slope sensitivity, threshold and smoothing back to automatic. |
 
 **Parameters** tab: see [Settings and defaults](ref-settings.md#integration-method). A value with **Auto**
-ticked is chosen by the program from the signal.
+ticked is chosen by the program from the signal. The group **Automatic deconvolution split** below the
+parameters splits co-eluted peaks by their MS components and shows how many were split
+(see [Settings and defaults](ref-settings.md#automatic-deconvolution-split)).
 
 **Timed events** tab: a table of **Time [min]**, **Event** and **Value**. **Add event** adds a row,
 **Remove** deletes the selected one. See [Settings and defaults](ref-settings.md#timed-events).
