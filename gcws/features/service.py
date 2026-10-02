@@ -159,26 +159,37 @@ def consensus(ws, table: FeatureTable, cfg: Settings, members: list[str], search
 
 
 def build(ws, members: list[str], group: Optional[dict] = None, cfg: Optional[Settings] = None,
-          key: Optional[str] = None, *, gapfill: bool = True, search: bool = True) -> FeatureTable:
+          key: Optional[str] = None, *, gapfill: bool = True, search: bool = True,
+          progress=None) -> FeatureTable:
     """The feature table of the determinations ``members`` (the first is the reference);
     ``search``: the consensus spectra may be searched in the libraries (else only cached hits)."""
     cfg = cfg or settings(ws)
     key = key or quant_key(ws)
     group = group if group is not None else group_of(ws, members)
-    inputs = collect(ws, [m for m in members if m in ws.runs], key, cfg.noise_floor)
+    inputs = collect(ws, [m for m in members if m in ws.runs], key, cfg.noise_floor, progress)
+    if progress:
+        progress("Aligning peaks…")
     table = AL.align(inputs, cfg)
     previous = ((group or {}).get("features") or {}).get("ids")
     IDS.stable_ids(table.features, previous, cfg.rt_tol)
     table.inputs = inputs
     if gapfill and cfg.split_sync and len(inputs) > 1:
+        if progress:
+            progress("Checking deconvolution splits…")
         SS.propose_table(ws, table, cfg)
     if gapfill and cfg.gap_fill and len(inputs) > 1:
+        if progress:
+            progress("Checking missing peaks…")
         runs = {r.run_id: ws.runs[r.run_id].run for r in inputs}
         noise = {r.run_id: noise_pp(ws, r.run_id, key) for r in inputs}
         GF.fill_table(table, runs, noise, cfg)
     if cfg.harmonise and len(inputs) > 1:
+        if progress:
+            progress("Harmonising boundaries…")
         HM.propose_table(table, cfg, {r.run_id: ws.runs[r.run_id].run for r in inputs})
     if len(inputs) > 1:
+        if progress:
+            progress("Resolving identities…")
         consensus(ws, table, cfg, [r.run_id for r in inputs], search)
     return table
 
@@ -278,26 +289,30 @@ def pending(ws, members: list[str], table: FeatureTable) -> list:
 
 
 def run(ws, members: list[str], cfg: Optional[Settings] = None, *, apply_auto: Optional[bool] = None,
-        stack=None, apply_boundaries: bool = False) -> FeatureTable:
+        stack=None, apply_boundaries: bool = False, progress=None, search: bool = True) -> FeatureTable:
     """Build the table, make its automatic proposals (``cfg.apply_auto``) -- each only once, so an
     analyst's undo sticks -- build again and keep the ids. ``apply_boundaries`` (the automation)
     also makes the harmonised boundaries, which the panel only proposes, as a second undo step.
     ``table.applied`` counts what was made (gapfill / identity / boundary)."""
     cfg = cfg or settings(ws)
     group = group_of(ws, members)
-    table = build(ws, members, group, cfg)
+    table = build(ws, members, group, cfg, progress=progress, search=search)
     applied = {"split": 0, "gapfill": 0, "identity": 0, "boundary": 0}
     auto = cfg.apply_auto if apply_auto is None else apply_auto
     # a carried-over split changes the peaks the gap fills and names are made for: one more round
     for _round in range(2):
         props = pending(ws, members, table) if auto else []
+        if props and not search and cfg.consensus_search:
+            waiting = consensus_needed(ws, table, cfg)
+            deferred = {id(p) for _key, f in waiting for p in f.proposals if p.kind == "identity"}
+            props = [p for p in props if id(p) not in deferred]
         if not (props and apply(ws, table, props, stack=stack)):
             break
         for p in props:
             applied[p.kind] = applied.get(p.kind, 0) + 1
         _remember_done(ws, members, {signature(p) for p in props})
         remember_ids(ws, members, table)
-        table = build(ws, members, group_of(ws, members), cfg)
+        table = build(ws, members, group_of(ws, members), cfg, progress=progress, search=search)
         if not any(p.kind == "split" for p in props):
             break
     if apply_boundaries:
@@ -309,7 +324,7 @@ def run(ws, members: list[str], cfg: Optional[Settings] = None, *, apply_auto: O
             applied["boundary"] = n_peaks
             _remember_done(ws, members, {signature(p) for p in bounds})
             remember_ids(ws, members, table)
-            table = build(ws, members, group_of(ws, members), cfg)
+            table = build(ws, members, group_of(ws, members), cfg, progress=progress, search=search)
     remember_ids(ws, members, table)
     table.applied = applied
     return table

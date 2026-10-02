@@ -105,6 +105,7 @@ class Workspace(QObject):
     replicatesChanged = QtSignal()
     quantChanged = QtSignal()
     deconvChanged = QtSignal(str)              # run id: whole-run deconvolution available / dropped
+    deconvJobChanged = QtSignal(str, bool, str)  # job id, running, status-bar label
     spectrumChanged = QtSignal(str)            # run id: analyst changed a spectrum assignment
     solventCutChanged = QtSignal()
     orderChanged = QtSignal()
@@ -512,20 +513,26 @@ class Workspace(QObject):
             return
         self._deconv_jobs.add(job)
         run_id, cut = st.id, job[2]
+        activity_key = f"deconv:{run_id}:{job[1]}:{cut}"
+        self.deconvJobChanged.emit(activity_key, True, f"Deconvoluting {st.name}…")
 
         def done(comps):
             self._deconv_jobs.discard(job)
-            s = self.runs.get(run_id)
-            if s is None or self.solvent_cut(s, "TIC") != cut:
-                return
-            DC.store_whole_run(s, settings, comps)
-            self.deconvChanged.emit(run_id)
-            for key in list(s.results):
-                if AD.enabled(self._method_of(s, key)):
-                    self.integrate(run_id, key)
+            try:
+                s = self.runs.get(run_id)
+                if s is not st or self.solvent_cut(s, "TIC") != cut:
+                    return
+                DC.store_whole_run(s, settings, comps)
+                self.deconvChanged.emit(run_id)
+                for key in list(s.results):
+                    if AD.enabled(self._method_of(s, key)):
+                        self.integrate(run_id, key)
+            finally:
+                self.deconvJobChanged.emit(activity_key, False, "")
 
         def failed(error):
             self._deconv_jobs.discard(job)
+            self.deconvJobChanged.emit(activity_key, False, "")
             self.message.emit(f"Deconvolution of {st.name} failed: {error.splitlines()[0]}")
 
         self.message.emit(f"Deconvoluting {st.name} for the automatic split ...")

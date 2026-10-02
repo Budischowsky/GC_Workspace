@@ -323,6 +323,7 @@ def fill_table(table, runs: dict, noise: dict, settings: Settings) -> None:
     run id -> peak-to-peak noise of the quantification signal); sets the members' origin and note
     and adds the gap-fill proposals (ADD_PEAK events with the option ``"gapfill"``)."""
     from gcws.core.events import ManualEvent, ManualKind
+    ratios: dict[tuple[str, str], float] = {}
     for f in table.features:
         if not f.found or f.split:
             continue
@@ -333,7 +334,10 @@ def fill_table(table, runs: dict, noise: dict, settings: Settings) -> None:
             if ri is None:
                 continue
             src = max(f.found, key=lambda x: x.peak.height)
-            ratio = height_ratio(table, src.run_id, m.run_id)
+            pair = (src.run_id, m.run_id)
+            if pair not in ratios:
+                ratios[pair] = height_ratio(table, *pair)
+            ratio = ratios[pair]
             res = fill(f, m.run_id, runs.get(m.run_id), ri, table.maps.get(m.run_id), settings,
                        noise.get(m.run_id, 0.0), ratio)
             if not res.ok:

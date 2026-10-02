@@ -1,4 +1,6 @@
 """Feature double determination, P66: consensus spectrum and consensus identification."""
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -68,6 +70,29 @@ def test_consensus_search_decides():
     assert "consensus spectrum" in ident.basis
     (p,) = C.write_back(f, ident, "FID")
     assert p.run_id == "a" and p.ident.name == "Ethylbenzene"
+
+
+def test_async_comparison_defers_identity_until_consensus(monkeypatch):
+    from gcws.features import service as SV
+    from gcws.features.model import FeatureTable, Proposal
+
+    f = feature(member("A", hits((*X, 86), (*Y, 84))), member("B", hits((*Y, 85), (*X, 84.5))))
+    f.proposals = [Proposal("identity", "b", "FID", "rename", ident=Identification(10.0, name=X[0]), rt=10.0)]
+    table = FeatureTable(["a", "b"], ["A", "B"], "FID", [f], settings=Settings())
+    ws = SimpleNamespace(quant={}, runs={}, replicate_groups=[])
+    monkeypatch.setattr(SV, "build", lambda *args, **kwargs: table)
+    applied = []
+    monkeypatch.setattr(SV, "apply", lambda _ws, _table, props, **kwargs: applied.extend(props) or 0)
+
+    SV.run(ws, ["a", "b"], search=False)
+    assert applied == []
+    needed = SV.consensus_needed(ws, table, Settings())
+    assert len(needed) == 1
+
+    f.consensus_hits = hits((*Y, 90), (*X, 80))
+    SV.store_consensus(ws, needed)
+    SV.run(ws, ["a", "b"], search=False)
+    assert applied == f.proposals
 
 
 def test_case_d_mismatch():

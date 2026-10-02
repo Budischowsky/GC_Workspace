@@ -28,7 +28,7 @@ import uuid
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QThread, QTimer, Qt, Signal as QtSignal
+from PySide6.QtCore import QTimer, Qt, Signal as QtSignal
 from PySide6.QtGui import QBrush, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame,
                                QHBoxLayout, QHeaderView, QLabel, QMenu, QPushButton, QSplitter,
@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog
 
 from gcws.core.model import FID
 from gcws.quant import duplicate_view as DV
-from gcws.ui import theme
+from gcws.ui import theme, workers
 from gcws.ui.icons import color_chip
 
 #: SNIP window (min) of the baseline removed from the mirror plot's traces: wider than any peak
@@ -62,23 +62,6 @@ class _AbsAxis(pg.AxisItem):
 
     def tickStrings(self, values, scale, spacing):
         return super().tickStrings([abs(v) for v in values], scale, spacing)
-
-
-class _ConsensusSearch(QThread):
-    """The library search of the consensus spectra (it may load the libraries first)."""
-    finished_note = QtSignal(str)
-
-    def __init__(self, method, features, parent=None):
-        super().__init__(parent)
-        self.method, self.features = method, features
-
-    def run(self):
-        from gcws.features.consensus import search_consensus
-        try:
-            note = search_consensus(None, self.method, self.features)
-        except Exception as exc:  # noqa: BLE001 - reported in the banner
-            note = f"consensus search failed: {exc}"
-        self.finished_note.emit(note)
 
 
 class _Card(QFrame):
@@ -426,9 +409,15 @@ class DuplicatePage(QWidget):
             self._refresh.start()
             return
         self._comparing = True
+        window = self.window()
+        activity = f"compare:{id(self)}"
+        if hasattr(window, "begin_activity"):
+            window.begin_activity(activity, "Comparing determinations…")
         try:
             self._compare(sync)
         finally:
+            if hasattr(window, "end_activity"):
+                window.end_activity(activity)
             self._comparing = False
 
     def _compare(self, sync: bool = False):
@@ -448,21 +437,30 @@ class DuplicatePage(QWidget):
         self.table_features = None
         if len(self.members) >= 2 and self.features_mode() and not DV.member_problems(self.ws, self.members):
             from gcws.features import service as SV
+            window = self.window()
+            progress = (lambda message: window.update_activity(f"compare:{id(self)}", message)) \
+                if hasattr(window, "update_activity") else None
             if self.ws.quant_result is None:
                 self.ws.recompute_quant()
             # a deliberate Compare makes the automatic changes (each only once); a refresh only shows
             stack = self._stack()
             before = (stack.count(), stack.index())
-            table = SV.run(self.ws, self.members, apply_auto=None if sync else False, stack=stack)
+            table = SV.run(self.ws, self.members, apply_auto=None if sync else False, stack=stack,
+                           progress=progress, search=False)
             if (stack.count(), stack.index()) != before:
                 self.ws.recompute_quant()              # the gap-filled peaks get their concentrations now
             self.table_features = DV.features_table(self.ws, self.members, table)
+        window = self.window()
+        if hasattr(window, "update_activity"):
+            window.update_activity(f"compare:{id(self)}", "Preparing comparison table…")
         rows, problems = DV.compute(self.ws, self.members, "all")
         limit, rl = DV.limits(self.ws)
         labels = self.labels()
         unit = self.ws.quant_unit()
         verdicts = [DV.plain_verdict(r, limit, rl, labels, unit) for r in rows]
         self.base_rows = rows
+        if hasattr(window, "update_activity"):
+            window.update_activity(f"compare:{id(self)}", "Drawing comparison results…")
         self._show(DV.apply_edits(rows, verdicts, self.edits(), self._tol()), verdicts, problems)
         if self.table_features is not None:
             self._start_consensus_search()
@@ -990,6 +988,7 @@ class DuplicatePage(QWidget):
     def _start_consensus_search(self):
         """Search the consensus spectra still unknown (worker thread), then compare again."""
         from gcws.features import service as SV
+        from gcws.features.consensus import search_consensus
         t = self.table_features
         if t is None or self._search is not None or not SV.settings(self.ws).consensus_search:
             return
@@ -997,18 +996,22 @@ class DuplicatePage(QWidget):
         if not needed:
             return
         self._search_needed = needed
-        self._search = _ConsensusSearch(SV.search_method(self.ws, t.members), [f for _k, f in needed], self)
-        self._search.finished_note.connect(self._consensus_found)
         self.banner.setText(self.banner.text() + f"  Searching {len(needed)} consensus spectra…")
-        self._search.start()
+        window = self.window()
+        if hasattr(window, "begin_activity"):
+            window.begin_activity(f"consensus:{id(self)}", f"Searching {len(needed)} spectra…")
+        self._search = workers.submit(
+            search_consensus, None, SV.search_method(self.ws, t.members), [f for _k, f in needed],
+            on_done=self._consensus_found,
+            on_error=lambda error: self._consensus_found(f"consensus search failed: {error.splitlines()[0]}"))
 
     def _consensus_found(self, note: str):
         from gcws.features import service as SV
         needed, self._search_needed = getattr(self, "_search_needed", []), []
-        if self._search is not None:
-            self._search.wait()
-            self._search.deleteLater()
         self._search = None
+        window = self.window()
+        if hasattr(window, "end_activity"):
+            window.end_activity(f"consensus:{id(self)}")
         SV.store_consensus(self.ws, needed, note)
         if self.isVisible() and self.members:
             self.compare(sync=True)

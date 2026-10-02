@@ -31,6 +31,25 @@ def _load(qtbot, w, samples, prefixes):
     qtbot.waitUntil(lambda: w.loading == 0 and len(w.ws.runs) == len(paths), timeout=60000)
 
 
+def test_bottom_activity_keeps_running_jobs_visible(win):
+    win.begin_activity("deconv:a", "Deconvoluting A")
+    assert win.activity.isVisible()
+    assert "Deconvoluting A" in win.activity.format()
+    win.begin_activity("compare", "Comparing determinations")
+    assert "Comparing determinations" in win.activity.format()
+    win.update_activity("compare", "Reading A: 25/600 peaks")
+    assert "25/600 peaks" in win.activity.format()
+    win.end_activity("compare")
+    assert win.activity.isVisible()
+    assert "Deconvoluting A" in win.activity.format()
+    win.end_activity("deconv:a")
+    assert not win.activity.isVisible()
+
+
+def test_interactive_auto_deconvolution_uses_background_worker(win):
+    assert win.ws.deconv_background
+
+
 def test_load_tabs_and_overlay(qtbot, win, samples):
     _load(qtbot, win, samples, ["08_", "07_"])
     names = [win.loaded_samples.item(i).text() for i in range(win.loaded_samples.count())]

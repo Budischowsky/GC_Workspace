@@ -48,6 +48,7 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(icon("integrate"))
         self.resize(1600, 950)
         self.ws = Workspace(self)
+        self.ws.deconv_background = True
         self.tools = ToolController(self.ws)
         self.docks: dict[str, QDockWidget] = {}
         self.loading = 0
@@ -409,6 +410,12 @@ class MainWindow(QMainWindow):
 
     def _build_status(self):
         sb = self.statusBar()
+        self._activity_jobs: dict[str, str] = {}
+        self.activity = QProgressBar()
+        self.activity.setRange(0, 0)
+        self.activity.setMaximumWidth(225)
+        self.activity.setTextVisible(True)
+        self.activity.hide()
         self.progress = QProgressBar()
         self.progress.setMaximumWidth(220)
         self.progress.setTextVisible(True)
@@ -426,11 +433,36 @@ class MainWindow(QMainWindow):
         self.method_label.setToolTip("The processing method loaded or saved last (Method menu)")
         sb.addPermanentWidget(self.method_label)
         self._show_method_name()
+        sb.addPermanentWidget(self.activity)
         sb.addPermanentWidget(self.progress)
         sb.addPermanentWidget(self.cancel_btn)
 
+    def begin_activity(self, key: str, label: str) -> None:
+        """Show ongoing processing in the bottom status bar."""
+        self._activity_jobs[key] = label
+        self.activity.setFormat(label)
+        self.activity.show()
+        self.activity.repaint()
+
+    def update_activity(self, key: str, label: str) -> None:
+        if key not in self._activity_jobs:
+            return
+        self._activity_jobs[key] = label
+        if next(reversed(self._activity_jobs)) == key:
+            self.activity.setFormat(label)
+            self.activity.repaint()
+
+    def end_activity(self, key: str) -> None:
+        self._activity_jobs.pop(key, None)
+        if self._activity_jobs:
+            self.activity.setFormat(next(reversed(self._activity_jobs.values())))
+        else:
+            self.activity.hide()
+
     def _connect(self):
         self.tree.loadRequested.connect(self.load_runs)
+        self.ws.deconvJobChanged.connect(lambda key, active, label:
+                                         self.begin_activity(key, label) if active else self.end_activity(key))
         self.tools.eventCreated.connect(self._manual_event)
         self.tools.toolChanged.connect(self._tool_changed)
         self.ws.message.connect(lambda t: self.statusBar().showMessage(t, 8000))

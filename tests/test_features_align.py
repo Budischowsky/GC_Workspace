@@ -148,6 +148,28 @@ def test_split_one_peak_here_two_there():
     assert "inside the peak" in lone.members[0].note
 
 
+def test_split_detection_scales_with_nearby_features(monkeypatch):
+    """A large pair must not inspect every distant feature for each peak."""
+    from gcws.features.model import Feature
+
+    spec = spectrum(73)
+    a = run("a", "A", [peak(i, 5.0 + i * 0.05, spec) for i in range(600)])
+    b = run("b", "B", [peak(i, 5.003 + i * 0.05, spec) for i in range(600)])
+    original = Feature.member
+    calls = 0
+
+    def counted(self, run_id):
+        nonlocal calls
+        calls += 1
+        return original(self, run_id)
+
+    monkeypatch.setattr(Feature, "member", counted)
+    table = AL.align([a, b], Settings(max_shift=0.0))
+    assert len(table.features) == 600
+    assert not any(f.split for f in table.features)
+    assert calls < 6000
+
+
 # -- co-eluting ions ------------------------------------------------------------------------------
 
 def test_coeluting_keeps_only_ions_with_the_peak_shape():

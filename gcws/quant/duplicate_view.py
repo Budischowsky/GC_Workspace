@@ -192,6 +192,8 @@ def member_problems(ws, members: list[str]) -> list[str]:
             out.append(f"{st.name}: no {key} signal")
         elif key not in st.results:
             out.append(f"{st.name}: {key} not integrated")
+        elif getattr(ws, "deconv_background", False) and ws.split_pending(st, key):
+            out.append(f"{st.name}: deconvolution in progress")
         elif ws.quant_result is not None and ws.quant_result.errors.get(m):
             out.append(f"{st.name}: {ws.quant_result.errors[m]}")
     return out

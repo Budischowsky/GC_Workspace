@@ -22,6 +22,7 @@ first, at most one peak per determination and feature.
 """
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from typing import Optional
 
@@ -246,19 +247,29 @@ def mark_splits(features: list[Feature]) -> None:
     """One peak in run R where the other determination S has two: feature ``f`` has peaks in R and
     S, feature ``g`` only in S, and ``g``'s apex, taken over to R, lies inside ``f``'s peak in R.
     Both are marked; the gap filler leaves ``g`` alone (its signal is inside ``f``'s peak)."""
+    nearby: dict[tuple[str, str], tuple[list[float], list[tuple[Feature, Member, Member]]]] = {}
+    grouped: dict[tuple[str, str], list[tuple[float, Feature, Member, Member]]] = {}
+    for g in features:
+        for own in (m for m in g.members if not m.found):
+            for y in g.found:
+                if y.rt_ref is not None:
+                    grouped.setdefault((own.run_id, y.run_id), []).append((y.rt_ref, g, own, y))
+    for key, entries in grouped.items():
+        entries.sort(key=lambda item: item[0])
+        nearby[key] = ([item[0] for item in entries], [(g, own, y) for _, g, own, y in entries])
+
     for f in features:
         for m in f.found:
-            partners = [x for x in f.found if x.run_id != m.run_id]
-            if not partners:
+            if m.rt_ref is None:
                 continue
-            for g in features:
-                if g is f:
+            lo = m.rt_ref + m.peak.start - m.peak.rt
+            hi = m.rt_ref + m.peak.end - m.peak.rt
+            for partner in f.found:
+                if partner.run_id == m.run_id:
                     continue
-                own = g.member(m.run_id)
-                if own is None or own.found:
-                    continue
-                for y in g.found:
-                    if y.run_id in {x.run_id for x in partners} and m.peak.start < _in_run(y, m) < m.peak.end:
+                times, entries = nearby.get((m.run_id, partner.run_id), ([], []))
+                for g, own, y in entries[bisect_right(times, lo):bisect_left(times, hi)]:
+                    if g is not f and m.peak.start < _in_run(y, m) < m.peak.end:
                         f.split = g.split = True
                         if not own.note:
                             own.note = f"inside the peak at {m.peak.rt:.3f} min of {m.label}"

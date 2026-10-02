@@ -76,7 +76,8 @@ def peak_spectrum(ws, st, key: str, res, i: int, noise_floor: float) -> tuple:
     return cache[ck]
 
 
-def collect_run(ws, run_id: str, key: str, label: str, noise_floor: float = 0.005) -> Optional[RunInput]:
+def collect_run(ws, run_id: str, key: str, label: str, noise_floor: float = 0.005,
+                progress=None) -> Optional[RunInput]:
     from gcws.ms.assignment import fragment_id
     st = ws.runs.get(run_id)
     res = ws.result(run_id, key) if st is not None else None
@@ -107,6 +108,8 @@ def collect_run(ws, run_id: str, key: str, label: str, noise_floor: float = 0.00
             ident=ident, hits=list(getattr(ident, "hits", []) or []),
             istd=i in istd or bool(getattr(ident, "istd", "")), blank_level=i in blank,
             fragment=fragment_id(p)))
+        if progress is not None and ((i + 1) % 25 == 0 or i + 1 == len(res.peaks)):
+            progress(f"Reading {label}: {i + 1}/{len(res.peaks)} peaks")
     peaks.sort(key=lambda q: q.rt)
     return RunInput(run_id, st.name, label, key, float(st.delay_value), peaks, has_ms, ws.solvent_cut(st, key))
 
@@ -124,11 +127,11 @@ def labels_for(ws, members: list[str]) -> list[str]:
     return out
 
 
-def collect(ws, members: list[str], key: str, noise_floor: float = 0.005) -> list[RunInput]:
+def collect(ws, members: list[str], key: str, noise_floor: float = 0.005, progress=None) -> list[RunInput]:
     labels = labels_for(ws, members)
     out = []
     for m, lab in zip(members, labels):
-        ri = collect_run(ws, m, key, lab, noise_floor)
+        ri = collect_run(ws, m, key, lab, noise_floor, progress)
         if ri is not None:
             out.append(ri)
     return out

@@ -37,6 +37,15 @@ def test_real_pairing_07_11(pair07):
     assert len({f.id for f in table.features}) == len(table.features)
 
 
+def test_comparison_reports_peak_progress(pair07):
+    from gcws.features import service as SV
+    ws, ids = pair07
+    updates = []
+    SV.build(ws, ids, progress=updates.append)
+    assert any("25/" in message and "peaks" in message for message in updates)
+    assert any("Harmonising" in message for message in updates)
+
+
 def test_real_ids_are_stable(pair07):
     from gcws.features import service as SV
     ws, ids = pair07

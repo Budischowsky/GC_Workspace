@@ -1,4 +1,6 @@
 """Double determination verdicts (pure rules, no GUI)."""
+from types import SimpleNamespace
+
 import pytest
 
 from gcws.quant import duplicate_view as DV
@@ -73,6 +75,14 @@ def test_suggest_partner_and_problems(samples):
     assert DV.suggest_partner(ws, ids["08_"]) is None
     probs = DV.member_problems(ws, [ids["07_"], ids["08_"]])
     assert len(probs) == 1 and "08_EtOH" in probs[0] and "Blank" in probs[0]
+
+
+def test_pending_deconvolution_blocks_provisional_comparison():
+    st = SimpleNamespace(name="A", role="sample", run=SimpleNamespace(signal=lambda key: object()),
+                         results={"FID": object()})
+    ws = SimpleNamespace(quant={}, runs={"a": st}, quant_result=None, deconv_background=True,
+                         split_pending=lambda state, key: state is st and key == "FID")
+    assert "deconvolution" in DV.member_problems(ws, ["a"])[0].lower()
 
 
 def _pair(rt, c1, c2, status="Doppelbestimmung bestätigt", a1=1000.0, a2=1100.0, name="X"):

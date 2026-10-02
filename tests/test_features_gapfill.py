@@ -1,4 +1,5 @@
 """Feature double determination, P65: gap filling (mzmine Gap port + MS evidence)."""
+import copy
 from types import SimpleNamespace
 
 import numpy as np
@@ -96,6 +97,24 @@ def test_nothing_there_is_not_detectable():
     m = f.member("b")
     assert m.origin == NOT_DETECTABLE and "not detectable" in m.note
     assert not f.proposals
+
+
+def test_gap_fill_reuses_height_ratio_for_same_pair(monkeypatch):
+    ms_b = build([], background=True, seed=15)
+    table, runs, noise, _apex, settings = table_for(ms_b, fid_signal([]))
+    table.features.append(copy.deepcopy(table.features[0]))
+    original = GF.height_ratio
+    calls = 0
+
+    def counted(*args):
+        nonlocal calls
+        calls += 1
+        return original(*args)
+
+    monkeypatch.setattr(GF, "height_ratio", counted)
+    GF.fill_table(table, runs, noise, settings)
+    assert all(f.member("b").origin == NOT_DETECTABLE for f in table.features)
+    assert calls <= 1
 
 
 def test_other_substance_at_the_same_time_is_not_filled():

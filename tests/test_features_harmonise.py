@@ -77,3 +77,19 @@ def test_same_offsets_need_nothing():
 def test_signal_area_is_above_the_chord():
     sig = Signal("FID", np.linspace(0, 1, 101), np.linspace(10, 20, 101))
     assert HM.signal_area(sig, 0.2, 0.8) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_harmonisation_reuses_pair_ratio_across_features(monkeypatch):
+    table, runs = table_for([(0.03, 0.12)] * len(APEXES))
+    original = HM.typical_ratio
+    calls = 0
+
+    def counted(*args):
+        nonlocal calls
+        calls += 1
+        return original(*args)
+
+    monkeypatch.setattr(HM, "typical_ratio", counted)
+    HM.propose_table(table, Settings(), runs)
+    assert any(p.kind == "boundary" for f in table.features for p in f.proposals)
+    assert calls <= 1

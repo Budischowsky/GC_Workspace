@@ -68,7 +68,8 @@ def signal_area(sig, t0: float, t1: float) -> Optional[float]:
     return float(np.trapezoid(yy - base, rr))
 
 
-def propose(feature: Feature, table, settings: Settings, runs: Optional[dict] = None) -> list[Proposal]:
+def propose(feature: Feature, table, settings: Settings, runs: Optional[dict] = None,
+            ratios: Optional[dict] = None) -> list[Proposal]:
     """MOVE_START / MOVE_END proposals for the detected members whose apex-relative boundaries
     differ from the reference's, where the estimated area agrees better afterwards."""
     from gcws.core.events import ManualEvent, ManualKind
@@ -102,7 +103,13 @@ def propose(feature: Feature, table, settings: Settings, runs: Optional[dict] = 
         move_end = abs(new_end - p.end) > MIN_MOVE * w
         if not (move_start or move_end):
             continue
-        ratio0 = typical_ratio(table, ref.run_id, m.run_id)
+        pair = (ref.run_id, m.run_id)
+        if ratios is None:
+            ratio0 = typical_ratio(table, *pair)
+        else:
+            if pair not in ratios:
+                ratios[pair] = typical_ratio(table, *pair)
+            ratio0 = ratios[pair]
         sig = runs.get(m.run_id).signal(table.key) if runs.get(m.run_id) is not None else None
         now, new = signal_area(sig, p.start, p.end), signal_area(sig, new_start, new_end)
         if ratio0 is None or not now or now <= 0 or new is None or new <= 0 or ref.peak.area <= 0:
@@ -131,5 +138,6 @@ def propose(feature: Feature, table, settings: Settings, runs: Optional[dict] = 
 
 
 def propose_table(table, settings: Settings, runs: Optional[dict] = None) -> None:
+    ratios = {}
     for f in table.features:
-        f.proposals += propose(f, table, settings, runs)
+        f.proposals += propose(f, table, settings, runs, ratios)

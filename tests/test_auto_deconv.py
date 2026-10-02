@@ -349,6 +349,30 @@ def win(qtbot, tmp_path, monkeypatch):
     w.close()
 
 
+def test_background_deconvolution_ignores_reloaded_run(qapp, monkeypatch):
+    from gcws.integration import auto_deconv as AD
+    from gcws.ms import deconv_cache as DC
+    from gcws.ui import workers
+    from gcws.ui.workspace import Workspace
+
+    ws = Workspace()
+    original = SimpleNamespace(id="same", name="old", results={})
+    replacement = SimpleNamespace(id="same", name="new", results={})
+    ws.runs["same"] = original
+    settings = SimpleNamespace(to_dict=lambda: {"window": 1})
+    monkeypatch.setattr(AD, "settings_for_method", lambda *_: settings)
+    monkeypatch.setattr(ws, "solvent_cut", lambda *_: None)
+    callbacks = {}
+    monkeypatch.setattr(workers, "submit", lambda *args, **kwargs: callbacks.update(kwargs))
+    stored = []
+    monkeypatch.setattr(DC, "store_whole_run", lambda st, *_: stored.append(st))
+
+    ws._deconvolute_in_background(original, object())
+    ws.runs["same"] = replacement
+    callbacks["on_done"]([])
+    assert stored == []
+
+
 def test_panel_switches_the_split_and_the_analyst_keeps_a_peak_unsplit(win):
     ws = win.ws
     ws.deconv_background = False
