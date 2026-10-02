@@ -154,6 +154,18 @@ class EventsDock(QWidget):
         self.deconv_r.setSingleStep(0.05)
         self.deconv_r.setToolTip("A component whose fitted curve does not follow the trace this closely "
                                  "(Pearson r) is not split off")
+        self.deconv_probe = QCheckBox("Closer look at shoulders (more sensitive MS deconvolution)")
+        self.deconv_probe.setToolTip("A peak with fewer than two MS components whose trace shows a shoulder, or "
+                                     "that one component does not explain, is deconvoluted again around its "
+                                     "apex: more sensitive, with a pass over the residual of the found "
+                                     "components. The components it finds pass the same limits.")
+        self.deconv_probe_r2 = QDoubleSpinBox()
+        self.deconv_probe_r2.setRange(0, 1)
+        self.deconv_probe_r2.setDecimals(3)
+        self.deconv_probe_r2.setSingleStep(0.005)
+        self.deconv_probe_r2.setToolTip("A closer look is also taken when one MS component fits the trace "
+                                        "worse than this")
+        self.deconv_probe.toggled.connect(self.deconv_probe_r2.setEnabled)
         self.deconv_exclude = QLineEdit()
         self.deconv_exclude.setToolTip("Components with one of these model ions (column bleed) are not split off")
         dform = QFormLayout()
@@ -163,6 +175,8 @@ class EventsDock(QWidget):
         dform.addRow("Min. fit R²", self.deconv_r2)
         dform.addRow("Min. shape correlation", self.deconv_r)
         dform.addRow("Excluded model m/z", self.deconv_exclude)
+        dform.addRow(self.deconv_probe)
+        dform.addRow("Closer look below fit R²", self.deconv_probe_r2)
         self.deconv_status = QLabel()
         self.deconv_status.setObjectName("hint")
         self.deconv_status.setWordWrap(True)
@@ -289,6 +303,9 @@ class EventsDock(QWidget):
         self.deconv_sn.setValue(m.deconv_min_sn)
         self.deconv_r2.setValue(m.deconv_fit_r2)
         self.deconv_r.setValue(m.deconv_min_r)
+        self.deconv_probe.setChecked(m.deconv_probe)
+        self.deconv_probe_r2.setValue(m.deconv_probe_r2)
+        self.deconv_probe_r2.setEnabled(m.deconv_probe)
         self.deconv_exclude.setText(" ".join(str(x) for x in m.deconv_exclude_mz))
         self.timed.setRowCount(0)
         for e in m.timed_events:
@@ -405,6 +422,8 @@ class EventsDock(QWidget):
         m.deconv_min_sn = self.deconv_sn.value()
         m.deconv_fit_r2 = self.deconv_r2.value()
         m.deconv_min_r = self.deconv_r.value()
+        m.deconv_probe = self.deconv_probe.isChecked()
+        m.deconv_probe_r2 = self.deconv_probe_r2.value()
         m.deconv_exclude_mz = parse_masses(self.deconv_exclude.text())
         events = []
         for r in range(self.timed.rowCount()):

@@ -46,6 +46,8 @@ The deconvolution itself (which components the MS shows) uses the settings of
 | **Min. component S/N** | {{IntegrationMethod.deconv_min_sn}} | A component with a smaller signal-to-noise ratio in the MS is not split off. | as above. |
 | **Min. fit R²** | {{IntegrationMethod.deconv_fit_r2}} | Below this fit quality the areas are divided in the proportions of the MS components instead of by the fit. Such splits are listed by the Report² rule **Automatic deconvolution split**. | - |
 | **Min. shape correlation** | {{IntegrationMethod.deconv_min_r}} | A component is only split off when its fitted curve follows the trace (Pearson r, as mzmine's GC spectral deconvolution). | components are split off that the FID does not show (higher). |
+| **Closer look at shoulders** | {{IntegrationMethod.deconv_probe}} | A peak with fewer than two MS components gets a closer look when its trace shows a shoulder, or when one component fits it worse than **Closer look below fit R²**. The MS around its apex is deconvoluted again, more sensitively (2 σ, two ions, apexes within one scan, and a pass over what the found components leave). The components found must pass the same limits. Such splits say *closer look* in their comment. | a visible shoulder is not split (on), or small shoulders are split that you do not want (off). |
+| **Closer look below fit R²** | {{IntegrationMethod.deconv_probe_r2}} | The fit quality of one component below which a peak without a visible shoulder also gets a closer look. | - |
 | **Excluded model m/z** | {{IntegrationMethod.deconv_exclude_mz}} | Components whose model ion is one of these masses (column bleed) are never split off. | another background ion produces components. |
 
 ## Timed events

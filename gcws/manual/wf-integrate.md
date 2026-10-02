@@ -95,12 +95,17 @@ with processing methods and used by the automation.
    same way as **Split peak** does it: the component curves are fitted to the trace, the peak's area is divided
    by the fitted areas, and the total stays exactly the same. If the fit is below **Min. fit R²**, the MS
    component proportions are used.
+   A peak in which the whole-run deconvolution finds only one component, although its trace shows a shoulder
+   (or one component fits it badly), gets a **closer look**: its MS is deconvoluted again, more sensitively
+   and with a pass over what the found component leaves. This finds a substance that elutes on the tail of a
+   larger one and shares most of its ions. It is switched by **Closer look at shoulders**.
 3. Components that are too weak, whose model ion is a bleed ion, whose curve the trace does not show, or whose
    spectrum is the same as their neighbour's are not split off.
 4. Each fragment keeps its component spectrum. The library search searches the fragments with these clean
    spectra, also when it searches the TIC peaks, so every FID peak gets its own name.
 
-The panel shows how many peaks were split. The automatic splits are not listed among the manual events: they are
+The panel shows how many peaks were split; the tooltip of that line lists the peaks left unsplit and why
+(for example a shoulder for which the closer look found only one component). The automatic splits are not listed among the manual events: they are
 made again at every integration from the present settings.
 
 - **Keep unsplit (no automatic deconvolution split)** in the right-click menu of the peak table integrates the

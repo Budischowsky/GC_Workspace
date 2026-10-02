@@ -59,6 +59,18 @@ def window(st, rt_ms: float, settings: D.DeconvSettings) -> D.DeconvResult:
     return res
 
 
+def probe(st, t0: float, t1: float, apex: float, settings: D.DeconvSettings) -> list:
+    """The components of the closer look at the peak ``t0``..``t1`` (MS time; cached)."""
+    from gcws.ms import deconv_probe
+    key = ("probe", round(t0, 4), round(t1, 4), round(apex, 4), _skey(settings))
+    comps = st.deconv.get(key)
+    if comps is None:
+        if len(st.deconv) > 400:
+            st.deconv = {k: v for k, v in st.deconv.items() if k[0] == "run"}
+        comps = st.deconv[key] = deconv_probe.probe(st.run.ms, t0, t1, apex, settings)
+    return comps
+
+
 def for_peak(st, peak, key: str, settings: D.DeconvSettings):
     """The component representing ``peak`` (whole-run result if available, else its window)."""
     allocated = D.allocated_component(st.run.ms, peak)

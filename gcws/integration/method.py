@@ -128,6 +128,10 @@ class IntegrationMethod:
     deconv_min_sn: float = 20.0                 # ... and one below this MS S/N
     deconv_fit_r2: float = 0.97                 # below: areas from MS component proportions
     deconv_min_r: float = 0.8                   # shape correlation component profile <-> trace
+    #: a closer look (more sensitive deconvolution of the peak's MS window, residual pass) at peaks
+    #: with fewer than two components whose trace one component explains with an R² below the limit
+    deconv_probe: bool = True
+    deconv_probe_r2: float = 0.98
     deconv_exclude_mz: list[int] = field(default_factory=lambda: list(DECONV_EXCLUDE_MZ))
     timed_events: list[TimedEvent] = field(default_factory=list)
     version: int = 1

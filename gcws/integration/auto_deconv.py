@@ -43,6 +43,8 @@ AUTO_UID = "auto"
 #: two components closer than this many MS scans with a cosine above SAME_COSINE are one compound
 SAME_SCANS = 2.0
 SAME_COSINE = 0.9
+#: note of a split (or a refusal) that rests on the closer look at one peak
+CLOSER = "closer look"
 
 
 @dataclass
@@ -157,12 +159,35 @@ def _in_ranges(t: float, ranges) -> bool:
     return any(a <= t < b for a, b in ranges)
 
 
+def suspect(signal, peak, key: str, delay: float, cands, riders, method) -> str:
+    """Why a peak with fewer than two whole-run components deserves a closer look ("" = it does
+    not): the method asks for it, and the trace shows a shoulder or one component does not
+    explain it (fit R² below the method's limit)."""
+    if not getattr(method, "deconv_probe", False):
+        return ""
+    from gcws.ms.deconv_probe import trace_shoulders
+    from gcws.ms.peak_split import plan_split
+    plan = plan_split(signal, peak, key, delay, cands, riders=riders)
+    if plan.t.size < 3:
+        return ""
+    if not riders:
+        found = trace_shoulders(plan.t, plan.y)
+        if found:
+            return "shoulder at " + ", ".join(f"{t:.3f}" for t in found)
+    limit = float(getattr(method, "deconv_probe_r2", 0.98))
+    if plan.first is not None and plan.first.r2 < limit:
+        return f"one component explains the trace with R² {plan.first.r2:.3f} < {limit:.3f}"
+    return ""
+
+
 def plan_peaks(signal, result, key: str, delay: float, components, method, events=(),
-               scan_dt: Optional[float] = None) -> RunPlan:
+               scan_dt: Optional[float] = None, probe=None) -> RunPlan:
     """The automatic split events of ``result`` (integrated ``signal`` of ``key``).
 
     ``components`` are the whole-run deconvolution components (MS time), ``events`` the
-    analyst's manual events of the signal (for the *Keep unsplit* markers)."""
+    analyst's manual events of the signal (for the *Keep unsplit* markers). ``probe(peak)``
+    returns the components of a closer look at one peak (:mod:`gcws.ms.deconv_probe`, MS time);
+    it is asked for peaks with fewer than two whole-run components that :func:`suspect` flags."""
     from gcws.ms.peak_split import candidates_in, plan_split, replan
     out = RunPlan(components=len(components or []))
     if not components or result is None:
@@ -183,17 +208,30 @@ def plan_peaks(signal, result, key: str, delay: float, components, method, event
             continue
         if peak.parent is not None:          # a skimmed rider: split with its own parent's rules only
             continue
-        cands = candidates_in(components, peak, key, delay)
-        if len(cands) < 2:
-            continue
-        if _in_ranges(peak.apex_rt, off):
-            out.skipped.append((peak.apex_rt, "deconvolution split switched off here"))
-            continue
-        if any(t0 - 1e-6 <= peak.apex_rt <= t1 + 1e-6 or peak.start - 1e-6 <= apex <= peak.end + 1e-6
-               for t0, t1, apex in kept):
-            out.skipped.append((peak.apex_rt, "kept unsplit by the analyst"))
-            continue
         riders = [(p.start, p.end) for p in peaks if p.parent == index]
+        cands = candidates_in(components, peak, key, delay)
+        if _in_ranges(peak.apex_rt, off):
+            left = "deconvolution split switched off here"
+        elif any(t0 - 1e-6 <= peak.apex_rt <= t1 + 1e-6 or peak.start - 1e-6 <= apex <= peak.end + 1e-6
+                 for t0, t1, apex in kept):
+            left = "kept unsplit by the analyst"
+        else:
+            left = ""
+        closer = False
+        if len(cands) < 2:
+            why = suspect(signal, peak, key, delay, cands, riders, method) if probe is not None and not left else ""
+            if not why:
+                continue
+            found = candidates_in(probe(peak), peak, key, delay)
+            if len(found) < 2:
+                if cands:                    # a peak without any MS component is not worth a note
+                    out.skipped.append((peak.apex_rt, f"{why}; the {CLOSER} found {len(found)} component"
+                                        + ("" if len(found) == 1 else "s")))
+                continue
+            cands, closer = found, True
+        if left:
+            out.skipped.append((peak.apex_rt, left))
+            continue
         plan = plan_split(signal, peak, key, delay, cands, riders=riders, limits=limits)
         if plan.t.size < 3:
             out.skipped.append((peak.apex_rt, plan.problem))
@@ -202,13 +240,14 @@ def plan_peaks(signal, result, key: str, delay: float, components, method, event
         if chosen != plan.checked:
             plan = replan(plan, chosen)
         if not plan.ok:
-            if len(chosen) >= 2:
-                out.skipped.append((peak.apex_rt, plan.problem))
+            if len(chosen) >= 2 or closer:
+                out.skipped.append((peak.apex_rt, (CLOSER + ": " if closer else "") + plan.problem))
             continue
         event = plan.event()
         comps = [plan.candidates[i].component for i in plan.checked]
         how = "fitted to the trace" if plan.basis == "fit" else "MS component proportions"
-        comment = f"automatic deconvolution split ({how}; {plan.summary()})"
+        comment = f"automatic deconvolution split ({how}; {plan.summary()}"
+        comment += f"; {CLOSER})" if closer else ")"
         if notes:
             comment += "; not split off: " + ", ".join(notes)
         out.events.append(event.with_(uid=_uid(key, peak, comps), comment=comment, user="automatic"))
@@ -241,4 +280,10 @@ def plan_run(ws, st, key: str, result, method, compute: bool = True) -> Optional
     comps = components_for(ws, st, compute=compute)
     if comps is None or signal is None:
         return None
-    return plan_peaks(signal, result, key, st.delay_value, comps, method, st.events(key))
+    from gcws.ms import deconv_cache as DC
+    from gcws.ms.spectra import ms_times
+    settings = DC.settings_of(ws)
+
+    def probe(peak):
+        return DC.probe(st, *ms_times(peak, key, st.delay_value), settings)
+    return plan_peaks(signal, result, key, st.delay_value, comps, method, st.events(key), probe=probe)

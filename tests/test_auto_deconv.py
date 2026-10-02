@@ -163,6 +163,107 @@ def test_method_keeps_the_settings():
     back = IntegrationMethod.from_dict(m.to_dict())
     assert back.deconv_split == "auto" and back.deconv_min_share == 0.05 and back.deconv_exclude_mz == [73, 207]
     assert IntegrationMethod().deconv_split == "off"
+    back = IntegrationMethod.from_dict(IntegrationMethod(deconv_probe=False, deconv_probe_r2=0.9).to_dict())
+    assert back.deconv_probe is False and back.deconv_probe_r2 == 0.9
+    assert IntegrationMethod().deconv_probe is True
+
+
+# -- closer look: a shoulder the whole-run deconvolution does not resolve --------------------------
+
+MAIN = {45: 100, 59: 90, 72: 60, 85: 30, 103: 20, 117: 10}
+SHOULDER = {45: 80, 59: 100, 72: 50, 89: 40, 131: 15}       # shares most ions, two of its own
+
+
+def shoulder_run(name, sep=4, ms_height=20000.0, fid_height=2000):
+    return make_run(name, ms_parts=[(200.0, MAIN, 80000.0), (200.0 + sep, SHOULDER, ms_height)],
+                    fid_parts=[(200, 6000), (200 + sep, fid_height)])
+
+
+@pytest.mark.parametrize("sep, fid_height", [(4, 2000), (5, 1500)])
+def test_shoulder_on_the_tail_gets_a_closer_look_and_is_split(app, sep, fid_height):
+    from gcws.integration import auto_deconv as AD
+    from gcws.ms.peak_split import candidates_in
+    ws = workspace(deconv_probe=False)
+    st = load(ws, shoulder_run("SH0", sep, fid_height=fid_height))
+    (peak,) = ws.result(st.id, FID).peaks
+    # the whole-run deconvolution sees one component: without the closer look nothing is split
+    assert len(candidates_in(AD.components_for(ws, st), peak, FID, DELAY)) == 1
+    assert not fragments(ws, st)
+
+    ws = workspace()
+    st = load(ws, shoulder_run("SH1", sep, fid_height=fid_height))
+    parts = fragments(ws, st)
+    assert len(parts) == 2
+    parent = st.presplit[FID].peaks[0]
+    assert math.fsum(p.area for p in parts) == parent.area
+    assert parts[1].area / parent.area == pytest.approx(fid_height / (6000 + fid_height), abs=0.04)
+    assert parts[1].extra["deconv_component"]["model_mz"] in (89, 131)
+    assert AD.CLOSER in st.auto_split[FID].events[0].comment
+
+
+def _probe_plan(parts, comps, probe, **method):
+    from test_component_fit import trace
+    from gcws.core.model import Baseline, Peak
+    from gcws.integration.auto_deconv import plan_peaks
+    from gcws.integration.method import IntegrationMethod
+    t, y = trace(list(parts), 0.0066, 0.9, noise=1.0)
+    lo, hi = 9.95, 10.08
+    use = (t >= lo) & (t <= hi)
+    area = float(np.trapezoid(y[use], t[use] * 60))
+    peak = Peak(start=lo, end=hi, apex_rt=10.03, baseline=Baseline("hold", lo, 100.0, hi, 100.0),
+                area=area, area_raw=area)
+    m = IntegrationMethod(deconv_split="auto", **method)
+    return plan_peaks(Signal(FID, t, y + 100.0), SimpleNamespace(peaks=[peak]), FID, 0.0066, comps, m, probe=probe)
+
+
+def test_closer_look_only_where_the_trace_asks_for_it():
+    from test_component_fit import component
+    calls = []
+
+    def probe(peak):
+        calls.append(peak)
+        return [component(10.0, mz=57)]
+    # one clean peak that one component explains: no closer look
+    plan = _probe_plan([(10.0, 400.)], [component(10.0, mz=57)], probe)
+    assert not calls and not plan.events and not plan.skipped
+    # a shoulder: a closer look; it finds one component only, which the panel's tooltip says
+    plan = _probe_plan([(10.0, 600.), (10.035, 200.)], [component(10.0, mz=57)], probe)
+    assert len(calls) == 1 and not plan.events
+    assert "shoulder" in plan.skipped[0][1] and "found 1 component" in plan.skipped[0][1]
+    # switched off: no closer look
+    calls.clear()
+    _probe_plan([(10.0, 600.), (10.035, 200.)], [component(10.0, mz=57)], probe, deconv_probe=False)
+    assert not calls
+
+
+def test_trace_shoulders():
+    from gcws.ms.deconv_probe import trace_shoulders
+    t = np.arange(0, 1, 1 / 1200)
+    sd, dt = 0.0127, 0.0075
+
+    def gauss(c, h):
+        return h * np.exp(-0.5 * ((t - c) / sd) ** 2)
+    tail = np.convolve(gauss(0.5, 1.0), np.exp(-t / 0.02))[:t.size]
+    for seed in range(3):
+        noise = np.random.default_rng(seed).normal(0, 2, t.size)
+        assert trace_shoulders(t, gauss(0.5, 6000) + noise) == []
+        assert trace_shoulders(t, 6000 * tail / tail.max() + noise) == []
+        (found,) = trace_shoulders(t, gauss(0.5, 6000) + gauss(0.5 + 4 * dt, 2000) + noise)
+        assert 0.5 + 2 * dt < found < 0.5 + 6 * dt
+
+
+def test_probe_finds_the_shoulder_and_nothing_on_a_single_peak():
+    from test_deconv import RT, build
+    from gcws.ms import deconv as D
+    from gcws.ms.deconv_probe import probe
+    ms = build([(200.0, MAIN, 80000.0), (204.0, SHOULDER, 15000.0)], background=False, seed=3)
+    assert len([c for c in D.deconvolute_range(ms, RT[150], RT[250]) if RT[194] <= c.rt <= RT[212]]) == 1
+    comps = probe(ms, RT[194], RT[212], RT[200])
+    assert [c.model_mz in (89, 131) for c in comps] == [False, True]
+    assert comps[1].rt == pytest.approx(RT[204], abs=0.5 * (RT[1] - RT[0]))
+    for seed in range(5):
+        single = build([(200.0, MAIN, 80000.0)], seed=seed)
+        assert len(probe(single, RT[194], RT[212], RT[200])) == 1
 
 
 def test_split_in_one_determination_is_carried_over_to_the_other(app):
