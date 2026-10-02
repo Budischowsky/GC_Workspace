@@ -82,9 +82,11 @@ def kept_spans(events) -> list[tuple[float, float, float]]:
 
 
 def limits_of(method):
+    from gcws.integration.method import deconv_value
     from gcws.ms.peak_split import Limits
-    return Limits(min_sn=float(method.deconv_min_sn), min_share=float(method.deconv_min_share),
-                  fit_r2=float(method.deconv_fit_r2))
+    return Limits(min_sn=deconv_value(method, "deconv_min_sn"),
+                  min_share=deconv_value(method, "deconv_min_share"),
+                  fit_r2=deconv_value(method, "deconv_fit_r2"))
 
 
 def _get(item, key, default=None):
@@ -127,8 +129,9 @@ def _same_compound(a, b, scan_dt: float) -> bool:
 
 def gate(plan, method, scan_dt: float) -> tuple[list[int], list[str]]:
     """The candidates of ``plan`` that become fragments, and why the others do not."""
+    from gcws.integration.method import deconv_value
     exclude = {int(m) for m in (getattr(method, "deconv_exclude_mz", None) or [])}
-    min_r = float(getattr(method, "deconv_min_r", 0.0) or 0.0)
+    min_r = deconv_value(method, "deconv_min_r")
     keep, notes = [], []
     for i in plan.checked:
         c = plan.candidates[i].component
@@ -171,10 +174,14 @@ def suspect(signal, peak, key: str, delay: float, cands, riders, method) -> str:
     if plan.t.size < 3:
         return ""
     if not riders:
-        found = trace_shoulders(plan.t, plan.y)
+        level = max(1, min(5, int(getattr(method, "deconv_level", 3))))
+        depth, prominence = ((0.04, 0.02) if level == 5 else
+                             (0.06, 0.03) if level == 4 else (0.08, 0.04))
+        found = trace_shoulders(plan.t, plan.y, depth, prominence)
         if found:
             return "shoulder at " + ", ".join(f"{t:.3f}" for t in found)
-    limit = float(getattr(method, "deconv_probe_r2", 0.98))
+    from gcws.integration.method import deconv_value
+    limit = deconv_value(method, "deconv_probe_r2")
     if plan.first is not None and plan.first.r2 < limit:
         return f"one component explains the trace with R² {plan.first.r2:.3f} < {limit:.3f}"
     return ""
@@ -190,7 +197,7 @@ def plan_peaks(signal, result, key: str, delay: float, components, method, event
     it is asked for peaks with fewer than two whole-run components that :func:`suspect` flags."""
     from gcws.ms.peak_split import candidates_in, plan_split, replan
     out = RunPlan(components=len(components or []))
-    if not components or result is None:
+    if result is None:
         return out
     if scan_dt is None:
         scan_dt = 0.0075
@@ -255,6 +262,11 @@ def plan_peaks(signal, result, key: str, delay: float, components, method, event
     return out
 
 
+def settings_for_method(ws, method):
+    from gcws.ms import deconv as D, deconv_cache as DC
+    return D.settings_for_level(DC.settings_of(ws), getattr(method, "deconv_level", 3))
+
+
 def components_for(ws, st, settings=None, compute: bool = True):
     """The whole-run components of ``st`` after the TIC solvent cut (cached), or None when they are
     not available (no MS, or not computed and ``compute`` is False)."""
@@ -277,13 +289,12 @@ def plan_run(ws, st, key: str, result, method, compute: bool = True) -> Optional
     if not enabled(method):
         return RunPlan()
     signal = st.run.signal(key)
-    comps = components_for(ws, st, compute=compute)
+    settings = settings_for_method(ws, method)
+    comps = components_for(ws, st, settings=settings, compute=compute)
     if comps is None or signal is None:
         return None
     from gcws.ms import deconv_cache as DC
     from gcws.ms.spectra import ms_times
-    settings = DC.settings_of(ws)
-
     def probe(peak):
         return DC.probe(st, *ms_times(peak, key, st.delay_value), settings)
     return plan_peaks(signal, result, key, st.delay_value, comps, method, st.events(key), probe=probe)

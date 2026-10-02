@@ -116,3 +116,28 @@ def test_empty_window_and_component_choice():
     small = D.Component(10.02, 0, 91, [(91, 999)], area=5.0, purity=1, n_ions=3, s_n=10)
     assert D.component_for_peak([small, big], 9.95, 10.05, 10.02) is big
     assert D.component_for_peak([small], 10.5, 10.6, 10.55) is None
+
+
+def test_high_level_recovers_small_shoulder_in_reference_run(run07):
+    """The faint MS component on the 19.158 min FID peak must be actionable."""
+    from types import SimpleNamespace
+    from gcws.integration import auto_deconv as AD
+    from gcws.integration.engine import integrate
+    from gcws.integration.method import nias_fid_method
+
+    base = D.DeconvSettings()
+    normal = D.deconvolute_range(run07.ms, 19.10, 19.25, base)
+    high = D.deconvolute_range(run07.ms, 19.10, 19.25, D.settings_for_level(base, 5))
+    assert not any(abs(c.rt - 19.216) < 0.008 for c in normal)
+    assert any(abs(c.rt - 19.216) < 0.008 for c in high)
+
+    method = nias_fid_method().copy(deconv_split="auto", deconv_level=5)
+    result = integrate(run07.fid, method, t_min=5.5)
+    peak = min(result.peaks, key=lambda p: abs(p.apex_rt - 19.158))
+    plan = AD.plan_peaks(run07.fid, SimpleNamespace(peaks=[peak]), "FID", 0.0066,
+                         high, method)
+    assert len(plan.events) == 1
+    selected = [(plan.plans[0].candidates[i].component.rt, plan.plans[0].shares[j])
+                for j, i in enumerate(plan.plans[0].checked)]
+    assert any(abs(rt - 19.216) < 0.008 and share > 0.04 for rt, share in selected)
+    assert sum(share for _rt, share in selected) == pytest.approx(1.0)

@@ -70,6 +70,30 @@ RANGE_PAIRS = {
 #: mzmine's "Exclude m/z values" of the GC spectral deconvolution).
 DECONV_EXCLUDE_MZ = (73, 207, 281, 355)
 
+# Levels deliberately change both MS perception and the decision to turn a
+# component into a separate chromatographic peak. Level 3 preserves existing
+# methods; the higher levels admit weaker components and inspect more shoulders.
+DECONV_LEVELS = {
+    1: {"deconv_min_share": 0.05, "deconv_min_sn": 50.0, "deconv_fit_r2": 0.98,
+        "deconv_min_r": 0.90, "deconv_probe_r2": 0.97},
+    2: {"deconv_min_share": 0.025, "deconv_min_sn": 30.0, "deconv_fit_r2": 0.975,
+        "deconv_min_r": 0.85, "deconv_probe_r2": 0.975},
+    3: {"deconv_min_share": 0.01, "deconv_min_sn": 20.0, "deconv_fit_r2": 0.97,
+        "deconv_min_r": 0.80, "deconv_probe_r2": 0.98},
+    4: {"deconv_min_share": 0.005, "deconv_min_sn": 6.0, "deconv_fit_r2": 0.96,
+        "deconv_min_r": 0.65, "deconv_probe_r2": 0.99},
+    5: {"deconv_min_share": 0.003, "deconv_min_sn": 1.5, "deconv_fit_r2": 0.95,
+        "deconv_min_r": 0.50, "deconv_probe_r2": 0.995},
+}
+
+
+def deconv_value(method, name: str) -> float:
+    """Use the chosen level unless the method explicitly customizes this gate."""
+    current = float(getattr(method, name))
+    level = max(1, min(5, int(getattr(method, "deconv_level", 3))))
+    standard = DECONV_LEVELS[3][name]
+    return DECONV_LEVELS[level][name] if level != 3 and current == standard else current
+
 
 @dataclass(frozen=True)
 class TimedEvent:
@@ -124,6 +148,7 @@ class IntegrationMethod:
     area_unit_factor: float = 10.0              # counts*s -> reported area
     #: automatic deconvolution split (FID/TIC): "off" | "auto" (see gcws.integration.auto_deconv)
     deconv_split: str = "off"
+    deconv_level: int = 3                       # 1 low ... 5 high detection sensitivity
     deconv_min_share: float = 0.01              # a component below this share of the fit stays with its neighbours
     deconv_min_sn: float = 20.0                 # ... and one below this MS S/N
     deconv_fit_r2: float = 0.97                 # below: areas from MS component proportions

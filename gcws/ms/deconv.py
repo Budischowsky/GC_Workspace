@@ -1,7 +1,8 @@
-"""Workspace adapter for the original, conservative NIAS deconvolution engine.
+"""Workspace adapter for the NIAS MS deconvolution engine.
 
-The vendored algorithm is called unchanged. Range processing only combines
-window results; it does not add residual components or apply scan-skew fits.
+The vendored algorithm is called unchanged. The highest sensitivity level
+combines broad and narrow windows and scans a range more densely so weak
+neighbouring components can be perceived.
 """
 from __future__ import annotations
 
@@ -53,6 +54,26 @@ PRESETS = {
     "Shape loose": {"shape_r": 0.85},
 }
 
+# The integration method's five-position control tunes MS perception. Keeping
+# level 3 at the original parameters preserves existing saved method behavior.
+LEVEL_PARAMS = {
+    1: (5.0, 0.95, 5, 0.3),
+    2: (4.0, 0.93, 4, 0.4),
+    3: (3.0, 0.90, 3, 0.5),
+    4: (2.0, 0.85, 2, 1.0),
+    5: (1.5, 0.80, 2, 1.2),
+}
+
+
+def settings_for_level(base: DeconvSettings, level: int) -> DeconvSettings:
+    """MS settings for a method's detection level, retaining its window size."""
+    level = max(1, min(5, int(level)))
+    if level == 3:
+        return base
+    noise, shape, ions, tolerance = LEVEL_PARAMS[level]
+    return DeconvSettings(window=base.window, noise_factor=noise, shape_r=shape,
+                          min_ions=ions, apex_tol=tolerance)
+
 
 @dataclass
 class Component(legacy.Component):
@@ -89,6 +110,24 @@ def deconvolute_window(ms, rt: float, settings: DeconvSettings | None = None) ->
         raise ValueError("Deconvolution window must be positive")
     comps = legacy.deconvolute(_DataMSAdapter(ms), rt, settings.params())
     converted = [Component(**vars(c)) for c in comps]
+    if settings.noise_factor <= 1.5 and settings.window >= 0.24:
+        # A narrow second view resolves small peaks which disappear into the
+        # baseline of a broader ion window. Keep the primary window's spectrum
+        # where both views describe the same compound.
+        from gcws.ms.similarity import cosine
+        narrower = legacy.DeconvParams(window=settings.window * 2 / 3,
+                                       noise_factor=settings.noise_factor,
+                                       shape_r=settings.shape_r, min_ions=settings.min_ions,
+                                       apex_tolerance=settings.apex_tol)
+        dt = float(np.median(np.diff(ms.rt))) if ms.n_scans > 1 else 0.0075
+        for item in legacy.deconvolute(_DataMSAdapter(ms), rt, narrower):
+            candidate = Component(**vars(item))
+            if not any(abs(old.rt - candidate.rt) < legacy.MIN_SEPARATION_SCANS * dt
+                       and (old.model_mz == candidate.model_mz or
+                            cosine(old.spectrum_dict(), candidate.spectrum_dict()) > 0.9)
+                       for old in converted):
+                converted.append(candidate)
+        converted.sort(key=lambda c: (c.rt, -c.area, c.model_mz))
     scans = np.flatnonzero(np.abs(ms.rt - rt) <= settings.window)
     axis = ms.rt[scans]
     return DeconvResult(converted, float(axis[0]) if axis.size else rt - settings.window,
@@ -103,7 +142,7 @@ def deconvolute_range(ms, t0: float, t1: float, settings: DeconvSettings | None 
     """Combine NIAS windows over a range, retaining each window's central half."""
     from gcws.ms.similarity import cosine
     settings = settings or DeconvSettings()
-    step = settings.window
+    step = settings.window / 2 if settings.noise_factor <= 1.5 else settings.window
     if step <= 0:
         raise ValueError("Deconvolution window must be positive")
     centers = np.arange(t0 + step / 2, t1 + step / 2, step)
@@ -121,7 +160,8 @@ def deconvolute_range(ms, t0: float, t1: float, settings: DeconvSettings | None 
     for comp in sorted(found, key=lambda c: (c.rt, -c.area, c.model_mz)):
         duplicate = next((i for i in range(len(out) - 1, -1, -1)
                           if abs(out[i].rt - comp.rt) < legacy.MIN_SEPARATION_SCANS * dt
-                          and cosine(out[i].spectrum_dict(), comp.spectrum_dict()) > 0.9), None)
+                          and (settings.noise_factor <= 1.5 or out[i].model_mz == comp.model_mz or
+                               cosine(out[i].spectrum_dict(), comp.spectrum_dict()) > 0.9)), None)
         if duplicate is None:
             out.append(comp)
         elif comp.area > out[duplicate].area:

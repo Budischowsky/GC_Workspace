@@ -176,6 +176,7 @@ class ChromPanel(QWidget):
         self.vb.addItem(self.cursor_label, ignoreBounds=True)
         self.plot.scene().sigMouseMoved.connect(self._mouse_moved)
         self._markers = None
+        self._deconv_markers = None
         theme.register_plot(self.plot, self._theme_changed)
         self._fit = QTimer(self)
         self._fit.setSingleShot(True)
@@ -459,8 +460,8 @@ class ChromPanel(QWidget):
             self.refresh_events()
         elif key == self.ws.active_key:
             self.refresh_active()            # the selection maps onto the table's peaks
-        if key == self.ws.signal_key:
-            self.refresh_markers()           # components without a peak of the table's signal
+        if key == self.ws.signal_key or is_fid(key):
+            self.refresh_markers()
 
     def _theme_changed(self):
         """Theme switch: the items that took their colours when made, then a redraw."""
@@ -552,14 +553,17 @@ class ChromPanel(QWidget):
             self.regions.append(reg)
 
     def refresh_markers(self):
-        """Triangles at deconvoluted components that have no integrated peak in the table's
-        signal (after a whole-run deconvolution); drawn on the panel(s) showing an MS trace."""
+        """Draw TIC markers for FID splits and whole-run components without a table peak."""
         if self._markers is not None:
             self.vb.removeItem(self._markers)
         self._markers = None
+        if self._deconv_markers is not None:
+            self.vb.removeItem(self._deconv_markers)
+        self._deconv_markers = None
         st = self.ws.active
         if st is None or st.run.ms is None:
             return
+        self._refresh_deconv_markers(st)
         other = self.ws.panel_key(1 - self.index)
         if is_fid(self.key) and not (self.index == 0 and is_fid(other)):
             return
@@ -584,6 +588,45 @@ class ChromPanel(QWidget):
         self._markers.sigClicked.connect(lambda _item, pts, _ev: pts and self.componentClicked.emit(
             st.id, pts[0].data()))
         self.vb.addItem(self._markers, ignoreBounds=True)
+
+    def _refresh_deconv_markers(self, st):
+        """Show FID split component apices on the TIC trace in aligned MS time."""
+        if base_key(self.key) != "TIC":
+            return
+        fid_key = next((self.ws.panel_key(i) for i in range(2)
+                        if is_fid(self.ws.panel_key(i))), None)
+        if fid_key is None:
+            return
+        res = self.ws.result(st.id, self.ws.effective_key(st, fid_key))
+        curve = self.curves.get(st.id)
+        if res is None or curve is None:
+            return
+        xs, ys = curve.xData, curve.yData
+        if xs is None or len(xs) < 2:
+            return
+        from gcws.ms.deconv import allocated_component
+        shift = frame_offset(self.frame_key(), "TIC", st.delay_value)
+        spots = []
+        for peak in res.peaks:
+            component = allocated_component(st.run.ms, peak)
+            if component is None:
+                continue
+            x = component.rt + shift
+            if not xs[0] <= x <= xs[-1]:
+                continue
+            spots.append({"pos": (x, float(np.interp(x, xs, ys))), "data": component,
+                          "symbol": "d", "size": 12,
+                          "brush": pg.mkBrush(theme.qcolor(theme.ACCENT, 235)),
+                          "pen": pg.mkPen(theme.PLOT["bg"], width=1.0)})
+        if not spots:
+            return
+        tip = (lambda x, y, data: f"Deconvoluted peak from FID\n{data.rt:.3f} min (MS), "
+               f"model m/z {data.model_mz}\nclick: its spectrum")
+        self._deconv_markers = pg.ScatterPlotItem(spots=spots, hoverable=True, tip=tip)
+        self._deconv_markers.setZValue(31)
+        self._deconv_markers.sigClicked.connect(lambda _item, pts, _ev: pts and self.componentClicked.emit(
+            st.id, pts[0].data()))
+        self.vb.addItem(self._deconv_markers, ignoreBounds=True)
 
     # -- spectra ---------------------------------------------------------------------------------
 

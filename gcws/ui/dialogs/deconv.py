@@ -13,7 +13,8 @@ computed in the background (the whole run is cached and marks components
 without a peak in the chromatograms). For any component: add it as a peak,
 use its spectrum for the selected peak, or open its library hits.
 
-The MS components come from the original NIAS engine (:mod:`gcws.ms.deconv`).
+The MS components come from the NIAS engine adapter (:mod:`gcws.ms.deconv`),
+with an additional narrow-window pass at the highest detection level.
 """
 from __future__ import annotations
 
@@ -29,7 +30,7 @@ from PySide6.QtCore import Signal as QtSignal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
                                QFrame, QHBoxLayout, QHeaderView, QLabel, QProgressBar, QPushButton,
-                               QSpinBox, QSplitter, QTableView, QTabWidget, QToolButton, QVBoxLayout, QWidget)
+                               QSlider, QSpinBox, QSplitter, QTableView, QTabWidget, QToolButton, QVBoxLayout, QWidget)
 
 from gcws.core.events import ManualEvent, ManualKind as K
 from gcws.core.keys import is_derived, is_fid
@@ -339,13 +340,23 @@ class DeconvolutionDialog(QDialog):
         self.scope.button(2).setToolTip("Components of the whole run (background, cached); components "
                                         "without a peak are marked in the chromatograms")
         self.settings_button = QToolButton()
-        self.settings_button.setText("Settings")
+        self.settings_button.setText("Advanced settings")
         self.settings_button.setCheckable(True)
         self.settings_button.setArrowType(Qt.DownArrow)
         self.settings_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self.run_button = QPushButton("Deconvolute")
         self.run_button.setToolTip("Find the components again with the current settings")
         self.run_button.clicked.connect(self.run)
+        self.level = QSlider(Qt.Horizontal)
+        self.level.setRange(1, 5)
+        self.level.setTickPosition(QSlider.TicksBelow)
+        self.level.setTickInterval(1)
+        self.level.setFixedWidth(125)
+        self.level.setValue(min(D.LEVEL_PARAMS,
+                                key=lambda i: abs(D.LEVEL_PARAMS[i][0] - s.noise_factor)))
+        self.level_label = QLabel(f"{self.level.value()} / 5")
+        self.level.setToolTip("Low finds strong components; High detects smaller MS peaks and shoulders")
+        self.level.valueChanged.connect(self._level_changed)
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
         self.progress.setTextVisible(False)
@@ -362,6 +373,11 @@ class DeconvolutionDialog(QDialog):
         header.addWidget(self.cancel_button)
         header.addSpacing(12)
         header.addLayout(segments)
+        header.addSpacing(12)
+        header.addWidget(QLabel("Low"))
+        header.addWidget(self.level)
+        header.addWidget(QLabel("High"))
+        header.addWidget(self.level_label)
         header.addSpacing(12)
         header.addWidget(self.settings_button)
         header.addWidget(self.run_button)
@@ -540,6 +556,14 @@ class DeconvolutionDialog(QDialog):
         for k, v in vals.items():
             widgets[k].setValue(v)
 
+    def _level_changed(self, level: int) -> None:
+        noise, shape, ions, tolerance = D.LEVEL_PARAMS[level]
+        self.noise.setValue(noise)
+        self.shape.setValue(shape)
+        self.min_ions.setValue(ions)
+        self.apex_tol.setValue(tolerance)
+        self.level_label.setText(f"{level} / 5")
+
     def settings(self) -> D.DeconvSettings:
         return D.DeconvSettings(window=self.win_spin.value(), noise_factor=self.noise.value(),
                                 shape_r=self.shape.value(), min_ions=self.min_ions.value(),
@@ -557,6 +581,10 @@ class DeconvolutionDialog(QDialog):
         return b.property("scope") if b is not None else "peak"
 
     def _settings_changed(self, *_):
+        noise, shape, ions, tolerance = D.LEVEL_PARAMS[self.level.value()]
+        if (self.noise.value(), self.shape.value(), self.min_ions.value(), self.apex_tol.value()) != \
+                (noise, shape, ions, tolerance):
+            self.level_label.setText("Custom")
         self._invalidate("Settings changed.")
         if self.current_scope() == "peak":
             self._rerun.start()

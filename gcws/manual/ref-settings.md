@@ -36,12 +36,16 @@ Settings are saved with the project, and as a whole by
 
 The group **Automatic deconvolution split** on the same tab. See
 [Co-eluting peaks: the automatic deconvolution split](wf-integrate.md#co-eluting-peaks-the-automatic-deconvolution-split).
-The deconvolution itself (which components the MS shows) uses the settings of
-[Deconvolution](ref-settings.md#deconvolution).
+The **Detection level** slider controls MS component perception and the split
+thresholds together. Level 3 keeps the previous behavior; level 5 examines a
+second, narrower MS window and admits smaller components when the trace fit
+supports them. The detailed split thresholds are under **Advanced settings**.
+The MS window size comes from [Deconvolution](ref-settings.md#deconvolution).
 
 | Setting | Default | What it does | Change it when |
 |---|---|---|---|
 | **Deconvolution split** | {{IntegrationMethod.deconv_split}} | **Automatic**: after the integration, every peak that holds several deconvoluted MS components is split into one peak per component. The areas come from fitting the components to this trace. **Off**: peaks are only split by hand. | co-eluting substances make mixed spectra, unknowns and too large areas. |
+| **Detection level** | {{IntegrationMethod.deconv_level}} / 5 | Five steps from Low to High. Higher levels find weaker MS components, probe smaller shoulders and accept smaller fitted shares. | the chromatogram shows small peaks or shoulders that are left unsplit. |
 | **Min. component share** | {{IntegrationMethod.deconv_min_share %}} | A component with a smaller share of the fitted signal is not split off; its signal stays with its neighbours. | small impurities are split off that you do not want as peaks (higher). |
 | **Min. component S/N** | {{IntegrationMethod.deconv_min_sn}} | A component with a smaller signal-to-noise ratio in the MS is not split off. | as above. |
 | **Min. fit R²** | {{IntegrationMethod.deconv_fit_r2}} | Below this fit quality the areas are divided in the proportions of the MS components instead of by the fit. Such splits are listed by the Report² rule **Automatic deconvolution split**. | - |
@@ -106,7 +110,10 @@ blank correction and is not affected by these settings.
 
 ## Deconvolution
 
-**Settings** in the **Deconvolution** window. The three **Presets** set the advanced values together.
+The **Low–High** slider in the **Deconvolution** window has five detection levels.
+Level 3 uses the existing defaults; level 5 uses a narrower second MS window
+to expose small components. **Advanced settings** contains the three presets
+and individual MS controls.
 
 | Setting | Default | What it does |
 |---|---|---|

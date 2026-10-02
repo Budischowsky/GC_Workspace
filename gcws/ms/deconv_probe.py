@@ -1,6 +1,6 @@
 """A closer look at one integrated peak: a more sensitive deconvolution of its MS window.
 
-The whole-run deconvolution (:mod:`gcws.ms.deconv`, the vendored NIAS engine) is deliberately
+The default whole-run deconvolution (:mod:`gcws.ms.deconv`, the vendored NIAS engine) is
 conservative: an ion is only seen where it has a maximum of its own, and a component needs three
 ions whose apexes agree within half a scan. A small compound on the tail of a larger one shares
 most of its ions with it and has no maximum in them, so it is not found, and the automatic split
@@ -45,7 +45,8 @@ def params_of(settings: D.DeconvSettings | None = None) -> legacy.DeconvParams:
                                shape_r=min(SHAPE_R, settings.shape_r), min_ions=min(MIN_IONS, settings.min_ions))
 
 
-def trace_shoulders(t, y) -> list[float]:
+def trace_shoulders(t, y, depth_fraction: float = SHOULDER_DEPTH,
+                    prominence_fraction: float = SHOULDER_PROMINENCE) -> list[float]:
     """Times of the shoulders of a peak (``y`` above its baseline): the second-derivative test of
     the integrators, smoothed over half the peak's width at half height so that noise and a
     tailing peak do not count. A pair resolved closer than about two standard deviations shows no
@@ -67,10 +68,10 @@ def trace_shoulders(t, y) -> list[float]:
     for i in range(1, y.size - 1):
         if i == main or not (d2[i] < d2[i - 1] and d2[i] <= d2[i + 1]):
             continue
-        if -d2[i] < SHOULDER_DEPTH * depth or y[i] < 0.05 * top or abs(i - main) < width // 2:
+        if -d2[i] < depth_fraction * depth or y[i] < 0.05 * top or abs(i - main) < width // 2:
             continue
         a, b = sorted((i, main))
-        if float(d2[a:b + 1].max()) - d2[i] < SHOULDER_PROMINENCE * depth:
+        if float(d2[a:b + 1].max()) - d2[i] < prominence_fraction * depth:
             continue
         out.append(float(t[i]))
     return out
@@ -129,6 +130,20 @@ def _purify(x: np.ndarray, mzs: np.ndarray, win_rt: np.ndarray, lo: int, groups:
     return out
 
 
+def _sensitive_window(ms, t0: float, t1: float, apex: float,
+                      settings: D.DeconvSettings | None, found: list[D.Component]) -> list[D.Component]:
+    """Include independently perceived weak peaks when the residual fit misses them."""
+    if settings is None or settings.noise_factor > 1.5:
+        return found
+    dt = float(np.median(np.diff(ms.rt))) if ms.n_scans > 1 else 0.0075
+    for comp in D.deconvolute_window(ms, apex, settings).components:
+        if not t0 <= comp.rt <= t1 or comp.s_n < 1.5:
+            continue
+        if not any(abs(other.rt - comp.rt) < legacy.MIN_SEPARATION_SCANS * dt for other in found):
+            found.append(comp)
+    return sorted(found, key=lambda c: (c.rt, -c.area, c.model_mz))
+
+
 def probe(ms, t0: float, t1: float, apex: float, settings: D.DeconvSettings | None = None) -> list[D.Component]:
     """The components of the peak ``t0``..``t1`` (MS time, apex ``apex``) found by the closer look."""
     params = params_of(settings)
@@ -147,7 +162,7 @@ def probe(ms, t0: float, t1: float, apex: float, settings: D.DeconvSettings | No
     peaks = _perceive(x, mzs, sigmas, params)
     groups = [_clean_model(g) for g in legacy._perceive_components(peaks, n, params)] if peaks else []
     if not groups:
-        return []
+        return _sensitive_window(ms, t0, t1, apex, settings, [])
     # residual pass: what the found components leave of every ion
     a = np.column_stack([legacy._model_shape(g[0], n) for g in groups])
     solve = legacy._lstsq_solver(a)
@@ -169,4 +184,8 @@ def probe(ms, t0: float, t1: float, apex: float, settings: D.DeconvSettings | No
         groups = [_clean_model(g) for g in groups[:legacy.MAX_COMPONENTS]]
     inside = [c for c in _purify(x, mzs, win_rt, lo, groups) if t0 <= c.rt <= t1]
     total = sum(c.area for c in inside)
-    return [c for c in inside if c.area >= MIN_AREA_SHARE * total and c.s_n >= MIN_SN]
+    sensitive = settings is not None and settings.noise_factor < 2.0
+    min_share = 0.001 if sensitive else MIN_AREA_SHARE
+    min_sn = 1.5 if sensitive else MIN_SN
+    selected = [c for c in inside if c.area >= min_share * total and c.s_n >= min_sn]
+    return _sensitive_window(ms, t0, t1, apex, settings, selected)

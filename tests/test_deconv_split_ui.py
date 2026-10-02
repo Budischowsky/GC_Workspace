@@ -362,3 +362,35 @@ def test_split_peaks_are_drawn_as_their_curves_and_markers_follow_integration(qt
     events = list(st.events('FID')) + [ManualEvent(K.ADD_PEAK, t - .01, t + .01)]
     st.undo.push(ManualEventsCommand(ws, st.id, 'FID', events, 'add a peak at a hidden component'))
     assert len(tic_panel._markers.points()) == 1
+
+
+@pytest.mark.parametrize('key', ['FID', 'FID - Blank'])
+def test_fid_deconvolution_fragments_appear_on_tic_and_follow_undo(qtbot, win, samples, key):
+    ws, st, dlg = _open(qtbot, win, samples, key, 11.865, prefixes=('07_',))
+    tic_panel = win.chroms[1]
+    assert tic_panel.key == 'TIC'
+    dlg.split()
+    fragments = [p for p in ws.active_result().peaks if p.extra.get('deconv_component')]
+    assert len(fragments) == 2
+    markers = tic_panel._deconv_markers
+    assert markers is not None
+    assert len(markers.points()) == len(fragments)
+    for point, peak in zip(markers.points(), fragments):
+        ms_rt = peak.extra['deconv_component']['rt']
+        assert point.pos().x() == pytest.approx(ms_rt + st.delay_value)
+        assert point.data().model_mz == peak.extra['deconv_component']['model_mz']
+    markers.sigClicked.emit(markers, [markers.points()[0]], None)
+    assert win.spectrum.source == 'component'
+    st.undo.undo()
+    assert tic_panel._deconv_markers is None
+    st.undo.redo()
+    assert len(tic_panel._deconv_markers.points()) == len(fragments)
+    ws.set_table_panel(1)
+    ws.integrate(st.id, key)
+    assert len(tic_panel._deconv_markers.points()) == len(fragments)
+    ws.set_panel(0, key='TIC')
+    ws.set_panel(1, key=key)
+    tic_panel = win.chroms[0]
+    assert len(tic_panel._deconv_markers.points()) == len(fragments)
+    for point, peak in zip(tic_panel._deconv_markers.points(), fragments):
+        assert point.pos().x() == pytest.approx(peak.extra['deconv_component']['rt'])

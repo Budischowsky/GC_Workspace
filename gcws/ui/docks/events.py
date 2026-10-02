@@ -4,10 +4,12 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox,
                                QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton,
-                               QSpinBox, QTabWidget, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
+                               QSlider, QSpinBox, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton,
+                               QVBoxLayout, QWidget)
 
 from gcws.core.model import FID, parse_key
-from gcws.integration.method import CHOICE_EVENTS, EventKind, IntegrationMethod, TimedEvent, VALUE_EVENTS
+from gcws.integration.method import (CHOICE_EVENTS, DECONV_LEVELS, EventKind, IntegrationMethod,
+                                     TimedEvent, VALUE_EVENTS)
 from gcws.ui.icons import icon
 from gcws.ui.undo import ManualEventsCommand, SetMethodCommand
 
@@ -134,6 +136,13 @@ class EventsDock(QWidget):
         self.deconv_mode.addItems(list(DECONV_MODES.values()))
         self.deconv_mode.setToolTip("Automatic: every peak holding several deconvoluted MS components is split "
                                     "into one peak per component (areas fitted to this trace)")
+        self.deconv_level = QSlider(Qt.Horizontal)
+        self.deconv_level.setRange(1, 5)
+        self.deconv_level.setTickPosition(QSlider.TicksBelow)
+        self.deconv_level.setTickInterval(1)
+        self.deconv_level.setToolTip("Low finds only strong components; High looks for smaller peaks and shoulders")
+        self.deconv_level_label = QLabel()
+        self.deconv_level.valueChanged.connect(self._deconv_level_changed)
         self.deconv_share = QDoubleSpinBox()
         self.deconv_share.setRange(0, 50)
         self.deconv_share.setDecimals(1)
@@ -141,7 +150,7 @@ class EventsDock(QWidget):
         self.deconv_share.setToolTip("A component with a smaller share of the fitted signal is not split off")
         self.deconv_sn = QDoubleSpinBox()
         self.deconv_sn.setRange(0, 1e4)
-        self.deconv_sn.setDecimals(0)
+        self.deconv_sn.setDecimals(1)
         self.deconv_sn.setToolTip("A component with a smaller MS S/N is not split off")
         self.deconv_r2 = QDoubleSpinBox()
         self.deconv_r2.setRange(0, 1)
@@ -169,7 +178,6 @@ class EventsDock(QWidget):
         self.deconv_exclude = QLineEdit()
         self.deconv_exclude.setToolTip("Components with one of these model ions (column bleed) are not split off")
         dform = QFormLayout()
-        dform.addRow("Deconvolution split", self.deconv_mode)
         dform.addRow("Min. component share", self.deconv_share)
         dform.addRow("Min. component S/N", self.deconv_sn)
         dform.addRow("Min. fit R²", self.deconv_r2)
@@ -180,9 +188,33 @@ class EventsDock(QWidget):
         self.deconv_status = QLabel()
         self.deconv_status.setObjectName("hint")
         self.deconv_status.setWordWrap(True)
-        dform.addRow(self.deconv_status)
+        self.deconv_advanced = QWidget()
+        self.deconv_advanced.setLayout(dform)
+        self.deconv_advanced.setVisible(False)
+        self.deconv_advanced_button = QToolButton()
+        self.deconv_advanced_button.setText("Advanced settings")
+        self.deconv_advanced_button.setCheckable(True)
+        self.deconv_advanced_button.setArrowType(Qt.DownArrow)
+        self.deconv_advanced_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.deconv_advanced_button.toggled.connect(self.deconv_advanced.setVisible)
+        self.deconv_advanced_button.toggled.connect(
+            lambda shown: self.deconv_advanced_button.setArrowType(Qt.UpArrow if shown else Qt.DownArrow))
+        level_row = QHBoxLayout()
+        level_row.addWidget(QLabel("Low"))
+        level_row.addWidget(self.deconv_level, 1)
+        level_row.addWidget(QLabel("High"))
+        level_row.addWidget(self.deconv_level_label)
+        dlayout = QVBoxLayout()
+        mode_row = QFormLayout()
+        mode_row.addRow("Deconvolution split", self.deconv_mode)
+        dlayout.addLayout(mode_row)
+        dlayout.addWidget(QLabel("Detection level"))
+        dlayout.addLayout(level_row)
+        dlayout.addWidget(self.deconv_advanced_button)
+        dlayout.addWidget(self.deconv_advanced)
+        dlayout.addWidget(self.deconv_status)
         dbox = QGroupBox("Automatic deconvolution split")
-        dbox.setLayout(dform)
+        dbox.setLayout(dlayout)
         pl = QVBoxLayout()
         pl.setContentsMargins(0, 0, 0, 0)
         pl.addLayout(form)
@@ -268,6 +300,18 @@ class EventsDock(QWidget):
     def _kind(self):
         return FID if parse_key(self.ws.signal_key)[0] == FID else "TIC"
 
+    def _deconv_level_changed(self, level: int) -> None:
+        self.deconv_level_label.setText(f"{level} / 5")
+        if self._loading:
+            return
+        values = DECONV_LEVELS[level]
+        self.deconv_share.setValue(100 * values["deconv_min_share"])
+        self.deconv_sn.setValue(values["deconv_min_sn"])
+        self.deconv_r2.setValue(values["deconv_fit_r2"])
+        self.deconv_r.setValue(values["deconv_min_r"])
+        self.deconv_probe.setChecked(True)
+        self.deconv_probe_r2.setValue(values["deconv_probe_r2"])
+
     def load(self):
         st = self.ws.active
         self._loading = True
@@ -299,6 +343,10 @@ class EventsDock(QWidget):
         self.tracking.setChecked(m.baseline_tracking)
         self.area_factor.setValue(m.area_unit_factor)
         self.deconv_mode.setCurrentText(DECONV_MODES.get(m.deconv_split, DECONV_MODES["off"]))
+        self.deconv_level.blockSignals(True)
+        self.deconv_level.setValue(max(1, min(5, int(m.deconv_level))))
+        self.deconv_level.blockSignals(False)
+        self.deconv_level_label.setText(f"{self.deconv_level.value()} / 5")
         self.deconv_share.setValue(100 * m.deconv_min_share)
         self.deconv_sn.setValue(m.deconv_min_sn)
         self.deconv_r2.setValue(m.deconv_fit_r2)
@@ -418,6 +466,7 @@ class EventsDock(QWidget):
         m.baseline_tracking = self.tracking.isChecked()
         m.area_unit_factor = self.area_factor.value()
         m.deconv_split = next(k for k, v in DECONV_MODES.items() if v == self.deconv_mode.currentText())
+        m.deconv_level = self.deconv_level.value()
         m.deconv_min_share = self.deconv_share.value() / 100
         m.deconv_min_sn = self.deconv_sn.value()
         m.deconv_fit_r2 = self.deconv_r2.value()

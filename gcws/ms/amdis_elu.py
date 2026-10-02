@@ -90,20 +90,25 @@ def benchmark(components: list[EluComponent], found, rt_tol: float = 0.015, mf_o
     t0 = time.time()
     for c in components:
         best, drt = 0.0, None
+        detected = False
         for rt, spec in found(c.rt):
-            if abs(rt - c.rt) > rt_tol or not spec:
+            if abs(rt - c.rt) > rt_tol:
+                continue
+            detected = True
+            if not spec:
                 continue
             mf = match_factor(c.spectrum, spec)
             if mf > best:
                 best, drt = mf, rt - c.rt
         rows.append({"scan": c.scan, "rt": c.rt, "model": c.model_mz, "ions": len(c.spectrum), "sn": c.sn,
-                     "mf": best, "drt": drt, "substantial": substantial(c)})
+                     "mf": best, "drt": drt, "detected": detected, "substantial": substantial(c)})
     elapsed = time.time() - t0
 
     def summary(sel):
         if not sel:
-            return {"n": 0, "recall": 0.0, "median_mf": 0.0}
+            return {"n": 0, "recall": 0.0, "rt_recall": 0.0, "median_mf": 0.0}
         return {"n": len(sel), "recall": sum(r["mf"] >= mf_ok for r in sel) / len(sel),
+                "rt_recall": sum(r["detected"] for r in sel) / len(sel),
                 "median_mf": statistics.median(r["mf"] for r in sel)}
     return {"all": summary(rows), "substantial": summary([r for r in rows if r["substantial"]]),
             "rows": rows, "seconds": elapsed}

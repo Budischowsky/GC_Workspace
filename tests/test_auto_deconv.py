@@ -159,13 +159,29 @@ def test_poor_fit_splits_by_ms_proportions_and_is_flagged():
 
 def test_method_keeps_the_settings():
     from gcws.integration.method import IntegrationMethod
-    m = IntegrationMethod(deconv_split="auto", deconv_min_share=0.05, deconv_exclude_mz=[73, 207])
+    m = IntegrationMethod(deconv_split="auto", deconv_level=5,
+                          deconv_min_share=0.05, deconv_exclude_mz=[73, 207])
     back = IntegrationMethod.from_dict(m.to_dict())
-    assert back.deconv_split == "auto" and back.deconv_min_share == 0.05 and back.deconv_exclude_mz == [73, 207]
+    assert (back.deconv_split == "auto" and back.deconv_level == 5 and
+            back.deconv_min_share == 0.05 and back.deconv_exclude_mz == [73, 207])
     assert IntegrationMethod().deconv_split == "off"
     back = IntegrationMethod.from_dict(IntegrationMethod(deconv_probe=False, deconv_probe_r2=0.9).to_dict())
     assert back.deconv_probe is False and back.deconv_probe_r2 == 0.9
     assert IntegrationMethod().deconv_probe is True
+
+
+def test_detection_slider_sets_five_levels_and_keeps_advanced_closed(app, qtbot):
+    from gcws.ui.docks.events import EventsDock
+    ws = workspace()
+    dock = EventsDock(ws)
+    qtbot.addWidget(dock)
+    assert dock.deconv_advanced.isHidden()
+    dock.deconv_level.setValue(5)
+    assert dock.deconv_level_label.text() == "5 / 5"
+    assert dock.collect().deconv_level == 5
+    assert dock.deconv_sn.value() == 1.5
+    dock.deconv_advanced_button.setChecked(True)
+    assert not dock.deconv_advanced.isHidden()
 
 
 # -- closer look: a shoulder the whole-run deconvolution does not resolve --------------------------

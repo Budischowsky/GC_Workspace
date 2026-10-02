@@ -480,9 +480,10 @@ class Workspace(QObject):
         st.presplit.pop(key, None)
         if not AD.enabled(method) or base_key(key) not in (FID, TIC) or st.run.ms is None:
             return res
-        background = self.deconv_background and AD.components_for(self, st, compute=False) is None
+        settings = AD.settings_for_method(self, method)
+        background = self.deconv_background and AD.components_for(self, st, settings=settings, compute=False) is None
         if background:
-            self._deconvolute_in_background(st)
+            self._deconvolute_in_background(st, method)
             return res
         try:
             plan = AD.plan_run(self, st, key, res, method)
@@ -499,13 +500,13 @@ class Workspace(QObject):
         st.presplit[key] = res
         return integrate(sig, method, list(st.events(key)) + plan.events, t_min=t_min)
 
-    def _deconvolute_in_background(self, st: RunState) -> None:
+    def _deconvolute_in_background(self, st: RunState, method: IntegrationMethod) -> None:
         """Whole-run deconvolution of ``st`` on the thread pool; the signals with an automatic
         split are integrated again when it is done."""
         from gcws.integration import auto_deconv as AD
         from gcws.ms import deconv_cache as DC
         from gcws.ui import workers
-        settings = DC.settings_of(self)
+        settings = AD.settings_for_method(self, method)
         job = (st.id, json_key(settings.to_dict()), self.solvent_cut(st, "TIC"))
         if job in self._deconv_jobs:
             return
@@ -515,7 +516,7 @@ class Workspace(QObject):
         def done(comps):
             self._deconv_jobs.discard(job)
             s = self.runs.get(run_id)
-            if s is None or json_key(DC.settings_of(self).to_dict()) != job[1] or self.solvent_cut(s, "TIC") != cut:
+            if s is None or self.solvent_cut(s, "TIC") != cut:
                 return
             DC.store_whole_run(s, settings, comps)
             self.deconvChanged.emit(run_id)
