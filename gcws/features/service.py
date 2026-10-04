@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 from typing import Optional
 
 from gcws.features import align as AL
@@ -106,13 +108,39 @@ def _consensus_key(spec) -> tuple:
     return tuple(int(m) for m in spec[0]), tuple(round(float(a), 1) for a in spec[1])
 
 
-def consensus_needed(ws, table: FeatureTable, cfg: Settings) -> list:
+def consensus_context(ws, members: list[str]) -> str:
+    """What a consensus search depends on besides the spectrum: the search method and the libraries."""
+    import gc_search_method as SM
+    from gcws.libsearch import service as LS
+    method = search_method(ws, members)
+    settings = {k: v for k, v in SM.to_api_settings(method, (1, 1), lite=True).items()
+                if k not in ("min_mz", "max_mz")}
+    return json.dumps({"method": method.name, "settings": settings, "libraries": LS.library_signature()},
+                      sort_keys=True, default=str)
+
+
+def consensus_cache_key(spectrum, context: str) -> str:
+    """The key of a consensus spectrum's hits (masses, abundances to 0.1, and the search context)."""
+    masses, abundances = _consensus_key(spectrum)
+    return hashlib.sha1(json.dumps([list(masses), list(abundances), context]).encode()).hexdigest()
+
+
+def _stored(group: Optional[dict]) -> dict:
+    return ((group or {}).get("features") or {}).get("consensus") or {}
+
+
+def consensus_needed(ws, table: FeatureTable, cfg: Settings, group: Optional[dict] = None) -> list:
     """``[(cache key, feature)]`` whose consensus spectrum still has to be searched; features with a
-    searched (cached) spectrum get their hits here. Only features whose first hits differ and one of
-    them reaches the quality limit need a search; a spectrum whose search failed is not retried."""
+    searched spectrum get their hits here, from this session or from the replicate group (the hits
+    are saved with the project). Only features whose first hits differ and one of them reaches the
+    quality limit need a search; not those with an analyst's or ISTD identification, which decide
+    without it. A spectrum whose search failed is not retried."""
     cache = _cache(ws, "_feature_consensus", dict)
     failed = _cache(ws, "_feature_consensus_failed", set)
+    group = group if group is not None else group_of(ws, table.members)
+    stored = _stored(group)
     ql = quality_limit(ws)
+    context = None
     needed = []
     for f in table.features:
         if f.consensus is None:
@@ -125,32 +153,53 @@ def consensus_needed(ws, table: FeatureTable, cfg: Settings) -> list:
             continue                                   # case A needs no search
         if not any(CO._score(h) >= ql for h in firsts):
             continue                                   # nothing acceptable to choose between
-        ck = _consensus_key(f.consensus)
+        if any(m.peak.manual or (m.peak.istd and m.peak.name) for m in f.found):
+            continue                                   # the analyst's or the ISTD's name decides
+        if context is None:
+            context = consensus_context(ws, table.members)
+        ck = f.consensus_key = consensus_cache_key(f.consensus, context)
         if ck in cache:
             f.consensus_hits = cache[ck]
+        elif ck in stored:
+            f.consensus_hits = cache[ck] = stored[ck]
         elif ck not in failed:
             needed.append((ck, f))
     return needed
 
 
-def store_consensus(ws, needed: list, note: str = "") -> None:
-    """Keep the hits of searched consensus spectra (``note``: the search could not be made)."""
+def store_consensus(ws, needed: list, note: str = "", group: Optional[dict] = None) -> None:
+    """Keep the hits of searched consensus spectra (``note``: the search could not be made), for
+    the session and in ``group`` (saved with the project)."""
     cache = _cache(ws, "_feature_consensus", dict)
     failed = _cache(ws, "_feature_consensus_failed", set)
+    changed = False
     for ck, f in needed:
         if note:
             failed.add(ck)
-        else:
-            cache[ck] = f.consensus_hits
+            continue
+        cache[ck] = f.consensus_hits
+        if group is None:
+            continue
+        try:
+            value = json.loads(json.dumps(f.consensus_hits, ensure_ascii=False))
+        except (TypeError, ValueError):
+            continue                                   # not storable: this session only
+        stored = group.setdefault("features", {}).setdefault("consensus", {})
+        if stored.get(ck) != value:
+            stored[ck] = value
+            changed = True
+    if changed and hasattr(ws, "dirty"):
+        ws.dirty = True
     ws._feature_consensus_note = note or ""
 
 
 def consensus(ws, table: FeatureTable, cfg: Settings, members: list[str], search: bool = True) -> None:
     """Consensus spectra, their library search (cached per spectrum) and the identities."""
-    needed = consensus_needed(ws, table, cfg)
+    group = group_of(ws, members)
+    needed = consensus_needed(ws, table, cfg, group)
     if needed and search and cfg.consensus_search:
         note = CO.search_consensus(table, search_method(ws, members), [f for _ck, f in needed])
-        store_consensus(ws, needed, note)
+        store_consensus(ws, needed, note, group)
     note = getattr(ws, "_feature_consensus_note", "")
     if note and cfg.consensus_search:
         table.notes.append(note)
@@ -255,6 +304,12 @@ def remember_ids(ws, members: list[str], table: FeatureTable) -> None:
     records = table.id_records()
     if (g.get("features") or {}).get("ids") != records:
         g.setdefault("features", {})["ids"] = records
+        if hasattr(ws, "dirty"):
+            ws.dirty = True
+    stored = _stored(g)
+    keep = {f.consensus_key for f in table.features if f.consensus_key}
+    if any(k not in keep for k in stored):
+        g["features"]["consensus"] = {k: v for k, v in stored.items() if k in keep}
         if hasattr(ws, "dirty"):
             ws.dirty = True
 

@@ -1008,6 +1008,7 @@ class DuplicatePage(QWidget):
         if not needed:
             return
         self._search_needed = needed
+        self._search_group = SV.group_of(self.ws, t.members)
         self.banner.setText(self.banner.text() + f"  Searching {len(needed)} consensus spectra…")
         window = self.window()
         if hasattr(window, "begin_activity"):
@@ -1024,7 +1025,7 @@ class DuplicatePage(QWidget):
         window = self.window()
         if hasattr(window, "end_activity"):
             window.end_activity(f"consensus:{id(self)}")
-        SV.store_consensus(self.ws, needed, note)
+        SV.store_consensus(self.ws, needed, note, group=getattr(self, "_search_group", None))
         if self.isVisible() and self.members:
             self.compare(sync=True)
 

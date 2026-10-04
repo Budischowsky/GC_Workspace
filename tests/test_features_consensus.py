@@ -313,3 +313,118 @@ def test_failed_fast_result_is_a_reason(libraries, monkeypatch):
         else:
             assert not f.reasons
     assert sum(1 for f in feats if f.consensus_hits) >= 8
+
+
+# -- no wasted searches; consensus hits saved with the replicate group ------------------------------
+
+def _dd(monkeypatch, *, manual=False, istd="", signature="s1"):
+    """``(ws, group, table, f)``: one feature whose first hits differ (a consensus search is due)."""
+    from gcws.features.model import FeatureTable
+    from gcws.libsearch import service as LS
+    monkeypatch.setattr(LS, "library_signature", lambda: signature)
+    f = feature(member("A", hits((*X, 86), (*Y, 85)), manual=manual, istd=istd),
+                member("B", hits((*Y, 85), (*X, 84.5))))
+    group = {"id": "g", "members": ["a", "b"]}
+    ws = SimpleNamespace(quant={}, runs={}, replicate_groups=[group], dirty=False)
+    return ws, group, FeatureTable(["a", "b"], ["A", "B"], "FID", [f], settings=Settings()), f
+
+
+def test_manual_and_istd_features_are_not_searched(monkeypatch):
+    from gcws.features import service as SV
+    ws, _g, table, _f = _dd(monkeypatch)
+    assert len(SV.consensus_needed(ws, table, Settings())) == 1
+    ws, _g, table, _f = _dd(monkeypatch, manual=True)
+    assert SV.consensus_needed(ws, table, Settings()) == []
+    ws, _g, table, _f = _dd(monkeypatch, istd="IS1")
+    assert SV.consensus_needed(ws, table, Settings()) == []
+
+
+def test_consensus_key_changes_with_spectrum_method_and_libraries(monkeypatch):
+    import gc_search_method as SM
+    from gcws.features import service as SV
+    from gcws.libsearch import service as LS
+    ws, _g, _t, f = _dd(monkeypatch)
+    spec = C.consensus_spectrum(f, Settings())
+    key = SV.consensus_cache_key(spec, SV.consensus_context(ws, ["a", "b"]))
+    near = (spec[0], spec[1] + np.r_[0.01, np.zeros(spec[1].size - 1)])
+    far = (spec[0], spec[1] + np.r_[1.0, np.zeros(spec[1].size - 1)])
+    assert SV.consensus_cache_key(near, SV.consensus_context(ws, ["a", "b"])) == key
+    assert SV.consensus_cache_key(far, SV.consensus_context(ws, ["a", "b"])) != key
+    monkeypatch.setattr(LS, "library_signature", lambda: "s2")
+    assert SV.consensus_cache_key(spec, SV.consensus_context(ws, ["a", "b"])) != key
+    monkeypatch.setattr(LS, "library_signature", lambda: "s1")
+    monkeypatch.setattr(SV, "search_method", lambda _ws, _members: SM.SearchMethod(name="Other"))
+    assert SV.consensus_cache_key(spec, SV.consensus_context(ws, ["a", "b"])) != key
+
+
+def test_stored_hits_are_used_without_a_search(monkeypatch):
+    from gcws.features import service as SV
+    from gcws.libsearch import service as LS
+    ws, group, table, f = _dd(monkeypatch)
+    key = SV.consensus_cache_key(C.consensus_spectrum(f, Settings()), SV.consensus_context(ws, ["a", "b"]))
+    group["features"] = {"consensus": {key: hits((*Y, 90))}}
+
+    def no_engine(*_a, **_k):
+        raise AssertionError("the library engine must not be loaded")
+    monkeypatch.setattr(LS, "get_engine", no_engine)
+    assert SV.consensus_needed(ws, table, Settings()) == []
+    assert f.consensus_hits == hits((*Y, 90)) and f.consensus_key == key
+
+
+def test_store_consensus_saves_json_hits_and_marks_dirty(monkeypatch):
+    import json
+    from gcws.features import service as SV
+    ws, group, table, f = _dd(monkeypatch)
+    needed = SV.consensus_needed(ws, table, Settings())
+    (key, _f), = needed
+    f.consensus_hits = [dict(h, peaks=[(57, 999), (71, 650)]) for h in hits((*Y, 90))]
+    SV.store_consensus(ws, needed, "x", group=group)
+    assert "consensus" not in group.get("features", {}) and ws.dirty is False
+    SV.store_consensus(ws, needed, group=group)
+    assert group["features"]["consensus"][key] == json.loads(json.dumps(f.consensus_hits))
+    assert ws.dirty is True
+    ws2, group2, table2, f2 = _dd(monkeypatch)
+    needed2 = SV.consensus_needed(ws2, table2, Settings())
+    f2.consensus_hits = [{"name": "odd", "value": object()}]
+    SV.store_consensus(ws2, needed2, group=group2)
+    assert not (group2.get("features") or {}).get("consensus")
+    assert ws2._feature_consensus[needed2[0][0]] is f2.consensus_hits
+
+
+def test_foreign_keys_are_searched_again_and_pruned(monkeypatch):
+    from gcws.features import service as SV
+    ws, group, table, _f = _dd(monkeypatch)
+    group["features"] = {"consensus": {"deadbeef": hits((*Z, 99))}}
+    assert len(SV.consensus_needed(ws, table, Settings())) == 1
+    SV.remember_ids(ws, ["a", "b"], table)
+    assert "deadbeef" not in group["features"]["consensus"]
+    assert ws.dirty is True
+    ws.dirty = False
+    SV.remember_ids(ws, ["a", "b"], table)
+    assert ws.dirty is False
+
+
+def test_library_change_invalidates_session_and_stored_hits(monkeypatch):
+    from gcws.features import service as SV
+    from gcws.libsearch import service as LS
+    ws, group, table, f = _dd(monkeypatch, signature="s1")
+    needed = SV.consensus_needed(ws, table, Settings())
+    f.consensus_hits = hits((*Y, 90))
+    SV.store_consensus(ws, needed, group=group)
+    assert SV.consensus_needed(ws, table, Settings()) == []
+    monkeypatch.setattr(LS, "library_signature", lambda: "s2")
+    f.consensus_hits = []
+    assert [x is f for _k, x in SV.consensus_needed(ws, table, Settings())] == [True]
+
+
+def test_hits_survive_a_project_round_trip(monkeypatch):
+    import json
+    from gcws.features import service as SV
+    ws, group, table, f = _dd(monkeypatch)
+    needed = SV.consensus_needed(ws, table, Settings())
+    f.consensus_hits = hits((*Y, 90))
+    SV.store_consensus(ws, needed, group=group)
+    ws2 = SimpleNamespace(quant={}, runs={}, replicate_groups=json.loads(json.dumps(ws.replicate_groups)))
+    f.consensus_hits = []
+    assert SV.consensus_needed(ws2, table, Settings()) == []
+    assert f.consensus_hits == hits((*Y, 90))

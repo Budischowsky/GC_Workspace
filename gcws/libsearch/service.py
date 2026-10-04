@@ -129,6 +129,13 @@ def get_engine(progress: Callable[[str], None] = lambda t: None, specs=None) -> 
         return _engine
 
 
+def library_signature() -> str:
+    """The library list with every file's size and time (the engine's rebuild key), as text: hits
+    stored under it are reused only while the libraries are unchanged."""
+    import json
+    return json.dumps(_key(store.load()), default=str)
+
+
 def reset() -> None:
     """Forget the engine (after a library was edited; the next search reloads)."""
     global _engine, _signature

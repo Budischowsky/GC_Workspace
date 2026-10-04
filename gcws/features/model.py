@@ -196,6 +196,7 @@ class Feature:
     identity: Optional[Identity] = None
     consensus: Optional[tuple] = None     # consensus spectrum (mz, ab)
     consensus_hits: list = field(default_factory=list)
+    consensus_key: str = ""                 # where its consensus hits are kept (see features.service)
     rpd: Optional[float] = None
     light: str = ""                       # green | yellow | red | grey
     reasons: list = field(default_factory=list)
