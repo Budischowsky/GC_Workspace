@@ -17,6 +17,7 @@ from typing import Callable, Optional
 
 import gcws.libsearch  # noqa: F401  (vendor on sys.path)
 from gcws.libsearch import store
+from gcws.libsearch.norms import NormFolds
 
 import engine as _atlas_engine        # vendored SpectrAtlas modules
 import msp as _msp
@@ -35,6 +36,7 @@ class LocalEngine(_atlas_engine.Engine):
     """``Engine`` over ``specs`` (native libraries first, then MSP files, as SpectrAtlas orders them)."""
 
     def __init__(self, specs: list, cache: Path, progress: Callable[[str], None] = lambda t: None):
+        self._folds = NormFolds()
         self.root = Path(cache)
         self.root.mkdir(parents=True, exist_ok=True)
         self.library_dirs = []
@@ -81,6 +83,17 @@ class LocalEngine(_atlas_engine.Engine):
                 self.sources.append(dict(name=spec.name, count=0, kind="MSP library", path=spec.path,
                                          status="Unavailable", error=str(error)))
         progress(f"Libraries ready · {self.count:,} reference spectra")
+
+    def shard_norms(self, index, minimum, maximum):
+        """The vendored prefilter norms, bit for bit, resumed from the previous search range
+        (:mod:`gcws.libsearch.norms`)."""
+        return self._folds.get(self.shards[index], index, minimum, maximum)
+
+    shard_norms.cache_clear = lambda: None      # the vendored close() clears its lru_cache
+
+    def close(self):
+        self._folds.clear()
+        super().close()
 
 
 _lock = threading.RLock()
