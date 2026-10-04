@@ -351,6 +351,9 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
        are shown as "c1 / c2"; the NIAS report then takes the lower SML.
      - Gap fills and names are made automatically as **one undo step** and logged. An automatic change that
        you undo is not made again.
+     - *Compare* re-fits only the peaks that changed. The consensus spectra are searched with *Fast search*
+       when the search method has it switched on, and their hits are saved with the replicate group, so a
+       reopened project does not search them again (a changed library or method searches anew).
    - Every substance has a **feature id** (F-001, kept through re-integrations) and a **traffic light**:
      - **green**: confirmed;
      - **yellow**: made consistent automatically (gap fill, name by consensus, two candidates, a difference
