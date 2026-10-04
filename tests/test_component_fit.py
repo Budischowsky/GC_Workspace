@@ -203,3 +203,116 @@ def test_planned_event_replays_exactly_and_draws_the_reported_area():
         t = np.linspace(parent.start, parent.end, 4001)
         drawn = fragment_curve(p, t)
         assert float(np.trapezoid(drawn, t * 60)) == pytest.approx(p.area_raw, rel=2e-3)
+
+
+# -- the fit cache ---------------------------------------------------------------------------------
+
+def _cache_inputs():
+    shapes = [F.Shape.of(component(10.0)), F.Shape.of(component(10.03, mz=71))]
+    t, y = trace([(10.0, 500.), (10.03, 300.)], 0.0066, 1.0)
+    return t, y, shapes
+
+
+def _assert_same_fit(a, b):
+    for name in ("amplitudes", "curves", "areas"):
+        np.testing.assert_array_equal(getattr(a, name), getattr(b, name))
+    for name in ("shift", "stretch", "r2", "residual", "collinear"):
+        assert getattr(a, name) == getattr(b, name), name
+
+
+def _count_residuals(monkeypatch):
+    calls = []
+    original = F._residual
+
+    def counted(a, y):
+        calls.append(1)
+        return original(a, y)
+    monkeypatch.setattr(F, "_residual", counted)
+    return calls
+
+
+def test_fit_cache_returns_an_equal_independent_copy():
+    F.fit_cache_clear()
+    t, y, shapes = _cache_inputs()
+    a = F.fit_trace(t, y, shapes, 0.0066)
+    b = F.fit_trace(t, y, shapes, 0.0066)
+    assert a is not b
+    reference = F.fit_trace_uncached(t, y, shapes, 0.0066)
+    _assert_same_fit(a, reference)
+    _assert_same_fit(b, reference)
+    a.curves[:] = 0
+    a.areas[:] = 0
+    a.amplitudes[:] = 0
+    _assert_same_fit(F.fit_trace(t, y, shapes, 0.0066), reference)
+
+
+def test_fit_cache_hit_skips_the_search(monkeypatch):
+    F.fit_cache_clear()
+    t, y, shapes = _cache_inputs()
+    calls = _count_residuals(monkeypatch)
+    F.fit_trace(t, y, shapes, 0.0066)
+    assert len(calls) > 100
+    calls.clear()
+    F.fit_trace(t, y, shapes, 0.0066)
+    assert len(calls) == 0
+
+
+def _changed(kind, t, y, shapes):
+    """``(t, y, shapes, shift0, scan_dt, mask)`` with one input changed."""
+    mask, shift0, scan_dt = None, 0.0066, None
+    if kind == "t":
+        t = t + 1e-9
+    elif kind == "y":
+        y = y * (1 + 1e-12)
+    elif kind == "mask":
+        mask = np.ones(t.size, dtype=bool)
+        mask[t.size // 2] = False
+    elif kind == "shape_rt":
+        s = shapes[0]
+        shapes = [F.Shape.from_arrays(s.rt + 1e-9, s.t, s.y), shapes[1]]
+    elif kind == "shape_y":
+        s = shapes[1]
+        shapes = [shapes[0], F.Shape.from_arrays(s.rt, s.t, s.y * 1.001)]
+    elif kind == "shift0":
+        shift0 = 0.0066 + 1e-6
+    elif kind == "scan_dt":
+        scan_dt = 0.0074
+    return t, y, shapes, shift0, scan_dt, mask
+
+
+@pytest.mark.parametrize("kind", ["t", "y", "mask", "shape_rt", "shape_y", "shift0", "scan_dt"])
+def test_fit_cache_key_covers_every_input(monkeypatch, kind):
+    F.fit_cache_clear()
+    t, y, shapes = _cache_inputs()
+    F.fit_trace(t, y, shapes, 0.0066)
+    calls = _count_residuals(monkeypatch)
+    t2, y2, shapes2, shift0, scan_dt, mask = _changed(kind, t, y, shapes)
+    got = F.fit_trace(t2, y2, shapes2, shift0, scan_dt=scan_dt, mask=mask)
+    assert len(calls) > 0
+    _assert_same_fit(got, F.fit_trace_uncached(t2, y2, shapes2, shift0, scan_dt=scan_dt, mask=mask))
+
+
+def test_fit_cache_is_bounded(monkeypatch):
+    F.fit_cache_clear()
+    monkeypatch.setattr(F, "FIT_CACHE_SIZE", 3)
+    t, y, shapes = _cache_inputs()
+    for k in range(5):
+        F.fit_trace(t, y, shapes, 0.006 + 0.0002 * k)
+    assert len(F._FIT_CACHE) == 3
+
+
+def test_fit_cache_is_thread_safe():
+    from concurrent.futures import ThreadPoolExecutor
+    F.fit_cache_clear()
+    t, y, shapes = _cache_inputs()
+    shifts = [0.006, 0.0066, 0.0072]
+    reference = {s: F.fit_trace_uncached(t, y, shapes, s) for s in shifts}
+
+    def work(n):
+        return [(s, F.fit_trace(t, y, shapes, s)) for s in (shifts * 3)[n % 3:n % 3 + 6]]
+
+    with ThreadPoolExecutor(8) as pool:
+        results = [r for part in pool.map(work, range(8)) for r in part]
+    assert len(results) == 48
+    for s, fit in results:
+        _assert_same_fit(fit, reference[s])

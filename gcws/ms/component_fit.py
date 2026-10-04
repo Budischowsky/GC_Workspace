@@ -11,9 +11,15 @@ cut points between the fragments.
 numpy only (scipy is not installed): a Fritsch-Carlson PCHIP interpolant and
 the Lawson-Hanson NNLS of the vendored NIAS engine. Deterministic: the grid
 search visits the same points in the same order and keeps the first minimum.
+Fits are cached by the content of their inputs, so a re-integration only fits
+the peaks whose trace window or components changed.
 """
 from __future__ import annotations
 
+import dataclasses
+import hashlib
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
@@ -211,8 +217,67 @@ def solve(t, y, shapes: Sequence[Shape], shift: float, stretch: float,
                     rms / height if height > 0 else 1.0, collinear)
 
 
+#: fits kept for reuse (a whole run has a few hundred; each holds a few small arrays)
+FIT_CACHE_SIZE = 4096
+_FIT_CACHE: "OrderedDict[bytes, TraceFit]" = OrderedDict()
+_FIT_LOCK = threading.Lock()
+
+
+def fit_cache_clear() -> None:
+    with _FIT_LOCK:
+        _FIT_CACHE.clear()
+
+
+def _fit_key(t, y, shapes: Sequence[Shape], shift0: float, scan_dt: Optional[float],
+             mask: Optional[np.ndarray]) -> bytes:
+    """Digest of everything :func:`fit_trace_uncached` reads (a shape's slopes follow from t, y)."""
+    h = hashlib.blake2b(digest_size=16)
+    t = np.ascontiguousarray(t, dtype=float)
+    h.update(t.tobytes())
+    h.update(b"|")
+    h.update(np.ascontiguousarray(y, dtype=float).tobytes())
+    h.update(b"|")
+    use = np.ones(t.size, dtype=bool) if mask is None else np.ascontiguousarray(mask, dtype=bool)
+    h.update(use.tobytes())
+    for s in shapes:
+        h.update(b"#")
+        h.update(repr(float(s.rt)).encode())
+        h.update(b"|")
+        h.update(np.ascontiguousarray(s.t, dtype=float).tobytes())
+        h.update(b"|")
+        h.update(np.ascontiguousarray(s.y, dtype=float).tobytes())
+    h.update(b"#")
+    h.update(repr((float(shift0), None if scan_dt is None else float(scan_dt))).encode())
+    return h.digest()
+
+
+def _copy(fit: TraceFit) -> TraceFit:
+    return dataclasses.replace(fit, amplitudes=fit.amplitudes.copy(), curves=fit.curves.copy(),
+                               areas=fit.areas.copy())
+
+
 def fit_trace(t, y, shapes: Sequence[Shape], shift0: float, scan_dt: Optional[float] = None,
               mask: Optional[np.ndarray] = None) -> TraceFit:
+    """:func:`fit_trace_uncached`, cached by the content of the inputs; every caller gets its own copy."""
+    if not shapes:
+        return fit_trace_uncached(t, y, shapes, shift0, scan_dt, mask)
+    key = _fit_key(t, y, shapes, shift0, scan_dt, mask)
+    with _FIT_LOCK:
+        fit = _FIT_CACHE.get(key)
+        if fit is not None:
+            _FIT_CACHE.move_to_end(key)
+            return _copy(fit)
+    fit = fit_trace_uncached(t, y, shapes, shift0, scan_dt, mask)
+    with _FIT_LOCK:
+        _FIT_CACHE[key] = fit
+        _FIT_CACHE.move_to_end(key)
+        while len(_FIT_CACHE) > FIT_CACHE_SIZE:
+            _FIT_CACHE.popitem(last=False)
+    return _copy(fit)
+
+
+def fit_trace_uncached(t, y, shapes: Sequence[Shape], shift0: float, scan_dt: Optional[float] = None,
+                       mask: Optional[np.ndarray] = None) -> TraceFit:
     """Best common shift and width factor, searched on a coarse grid and refined twice.
 
     ``shift0`` is the expected detector offset (the FID-MS delay, or 0 for an MS
