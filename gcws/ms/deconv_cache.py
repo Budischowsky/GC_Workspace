@@ -1,6 +1,7 @@
 """Deconvolution results cached per run and settings.
 
-A window around one peak takes well under 0.1 s, a whole run ~10 s (worker).
+A window around one peak takes a few milliseconds; a whole run (worker) under a
+second at the default detection level and a few seconds at the highest.
 Both are cached on ``RunState.deconv`` under the settings they were made
 with; the cache is dropped when the deconvolution settings change.
 """

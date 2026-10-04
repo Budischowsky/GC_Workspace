@@ -6,7 +6,7 @@ import gc_deconv
 from gcws.io.ms_matrix import MSMatrix
 from gcws.ms import deconv as D
 from gcws.ms import deconv_fast as F
-from tests.test_deconv import N, RT, SPEC_A, _DataMSAdapter, assert_same, build
+from tests.test_deconv import N, RT, SPEC_A, SPEC_B, _DataMSAdapter, assert_same, build
 
 
 def _level_params(level):
@@ -61,6 +61,18 @@ def test_reference_run_windows_match_vendored_engine(run07, level):
         assert_same(F.deconvolute(run07.ms, rt, params), expected)
         found += len(expected)
     assert found >= 10
+
+
+def test_window_and_whole_run_use_the_array_engine(monkeypatch):
+    """The per-ion vendored routine is the test reference only; the workspace must not call it."""
+    def per_ion_engine(*_args, **_kwargs):
+        raise AssertionError("the per-ion engine was called")
+
+    monkeypatch.setattr(gc_deconv, "deconvolute", per_ion_engine)
+    ms = build([(120.0, SPEC_A, 50000.0), (210.0, SPEC_B, 50000.0)])
+    high = D.settings_for_level(D.DeconvSettings(), 5)
+    assert D.deconvolute_window(ms, float(RT[120]), high).components
+    assert D.deconvolute_range(ms, float(RT[20]), float(RT[380]), high)
 
 
 def _shapes(n, apexes, width):

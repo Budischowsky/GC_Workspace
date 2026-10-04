@@ -1,6 +1,7 @@
 """Workspace adapter for the NIAS MS deconvolution engine.
 
-The vendored algorithm retains its numerical behavior. The highest sensitivity level
+Windows are computed by :mod:`gcws.ms.deconv_fast`, which finds the same components
+as the vendored algorithm a whole window at a time. The highest sensitivity level
 combines broad and narrow windows and scans a range more densely so weak
 neighbouring components can be perceived.
 """
@@ -12,6 +13,8 @@ from typing import Callable, Optional
 
 import numpy as np
 import gc_deconv as legacy
+
+from gcws.ms import deconv_fast
 
 ENGINE_VERSION = "nias-1"
 
@@ -103,13 +106,13 @@ class _DataMSAdapter:
         return list(zip(mz.tolist(), ab.tolist()))
 
 
-def deconvolute_window(ms, rt: float, settings: DeconvSettings | None = None) -> DeconvResult:
-    started = time.perf_counter()
-    settings = settings or DeconvSettings()
-    if settings.window <= 0:
-        raise ValueError("Deconvolution window must be positive")
-    comps = legacy.deconvolute(_DataMSAdapter(ms), rt, settings.params())
-    converted = [Component(**vars(c)) for c in comps]
+def _scan_step(ms) -> float:
+    return float(np.median(np.diff(ms.rt))) if ms.n_scans > 1 else 0.0075
+
+
+def _window_components(ms, rt: float, settings: DeconvSettings, dt: float | None = None) -> list:
+    """The components of the window around ``rt`` (``dt``: the run's scan step, if known)."""
+    converted = [Component(**vars(c)) for c in deconv_fast.deconvolute(ms, rt, settings.params())]
     if settings.noise_factor <= 1.5 and settings.window >= 0.24:
         # A narrow second view resolves small peaks which disappear into the
         # baseline of a broader ion window. Keep the primary window's spectrum
@@ -119,8 +122,8 @@ def deconvolute_window(ms, rt: float, settings: DeconvSettings | None = None) ->
                                        noise_factor=settings.noise_factor,
                                        shape_r=settings.shape_r, min_ions=settings.min_ions,
                                        apex_tolerance=settings.apex_tol)
-        dt = float(np.median(np.diff(ms.rt))) if ms.n_scans > 1 else 0.0075
-        for item in legacy.deconvolute(_DataMSAdapter(ms), rt, narrower):
+        dt = _scan_step(ms) if dt is None else dt
+        for item in deconv_fast.deconvolute(ms, rt, narrower):
             candidate = Component(**vars(item))
             if not any(abs(old.rt - candidate.rt) < legacy.MIN_SEPARATION_SCANS * dt
                        and (old.model_mz == candidate.model_mz or
@@ -128,6 +131,15 @@ def deconvolute_window(ms, rt: float, settings: DeconvSettings | None = None) ->
                        for old in converted):
                 converted.append(candidate)
         converted.sort(key=lambda c: (c.rt, -c.area, c.model_mz))
+    return converted
+
+
+def deconvolute_window(ms, rt: float, settings: DeconvSettings | None = None) -> DeconvResult:
+    started = time.perf_counter()
+    settings = settings or DeconvSettings()
+    if settings.window <= 0:
+        raise ValueError("Deconvolution window must be positive")
+    converted = _window_components(ms, rt, settings)
     scans = np.flatnonzero(np.abs(ms.rt - rt) <= settings.window)
     axis = ms.rt[scans]
     return DeconvResult(converted, float(axis[0]) if axis.size else rt - settings.window,
@@ -147,12 +159,11 @@ def deconvolute_range(ms, t0: float, t1: float, settings: DeconvSettings | None 
         raise ValueError("Deconvolution window must be positive")
     centers = np.arange(t0 + step / 2, t1 + step / 2, step)
     found = []
-    dt = float(np.median(np.diff(ms.rt))) if ms.n_scans > 1 else 0.0075
+    dt = _scan_step(ms)
     for k, center in enumerate(centers):
         if cancel is not None and cancel():
             break
-        result = deconvolute_window(ms, float(center), settings)
-        found.extend(c for c in result.components
+        found.extend(c for c in _window_components(ms, float(center), settings, dt)
                      if abs(c.rt - center) <= step / 2 and t0 <= c.rt <= t1)
         if progress is not None and k % 5 == 0:
             progress(f"deconvolution {100 * (k + 1) / len(centers):.0f} %")
