@@ -218,3 +218,98 @@ def test_search_without_libraries_is_a_note(tmp_path, monkeypatch):
         assert f.consensus_hits == []
     finally:
         service.reset()
+
+
+# -- the consensus search through the Fast search ---------------------------------------------------
+
+from tests.test_fast_search import data, libraries  # noqa: E402,F401  (fixtures)
+
+
+def _search_method():
+    import gc_search_method as SM
+    return SM.SearchMethod(name="T", libraries=[SM.LibraryEntry("A", True), SM.LibraryEntry("B", True)],
+                           algorithm="pbm", mode="sequential", stop_score=60, top_n=5)
+
+
+def _consensus_features(queries):
+    """12 consensus spectra in 3 search ranges (a weak ion on each bound), 4 per range."""
+    feats = []
+    for n, (_name, points) in enumerate(queries[:12]):
+        lo, hi = ((35, 300), (50, 300), (35, 200))[n % 3]
+        points = [(lo, 1.0)] + [(m, a) for m, a in points if lo < m < hi] + [(hi, 1.0)]
+        f = feature(member("A", []), member("B", []))
+        f.id = f"F-{n + 1:03d}"
+        f.consensus = (np.array([int(m) for m, _a in points]), np.array([float(a) for _m, a in points]))
+        feats.append(f)
+    return feats
+
+
+def _points(f):
+    return [(int(m), float(a)) for m, a in zip(*f.consensus)]
+
+
+def _expected(feats, method):
+    import gc_identify as GI
+    from gcws.identify import service as IS
+    IS.prepare_local(method)
+    return [[dict(GI.hit_record(h), peaks=h.get("peaks") or []) for h in IS.search_spectrum(_points(f), f.id, method)]
+            for f in feats]
+
+
+@pytest.mark.parametrize("fast", [True, False])
+def test_search_consensus_equals_per_spectrum(libraries, monkeypatch, fast):
+    from gcws.identify import service as IS
+    from gcws.libsearch import service as LS
+    method = _search_method()
+    feats = _consensus_features(libraries)
+    expected = _expected(feats, method)
+    monkeypatch.setattr(IS, "fast_search_methods", lambda: {"T"} if fast else set())
+    calls = []
+    real = LS.analyze_many
+    monkeypatch.setattr(LS, "analyze_many", lambda spectra, settings, *a, **k: calls.append(settings)
+                        or real(spectra, settings, *a, **k))
+    assert C.search_consensus(None, _search_method(), feats) == ""
+    assert [f.consensus_hits for f in feats] == expected
+    assert any(expected)
+    assert bool(calls) == fast
+
+
+def test_search_consensus_runs_ranges_in_ascending_order(libraries, monkeypatch):
+    from gcws.identify import service as IS
+    from gcws.libsearch import service as LS
+    method = _search_method()
+    feats = _consensus_features(libraries)
+    monkeypatch.setattr(IS, "fast_search_methods", lambda: {"T"})
+    ranges = []
+    real = LS.analyze_many
+    monkeypatch.setattr(LS, "analyze_many", lambda spectra, settings, *a, **k: ranges.append(
+        (settings["min_mz"], settings["max_mz"])) or real(spectra, settings, *a, **k))
+    C.search_consensus(None, method, feats)
+    distinct = {C.search_range(_points(f), method) for f in feats}
+    assert len(distinct) == 3
+    assert ranges == sorted(ranges) and len(ranges) == len(distinct)
+
+
+def test_failed_fast_result_is_a_reason(libraries, monkeypatch):
+    from gcws.identify import service as IS
+    from gcws.libsearch import service as LS
+    feats = _consensus_features(libraries)
+    monkeypatch.setattr(IS, "fast_search_methods", lambda: {"T"})
+    failed = []
+    real = LS.analyze_many
+
+    def boom(spectra, settings, *a, **k):
+        out = real(spectra, settings, *a, **k)
+        if len(out) > 1 and not failed:
+            failed.append(spectra[1][0])
+            out[1] = ValueError("boom")
+        return out
+    monkeypatch.setattr(LS, "analyze_many", boom)
+    assert C.search_consensus(None, _search_method(), feats) == ""
+    assert failed
+    for f in feats:
+        if f.id == failed[0]:
+            assert f.reasons == ["consensus search failed: boom"] and f.consensus_hits == []
+        else:
+            assert not f.reasons
+    assert sum(1 for f in feats if f.consensus_hits) >= 8
