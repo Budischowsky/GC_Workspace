@@ -44,6 +44,16 @@ class SortProxy(QSortFilterProxyModel):
         self.hide_predicate = None            # callable(source_row) -> True hides the row
         self.value_filter = None              # callable(source_row) -> False hides the row
 
+    def set_hide_predicate(self, predicate):
+        self.beginFilterChange()
+        self.hide_predicate = predicate
+        self.endFilterChange(QSortFilterProxyModel.Direction.Rows)
+
+    def set_value_filter(self, predicate):
+        self.beginFilterChange()
+        self.value_filter = predicate
+        self.endFilterChange(QSortFilterProxyModel.Direction.Rows)
+
     def filterAcceptsRow(self, row, parent):
         if self.hide_predicate is not None and self.hide_predicate(row):
             return False
@@ -180,7 +190,6 @@ class PeakTable(QWidget):
         self._syncing = False
         from gcws.ui import theme
         theme.set_chip(self.banner, self.ws.derived_note(self.ws.active), "warn")
-        self.proxy.invalidateFilter()
         self._update_info()
         self._on_selection(self.ws.active_id, self.ws.selected)
 
@@ -310,10 +319,9 @@ class PeakTable(QWidget):
             e.style().unpolish(e)
             e.style().polish(e)
         pred = value_predicate(FilterState(key, op, a, b), self.ws) if active else None
-        self.proxy.value_filter = (lambda row, pred=pred: pred(self.model.rows[row])) if pred else None
+        self.proxy.set_value_filter((lambda row, pred=pred: pred(self.model.rows[row])) if pred else None)
         self.vf_clear.setEnabled(active)
         self.vf_state.setText("(peaks without a value are hidden)" if active else "")
-        self.proxy.invalidateFilter()
         self._update_info()
         if save:
             QSettings().setValue("table/value_filter", json.dumps(
@@ -400,10 +408,9 @@ class PeakTable(QWidget):
                     return False
                 m = self.ws.blank_matches(st.id).get(row)
                 return m is not None and m.status == "blank"
-            self.proxy.hide_predicate = hidden
+            self.proxy.set_hide_predicate(hidden)
         else:
-            self.proxy.hide_predicate = None
-        self.proxy.invalidateFilter()
+            self.proxy.set_hide_predicate(None)
         self._update_info()
 
     def set_context_actions(self, actions) -> None:

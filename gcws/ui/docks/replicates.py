@@ -28,6 +28,7 @@ class ReplicatesDock(QWidget):
     """Double determination (A/B) page and the general N-fold replicate groups."""
     reportRequested = QtSignal(str, str)       # kind, group id
     previewRequested = QtSignal(str, str)      # kind, group id
+    report2Requested = QtSignal()
 
     def __init__(self, ws, parent=None):
         super().__init__(parent)
@@ -37,6 +38,7 @@ class ReplicatesDock(QWidget):
         self.duplicate = DuplicatePage(ws, self._set_groups)
         self.duplicate.reportRequested.connect(self.reportRequested.emit)
         self.duplicate.previewRequested.connect(self.previewRequested.emit)
+        self.duplicate.report2Requested.connect(self.report2Requested.emit)
         self.groups = QListWidget()
         self.groups.setToolTip("Replicate groups: the determinations of one sample")
         self.groups.currentRowChanged.connect(lambda *_: self.refresh_sheet())
@@ -289,11 +291,11 @@ class ReplicatesDock(QWidget):
         self.duplicate.members = [m for m in g["members"] if m in self.ws.runs]
         self.duplicate._navigate(self.rows[k])
 
-    def show_pair(self, a, b=None):
+    def show_pair(self, a, b=None, processed=False):
         """Open the double-determination tab for run ``a`` (and partner ``b``)."""
         self.tabs.setCurrentIndex(0)
         self.duplicate.refresh_choices()
-        self.duplicate.set_pair(a, b)
+        self.duplicate.set_pair(a, b, processed=processed)
 
     def export(self):
         g = self.current_group()

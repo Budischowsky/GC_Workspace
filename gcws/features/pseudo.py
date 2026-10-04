@@ -52,14 +52,22 @@ def coeluting(ms, t0: float, t1: float, spectrum, min_r: float = 0.8, pad: int =
     ref = block[:, main - lo]
     if not np.any(ref > 0):
         return None
-    keep = np.zeros(mz.size, bool)
-    for k, m in enumerate(mz):
-        if m == main:
-            keep[k] = True
-            continue
-        prof = block[:, int(m) - lo]
-        if np.count_nonzero(prof) >= 3 and pearson(prof, ref) >= min_r:
-            keep[k] = True
+    profiles = block[:, mz - lo]
+    eligible = np.count_nonzero(profiles, axis=0) >= 3
+    centered = profiles - profiles.mean(axis=0)
+    centered_ref = ref - ref.mean()
+    numerator = centered_ref @ centered
+    denominator = np.sqrt(np.dot(centered_ref, centered_ref)
+                          * np.sum(centered * centered, axis=0))
+    with np.errstate(invalid="ignore", divide="ignore"):
+        correlations = np.divide(numerator, denominator, out=np.zeros(mz.size, float),
+                                 where=denominator > 0)
+    keep = eligible & (correlations >= min_r)
+    # Matrix and scalar reductions can round differently at the decision boundary.
+    borderline = eligible & np.isfinite(correlations) & (np.abs(correlations - min_r) < 1e-10)
+    for k in np.flatnonzero(borderline):
+        keep[k] = pearson(profiles[:, k], ref) >= min_r
+    keep[mz == main] = True
     if int(keep.sum()) < min_ions:
         return None
     return mz[keep], ab[keep]

@@ -35,6 +35,23 @@ BACKOFF_S = (120, 600, 1800)          # retries of a job that could not read its
 HEARTBEAT_S = 10
 
 
+def _missing_sample_files(out_dir: Path, files: dict) -> list[str]:
+    """Formats the workflow requested but the regenerated revision did not produce."""
+    try:
+        spec = json.loads((out_dir / "spec.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ["job specification"]
+    missing = []
+    for report in spec.get("reports") or []:
+        produced = files.get(report.get("node")) or {}
+        wanted = (set(report.get("formats") or []) & set(W.SAMPLE_FORMATS)) | {"xlsx"}
+        for fmt in sorted(wanted):
+            path = produced.get(fmt)
+            if not path or not Path(path).is_file():
+                missing.append(f"{report.get('kind', 'report')} {fmt}")
+    return missing
+
+
 def server_name() -> str:
     """The local socket of the watcher of this data folder (one per user and data folder)."""
     try:
@@ -373,12 +390,18 @@ class WatcherCore(QObject):
                 continue
             wf = self.workflows.get(job.workflow_id)
             if wf is None or wf.node(job.method_node) is None:
+                if job.review_pending:
+                    self._cannot_start_review(job, "workflow or method is unavailable", now)
                 continue
             try:
                 spec, kind = self.spec_for(wf, job)
             except Exception as exc:  # noqa: BLE001
-                self.journal.transition(job.id, J.QUEUED, J.PROCESSING)
-                self.journal.transition(job.id, J.PROCESSING, J.FAILED, reason=f"cannot start: {exc}", finished=now)
+                if job.review_pending:
+                    self._cannot_start_review(job, str(exc), now)
+                else:
+                    self.journal.transition(job.id, J.QUEUED, J.PROCESSING)
+                    self.journal.transition(job.id, J.PROCESSING, J.FAILED, reason=f"cannot start: {exc}",
+                                            finished=now)
                 continue
             spec_path = store.atomic_write_json(Path(spec["out_dir"]) / "spec.json", spec)
             if not self.journal.transition(job.id, J.QUEUED, J.PROCESSING, started=now, job_dir=spec["out_dir"],
@@ -392,6 +415,13 @@ class WatcherCore(QObject):
             self.heartbeat()
             self.launcher.start(job.id, spec_path, kind)
             return
+
+    def _cannot_start_review(self, job: J.Job, reason: str, now: float) -> None:
+        if self.journal.transition(job.id, J.QUEUED, J.PROCESSING):
+            self.journal.transition(job.id, J.PROCESSING, J.CONTROL, reason=f"cannot start: {reason}",
+                                    finished=now, edited=1, review_pending=None, export_pending=0)
+            self.journal.event("error", f"{job.group_name}: updated report cannot start: {reason}",
+                               job_id=job.id, workflow_id=job.workflow_id, batch_id=job.batch_id)
 
     def spec_for(self, wf: W.Workflow, job: J.Job) -> tuple[dict, str]:
         m = wf.node(job.method_node)
@@ -478,14 +508,41 @@ class WatcherCore(QObject):
                                    f"{BACKOFF_S[attempts - 1] // 60} min", job_id=job_id)
                 return
             state = PL.FAILED
-        if state not in (J.CONTROL, J.ACCEPTED_AUTO, J.NOT_PROCESSED, J.FAILED):
+        pending = job.review_pending if not job.is_batch else None
+        if pending:
+            old_keys = {tuple(k) for k in pending.get("findings") or []}
+            new_keys = {J.finding_key(f) for f in fields["findings"] if f.get("level", "control") == "control"}
+            missing = _missing_sample_files(out_dir, fields["files"])
+            generated = (state in (J.CONTROL, J.ACCEPTED_AUTO) and bool(fields["files"])
+                         and not (fields["evidence"] or {}).get("errors") and not missing)
+            fields["review_pending"] = None
+            if not generated:
+                state = J.CONTROL
+                fields.update(reason="Edited report could not be regenerated: " +
+                              (res.get("reason") or ("missing report files: " + ", ".join(missing) if missing else "")
+                               or "; ".join(res.get("warnings") or []) or "no report was made"),
+                              files=job.files or {}, findings=job.findings or [], evidence=job.evidence or {},
+                              edited=1, export_pending=0)
+            elif new_keys - old_keys:
+                state = J.CONTROL
+                fields.update(reason="New findings in the regenerated report; review them before accepting",
+                              edited=0, export_pending=0)
+            else:
+                state = J.ACCEPTED_MANUAL
+                fields.update(reason="", edited=0, reviewer=pending.get("user") or "",
+                              comment=pending.get("comment") or "", reviewed_at=now, export_pending=1)
+                self.journal.event("info", f"{job.group_name}: updated report accepted by {fields['reviewer']}",
+                                   job_id=job.id, workflow_id=job.workflow_id, batch_id=job.batch_id,
+                                   user=fields["reviewer"])
+        if state not in (J.CONTROL, J.ACCEPTED_AUTO, J.ACCEPTED_MANUAL, J.NOT_PROCESSED, J.FAILED):
             state = J.FAILED
-        if state in (J.CONTROL, J.ACCEPTED_AUTO):
+        if state in (J.CONTROL, J.ACCEPTED_AUTO) and not pending:
             fields["export_pending"] = 1
         self.journal.transition(job_id, J.PROCESSING, state, **fields)
         text = {J.CONTROL: "control needed", J.ACCEPTED_AUTO: "accepted automatically",
+                J.ACCEPTED_MANUAL: "accepted by analyst",
                 J.NOT_PROCESSED: "not processed", J.FAILED: "failed"}[state]
-        level = "info" if state in (J.ACCEPTED_AUTO, J.CONTROL) else "error"
+        level = "info" if state in (J.ACCEPTED_AUTO, J.ACCEPTED_MANUAL, J.CONTROL) else "error"
         self.journal.event(level, f"{job.group_name}: {text}" + (f" - {res.get('reason')}" if res.get("reason") else ""),
                            job_id=job_id, workflow_id=job.workflow_id, batch_id=job.batch_id)
         if state == J.CONTROL and not job.is_batch:

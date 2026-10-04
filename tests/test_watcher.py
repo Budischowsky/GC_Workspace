@@ -3,6 +3,7 @@ job at a time, crashes, timeouts), Report² review and delivery, the batch repor
 socket and the opt-in autostart. The job processes are replaced by a fake launcher."""
 import json
 import os
+import sqlite3
 import time
 from pathlib import Path
 
@@ -98,6 +99,144 @@ def _result(spec, state="control", findings=1):
     return {"state": state, "reason": "", "files": {spec["reports"][0]["node"]: files}, "project": "",
             "evidence": {}, "findings": [{"rule": "sml_exceeded", "text": "x"}] * findings, "warnings": [],
             "timings": {}}
+
+
+@pytest.mark.parametrize("scenario,expected", [("same", "accepted_manual"), ("new", "control"),
+                                               ("failed", "control"), ("partial", "control")])
+def test_edited_accept_waits_for_rereport_and_checks_new_findings(env, scenario, expected):
+    from gcws.automation import journal as J
+    from gcws.automation.watcher import WatcherCore
+
+    jr, launcher = env["journal"], FakeLauncher()
+    core = WatcherCore(jr, launcher)
+    core.reload()
+    folder = env["watch"] / "batch"
+    folder.mkdir()
+    batch = jr.batch(env["wf"].id, folder)
+    method = env["wf"].methods()[0]
+    job = jr.ensure_job(env["wf"].id, method.id, batch["id"], "sample", "Sample",
+                        ["Sample_A.D", "Sample_B.D"], {}, "fp", state=J.QUEUED)
+    project = env["tmp"] / "edited.gcws"
+    project.write_text("{}")
+    jr.transition(job.id, J.QUEUED, J.PROCESSING)
+    old = [{"rule": "sml_exceeded", "member": "A", "substance": "X", "rt": 1.0, "text": "old"}]
+    jr.transition(job.id, J.PROCESSING, J.CONTROL, project_path=str(project), findings=old)
+
+    assert jr.mark_edited(job.id, 1)
+    assert jr.accept_edited(job.id, user="analyst")
+    queued = jr.job(job.id)
+    assert queued.state == J.QUEUED and queued.review_pending["user"] == "analyst"
+    assert queued.mode == "rereport" and queued.revision == 2
+    reopened = J.Journal(jr.path)
+    assert reopened.job(job.id).review_pending == queued.review_pending
+    reopened.close()
+    core.pump()
+    assert launcher.started[-1][1]["project_path"] == str(project)
+    result = _result(launcher.started[-1][1])
+    if scenario != "partial":
+        pdf = Path(launcher.started[-1][1]["out_dir"]) / "updated.pdf"
+        pdf.write_text("pdf")
+        result["files"][launcher.started[-1][1]["reports"][0]["node"]]["pdf"] = str(pdf)
+    result["findings"] = list(old) + ([{"rule": "manual_check", "member": "B", "substance": "Y",
+                                         "rt": 2.0, "text": "new"}] if scenario == "new" else [])
+    if scenario == "failed":
+        result.update(state="failed", files={}, reason="renderer crashed")
+    launcher.complete(result)
+    reviewed = jr.job(job.id)
+    assert reviewed.state == expected and reviewed.review_pending is None
+    assert reviewed.reviewer == ("analyst" if scenario == "same" else None)
+    assert reviewed.export_pending == 0
+    if scenario in ("failed", "partial"):
+        assert reviewed.edited == 1 and reviewed.project_path == str(project)
+        assert ("renderer crashed" if scenario == "failed" else "missing") in reviewed.reason
+
+
+def test_editing_accepted_report_returns_it_to_control(env):
+    from gcws.automation import journal as J
+
+    jr = env["journal"]
+    batch = jr.batch(env["wf"].id, env["watch"])
+    job = jr.ensure_job(env["wf"].id, env["wf"].methods()[0].id, batch["id"], "sample", "Sample",
+                        ["Sample_A.D", "Sample_B.D"], {}, "fp", state=J.QUEUED)
+    jr.transition(job.id, J.QUEUED, J.PROCESSING)
+    jr.transition(job.id, J.PROCESSING, J.ACCEPTED_AUTO)
+    assert jr.mark_edited(job.id, job.revision)
+    changed = jr.job(job.id)
+    assert changed.state == J.CONTROL and changed.edited == 1 and changed.export_pending == 0
+    assert jr.review(job.id, False, "bad data", user="analyst")
+    assert jr.job(job.id).state == J.REJECTED
+
+
+def test_new_unstructured_warning_requires_another_review():
+    from gcws.automation.journal import finding_key
+
+    first = {"rule": "processing_warnings", "text": "Word export failed"}
+    second = {"rule": "processing_warnings", "text": "PDF export failed"}
+    assert finding_key(first) != finding_key(second)
+
+
+def test_pending_accept_spec_failure_returns_to_control(env, monkeypatch):
+    from gcws.automation import journal as J
+    from gcws.automation.watcher import WatcherCore
+
+    jr, core = env["journal"], WatcherCore(env["journal"], FakeLauncher())
+    core.reload()
+    batch = jr.batch(env["wf"].id, env["watch"])
+    job = jr.ensure_job(env["wf"].id, env["wf"].methods()[0].id, batch["id"], "pair", "Pair",
+                        ["A.D", "B.D"], {}, "fp", state=J.QUEUED)
+    jr.transition(job.id, J.QUEUED, J.PROCESSING)
+    jr.transition(job.id, J.PROCESSING, J.CONTROL, project_path=str(env["tmp"] / "edited.gcws"))
+    assert jr.mark_edited(job.id, job.revision)
+    assert jr.accept_edited(job.id)
+    monkeypatch.setattr(core, "spec_for", lambda *args: (_ for _ in ()).throw(ValueError("workflow missing")))
+    core.pump()
+    failed = jr.job(job.id)
+    assert failed.state == J.CONTROL and failed.edited == 1 and failed.review_pending is None
+    assert "workflow missing" in failed.reason
+    assert jr.accept_edited(job.id)
+    core.workflows.clear()
+    core.pump()
+    missing = jr.job(job.id)
+    assert missing.state == J.CONTROL and missing.review_pending is None
+
+
+def test_old_journal_gains_persistent_review_columns(tmp_path):
+    from gcws.automation import journal as J
+
+    path = tmp_path / "old.sqlite"
+    old_ddl = J._DDL.replace("mode TEXT DEFAULT 'full', edited INTEGER DEFAULT 0, review_pending_json TEXT,",
+                             "mode TEXT DEFAULT 'full',")
+    con = sqlite3.connect(path)
+    con.executescript(old_ddl)
+    con.close()
+    journal = J.Journal(path)
+    columns = {row["name"] for row in journal.con.execute("PRAGMA table_info(jobs)")}
+    assert {"edited", "review_pending_json"} <= columns
+    journal.close()
+
+
+def test_changed_sample_revision_refreshes_batch_report(env):
+    from gcws.automation import journal as J
+    from gcws.automation.watcher import WatcherCore
+
+    jr, core = env["journal"], WatcherCore(env["journal"], FakeLauncher())
+    batch_dir = env["watch"] / "batch"
+    batch_dir.mkdir()
+    batch = jr.batch(env["wf"].id, batch_dir)
+    method = env["wf"].methods()[0]
+    sample = jr.ensure_job(env["wf"].id, method.id, batch["id"], "sample", "Sample",
+                           ["Sample_A.D", "Sample_B.D"], {}, "fp", state=J.QUEUED)
+    jr.transition(sample.id, J.QUEUED, J.PROCESSING)
+    jr.transition(sample.id, J.PROCESSING, J.ACCEPTED_AUTO)
+    core._batch_report(env["wf"], method, batch, batch_dir)
+    before = next(j for j in jr.jobs(batch_id=batch["id"]) if j.is_batch)
+    assert before.state == J.QUEUED
+    jr.transition(before.id, J.QUEUED, J.PROCESSING)
+    jr.transition(before.id, J.PROCESSING, J.ACCEPTED_AUTO)
+    jr.update_job(sample.id, revision=2)
+    core._batch_report(env["wf"], method, batch, batch_dir)
+    after = jr.job(before.id)
+    assert after.revision == 2 and after.state == J.QUEUED
 
 
 def test_watching_a_batch_being_acquired(env, qapp):

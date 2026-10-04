@@ -127,5 +127,7 @@ def test_sequence_log_per_folder(tmp_path):
 def test_real_sequence_log(samples):
     from gcws.io import sequence as SQ
     info = SQ.read_sequence(samples)
+    if info.tsv is None or info.log is None:
+        pytest.skip("the selected real-data batch has no sequence log")
     assert info.completed and info.stems[0] == "06_etoh_istd" and info.stems[-1] == "13_etoh"
     assert len(info.stems) == 8                                      # 02..05 wrote into another folder

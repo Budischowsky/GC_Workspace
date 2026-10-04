@@ -19,7 +19,7 @@ from typing import Iterable, Optional
 
 from gcws.automation import store
 
-SCHEMA = 1
+SCHEMA = 2
 
 # job states
 WAITING = "waiting"                     # runs or blanks still being acquired
@@ -41,7 +41,7 @@ DONE = (CONTROL, ACCEPTED_AUTO, ACCEPTED_MANUAL, REJECTED)          # processed 
 TRANSITIONS = {
     WAITING: {QUEUED, NOT_PROCESSED, WAITING, REMOVED},
     QUEUED: {PROCESSING, WAITING, REMOVED},
-    PROCESSING: {CONTROL, ACCEPTED_AUTO, FAILED, NOT_PROCESSED, QUEUED},
+    PROCESSING: {CONTROL, ACCEPTED_AUTO, ACCEPTED_MANUAL, FAILED, NOT_PROCESSED, QUEUED},
     FAILED: {QUEUED, WAITING, REMOVED},
     NOT_PROCESSED: {QUEUED, WAITING, REMOVED},
     REMOVED: {QUEUED},
@@ -71,7 +71,8 @@ CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, workflow_id TEXT, method_no
     created REAL, queued_at REAL, started REAL, finished REAL, pid INTEGER, job_dir TEXT, project_path TEXT,
     files_json TEXT, summary_json TEXT, evidence_json TEXT, findings_json TEXT, reviewer TEXT, comment TEXT,
     reviewed_at REAL, export_state TEXT DEFAULT 'none', export_pending INTEGER DEFAULT 0, override_json TEXT,
-    mode TEXT DEFAULT 'full', UNIQUE(workflow_id, method_node, batch_id, group_key));
+    mode TEXT DEFAULT 'full', edited INTEGER DEFAULT 0, review_pending_json TEXT,
+    UNIQUE(workflow_id, method_node, batch_id, group_key));
 CREATE TABLE IF NOT EXISTS exports(id INTEGER PRIMARY KEY, job_id TEXT, revision INTEGER, folder_node TEXT,
     report_node TEXT, fmt TEXT, src TEXT, dst TEXT, ts REAL, state TEXT, error TEXT);
 CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, ts REAL, level TEXT, user TEXT, workflow_id TEXT,
@@ -82,7 +83,17 @@ CREATE INDEX IF NOT EXISTS jobs_state ON jobs(state);
 CREATE INDEX IF NOT EXISTS events_job ON events(job_id);
 """
 
-_JSON = ("members", "blanks", "files", "summary", "evidence", "findings", "override", "plan")
+_JSON = ("members", "blanks", "files", "summary", "evidence", "findings", "override", "plan",
+         "review_pending")
+
+
+def finding_key(finding: dict) -> tuple:
+    """Stable identity of a finding, independent of its measured value or wording."""
+    rt = finding.get("rt")
+    unstructured = not any(finding.get(k) for k in ("member", "cas", "substance")) and rt is None
+    return (finding.get("rule") or "", finding.get("member") or "", finding.get("cas") or "",
+            finding.get("substance") or "", round(float(rt), 2) if rt is not None else None,
+            finding.get("level") or "control", (finding.get("text") or "").strip().casefold() if unstructured else "")
 
 
 def _user() -> str:
@@ -144,6 +155,11 @@ class Journal:
         for stmt in _DDL.strip().split(";"):
             if stmt.strip():
                 self.con.execute(stmt)
+        columns = {r["name"] for r in self.con.execute("PRAGMA table_info(jobs)")}
+        if "edited" not in columns:
+            self.con.execute("ALTER TABLE jobs ADD COLUMN edited INTEGER DEFAULT 0")
+        if "review_pending_json" not in columns:
+            self.con.execute("ALTER TABLE jobs ADD COLUMN review_pending_json TEXT")
         self.con.execute(f"PRAGMA user_version={SCHEMA}")
 
     def close(self):
@@ -270,6 +286,7 @@ class Journal:
                 self.con.execute(
                     "UPDATE jobs SET revision=revision+1, members_json=?, blanks_json=?, input_fp=?, state=?, "
                     "reason=?, attempts=0, reviewer=NULL, comment=NULL, reviewed_at=NULL, export_pending=0, "
+                    "edited=0, review_pending_json=NULL, "
                     "not_before=0 WHERE id=?",
                     (json.dumps(members), json.dumps(blanks), input_fp, state, "input changed: " + (reason or ""),
                      cur.id))
@@ -338,11 +355,50 @@ class Journal:
 
     # -- review (Report²) -----------------------------------------------------------------------
 
+    def mark_edited(self, job_id: str, revision: int, user: Optional[str] = None) -> bool:
+        """A saved analyst project now differs from the report of this revision."""
+        with self.tx():
+            job = self.job(job_id)
+            if job is None or job.is_batch or job.revision != revision or job.state not in (CONTROL, *ACCEPTED, REJECTED):
+                return False
+            if job.state == REJECTED:
+                # The rejection remains the visible decision until a new revision is queued.
+                cur = self.con.execute(
+                    "UPDATE jobs SET edited=1, export_pending=0, review_pending_json=NULL "
+                    "WHERE id=? AND revision=? AND state=?",
+                    (job_id, revision, REJECTED))
+            else:
+                cur = self.con.execute(
+                    "UPDATE jobs SET state=?, edited=1, reviewer=NULL, comment=NULL, reviewed_at=NULL, "
+                    "export_pending=0, review_pending_json=NULL WHERE id=? AND revision=? AND state=?",
+                    (CONTROL, job_id, revision, job.state))
+            if cur.rowcount:
+                self._event_raw("info", job.workflow_id, job.batch_id, job_id,
+                                f"{job.group_name}: analyst changes saved; report needs review", user)
+            return cur.rowcount == 1
+
+    def accept_edited(self, job_id: str, comment: str = "", user: Optional[str] = None) -> bool:
+        """Queue regeneration; persist the analyst's acceptance across watcher restarts."""
+        user = user or _user()
+        with self.tx():
+            job = self.job(job_id)
+            if job is None or job.state not in (CONTROL, REJECTED) or not job.edited or not job.project_path:
+                return False
+            intent = {"user": user, "comment": comment,
+                      "findings": [finding_key(f) for f in (job.findings or []) if f.get("level", "control") == "control"]}
+            ok = self.transition(job_id, job.state, QUEUED, mode="rereport", revision=job.revision + 1,
+                                 queued_at=time.time(), not_before=0, attempts=0, export_pending=0,
+                                 reviewer=None, comment=None, reviewed_at=None, review_pending=intent)
+            if ok:
+                self._event_raw("info", job.workflow_id, job.batch_id, job_id,
+                                f"{job.group_name}: accepted by {user}; regenerating the edited report", user)
+            return ok
+
     def review(self, job_id: str, accept: bool, comment: str = "", user: Optional[str] = None) -> bool:
         """The analyst accepts or rejects a processed report."""
         user = user or _user()
         j = self.job(job_id)
-        if j is None:
+        if j is None or j.review_pending or (accept and j.edited):
             return False
         to = ACCEPTED_MANUAL if accept else REJECTED
         ok = self.transition(job_id, (CONTROL, ACCEPTED_AUTO, ACCEPTED_MANUAL, REJECTED), to, reviewer=user,
@@ -360,7 +416,8 @@ class Journal:
         if j is None:
             return False
         fields = {"mode": mode, "attempts": 0, "not_before": 0, "queued_at": time.time(), "reviewer": None,
-                  "comment": None, "reviewed_at": None, "export_pending": 0, "revision": int(j.revision or 1) + 1}
+                  "comment": None, "reviewed_at": None, "export_pending": 0, "revision": int(j.revision or 1) + 1,
+                  "edited": 0, "review_pending": None}
         if override is not None:
             fields["override"] = override
         ok = self.transition(job_id, (CONTROL, ACCEPTED_AUTO, ACCEPTED_MANUAL, REJECTED, FAILED, NOT_PROCESSED,

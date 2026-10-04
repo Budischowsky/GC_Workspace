@@ -246,7 +246,9 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
        shoulder (second-derivative test) or that one component fits with R² below *Closer look below fit R²*
        (0.98) is deconvoluted again around its apex (`gcws.ms.deconv_probe`): 2 σ, two ions, apexes within
        one scan, a perception pass over the residual of the found components, the narrowest strong ion as
-       each component's model; the vendored engine is not changed. Its components pass the same gates.
+       each component's model; the vendored engine reuses its smoothing coefficients and evaluation
+       weights, and skips sorting ion traces whose lowest quartile is zero. Its numerical results and
+       component gates remain unchanged.
      - The splits are made again at every integration (not stored as manual events); each fragment keeps a
        stable id, so its identification survives re-integration. The panel shows how many peaks were split.
      - The library search also searches every FID fragment directly with its component spectrum (when it

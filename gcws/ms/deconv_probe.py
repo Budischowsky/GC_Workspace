@@ -12,7 +12,7 @@ sensitive parameters and then perceives once more in the residual left after the
 are fitted to every ion (the AMDIS way of finding a shoulder). All components are purified
 jointly, as the engine does it. What it finds still has to pass the split gates of the method.
 
-The vendored engine is called through its helpers only; it is not changed.
+The vendored engine is called through its helpers; its numerical algorithm is unchanged.
 """
 from __future__ import annotations
 

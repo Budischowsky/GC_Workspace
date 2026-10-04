@@ -1,5 +1,6 @@
 """GUI smoke tests (pytest-qt)."""
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -48,6 +49,30 @@ def test_bottom_activity_keeps_running_jobs_visible(win):
 
 def test_interactive_auto_deconvolution_uses_background_worker(win):
     assert win.ws.deconv_background
+
+
+def test_loaded_sample_display_and_name_edits_mark_project_dirty(monkeypatch):
+    from PySide6.QtGui import QColor
+    from gcws.ui.run_tabs import LoadedSamples
+
+    changes = []
+    state = SimpleNamespace(name="Old", color="#111111", visible=True,
+                            run=SimpleNamespace(meta=SimpleNamespace(sample_name="Old")))
+    ws = SimpleNamespace(runs={"a": state}, dirty=False,
+                         runChanged=SimpleNamespace(emit=changes.append))
+    tabs = SimpleNamespace(ws=ws)
+
+    LoadedSamples._visible(tabs, "a", False)
+    assert ws.dirty and not state.visible
+    ws.dirty = False
+    monkeypatch.setattr("gcws.ui.run_tabs.QColorDialog.getColor", lambda *args: QColor("#222222"))
+    LoadedSamples._color(tabs, "a")
+    assert ws.dirty and state.color == "#222222"
+    ws.dirty = False
+    monkeypatch.setattr("gcws.ui.run_tabs.QInputDialog.getText", lambda *args, **kwargs: ("New", True))
+    LoadedSamples._rename(tabs, "a")
+    assert ws.dirty and state.run.meta.sample_name == "New"
+    assert changes == ["a", "a", "a"]
 
 
 def test_load_tabs_and_overlay(qtbot, win, samples):
@@ -781,6 +806,34 @@ def test_library_search_on_tic_copies_names_to_fid(qtbot, win, samples):
     out, counts = transfer_names(ws, st.id, [(t, Identification(apex_rt=t, name="A", score=80)),
                                              (t + 0.001, Identification(apex_rt=t + 0.001, name="B", score=90))])
     assert [i.name for _rt, i in out] == ["B"] and counts["coeluting"] == 1
+
+
+def test_search_completion_disconnects_its_cancel_handler(win):
+    class Search:
+        def __init__(self):
+            self.cancellations = 0
+
+        def cancel(self):
+            self.cancellations += 1
+
+    search = Search()
+    win._search = search
+    win.cancel_btn.clicked.connect(search.cancel)
+    win._search_done([], {}, 0, False)
+    win.cancel_btn.click()
+    assert search.cancellations == 0
+
+
+def test_library_search_does_not_start_while_another_search_is_active(win):
+    class ActiveTimer:
+        def isActive(self):
+            return True
+
+    active = type("ActiveSearch", (), {"timer": ActiveTimer()})()
+    win._search = active
+    win.library_search()
+    assert win._search is active
+    assert "already running" in win.statusBar().currentMessage()
 
 
 def test_library_search_all_runs_and_only_shown_peaks(qtbot, win, samples):

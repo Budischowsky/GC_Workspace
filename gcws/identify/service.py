@@ -489,8 +489,3 @@ class LibrarySearchWorker(QObject):
                 self.timer.stop()
                 self.finished.emit(bool(value))
                 return
-
-
-def _english(text: str) -> str:
-    return (text.replace("EI Atlas wird gestartet (ohne Fenster)", "Starting SpectrAtlas (no window)")
-                .replace("Suche ", "Searching ").replace("Peak ", "peak "))

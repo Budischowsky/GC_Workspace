@@ -126,6 +126,7 @@ class LoadedSamples(QListWidget):
 
     def _visible(self, rid, on):
         self.ws.runs[rid].visible = on
+        self.ws.dirty = True
         self.ws.runChanged.emit(rid)
 
     def _color(self, rid):
@@ -133,6 +134,7 @@ class LoadedSamples(QListWidget):
         c = QColorDialog.getColor(QColor(st.color), self, f"Colour of {st.name}")
         if c.isValid():
             st.color = c.name()
+            self.ws.dirty = True
             self.ws.runChanged.emit(rid)
 
     def _rename(self, rid):
@@ -140,4 +142,5 @@ class LoadedSamples(QListWidget):
         text, ok = QInputDialog.getText(self, "Rename", "Sample name:", text=st.name)
         if ok and text.strip():
             st.run.meta.sample_name = text.strip()
+            self.ws.dirty = True
             self.ws.runChanged.emit(rid)

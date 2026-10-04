@@ -26,6 +26,7 @@ search, promotion to a grid row and register writes are out of scope (§VI.20).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Callable, Optional, Sequence
 
 import numpy as np
@@ -128,6 +129,8 @@ class Component:
 # Kernel 1 — Savitzky-Golay, closed form, no scipy
 # --------------------------------------------------------------------------
 
+# GCWS-PATCH: reuse the same least-squares matrix across ion traces and windows.
+@lru_cache(maxsize=16)
 def _sg_coeffs(width: int, order: int) -> np.ndarray:
     """Closed-form SG coefficient matrix ``C`` with shape ``(order + 1, width)``.
 
@@ -145,6 +148,14 @@ def _sg_coeffs(width: int, order: int) -> np.ndarray:
 def _sg_weights(coeffs: np.ndarray, order: int, t: float) -> np.ndarray:
     """Convolution weights that evaluate the fitted polynomial at offset ``t``."""
     return coeffs.T @ (float(t) ** np.arange(order + 1, dtype=float))
+
+
+# GCWS-PATCH: reuse the edge and centre evaluation weights for each smoothing setting.
+@lru_cache(maxsize=16)
+def _sg_kernels(width: int, order: int) -> tuple[np.ndarray, ...]:
+    coeffs = _sg_coeffs(width, order)
+    half = width // 2
+    return tuple(_sg_weights(coeffs, order, t) for t in range(-half, half + 1))
 
 
 def savgol(y: Sequence[float] | np.ndarray, width: int = 5,
@@ -170,16 +181,16 @@ def savgol(y: Sequence[float] | np.ndarray, width: int = 5,
         order = min(order, width - 1)
 
     half = width // 2
-    coeffs = _sg_coeffs(width, order)
+    kernels = _sg_kernels(width, order)
     out = np.empty(n, dtype=float)
 
-    centre = _sg_weights(coeffs, order, 0.0)
+    centre = kernels[half]
     out[half:n - half] = np.correlate(y, centre, mode="valid")
 
     head, tail = y[:width], y[-width:]
     for i in range(half):
-        out[i] = _sg_weights(coeffs, order, i - half) @ head
-        out[n - half + i] = _sg_weights(coeffs, order, i + 1) @ tail
+        out[i] = kernels[i] @ head
+        out[n - half + i] = kernels[half + i + 1] @ tail
     return out
 
 
@@ -337,6 +348,9 @@ def _ion_sigma(col: np.ndarray) -> float:
     what such an ion has to be compared against instead.
     """
     q = max(4, col.size // 4)
+    # GCWS-PATCH: nonnegative traces with at least q zeros have an exact zero lowest-quartile MAD.
+    if np.count_nonzero(col) <= col.size - q and np.min(col) >= 0.0:
+        return 0.0
     low = np.sort(col)[:q]
     mad = float(np.median(np.abs(low - np.median(low))))
     return mad_consistency(col.size) * mad

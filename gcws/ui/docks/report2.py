@@ -31,12 +31,14 @@ FILE_LABELS = {"docx": "Word", "xlsx": "Excel", "pdf": "PDF", "dd": "Double dete
 
 class Report2Dock(QWidget):
     openProject = Signal(str)                    # path of a job's .gcws project
+    openDetermination = Signal(str)              # Report² job id, resolved by the main window
 
     def __init__(self, parent=None, journal: Optional[J.Journal] = None, poll_ms: int = 3000):
         super().__init__(parent)
         self._journal = journal
         self.jobs: dict[str, J.Job] = {}
         self.current: Optional[str] = None
+        self.prepare_review = None               # optional main-window callback: save current job first
         lay = QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
         # watcher banner
@@ -190,7 +192,41 @@ class Report2Dock(QWidget):
         t.setRootIsDecorated(True)
         t.itemSelectionChanged.connect(lambda t=t: self._picked(t))
         t.itemDoubleClicked.connect(lambda *_: self.open_default())
+        t.setContextMenuPolicy(Qt.CustomContextMenu)
+        t.customContextMenuRequested.connect(lambda pos, t=t: self._tree_menu(t, pos))
         return t
+
+    @staticmethod
+    def _is_pair(job: J.Job) -> bool:
+        return not job.is_batch and len(job.members or []) == 2 and bool(job.project_path) and \
+            Path(job.project_path).is_file()
+
+    def visible_pairs(self) -> list[J.Job]:
+        """Processed A/B jobs under the current Report² filters, in batch and sample order."""
+        return sorted((j for j in self.jobs.values() if self._is_pair(j) and not j.review_pending and
+                       j.state in (J.CONTROL, *J.ACCEPTED)),
+                      key=lambda j: (self._batches.get(j.batch_id, {}).get("name", "").casefold(),
+                                     j.group_name.casefold()))
+
+    def _tree_menu(self, tree: QTreeWidget, pos):
+        menu = self._tree_context_menu(tree, pos)
+        if menu is not None:
+            menu.exec(tree.viewport().mapToGlobal(pos))
+
+    def _tree_context_menu(self, tree: QTreeWidget, pos):
+        item = tree.itemAt(pos)
+        job = self.jobs.get(item.data(0, Qt.UserRole)) if item is not None else None
+        if job is None or not self._is_pair(job) or job.review_pending:
+            return None
+        menu = QMenu(tree)
+        menu.addAction("Open in Replicates / results", lambda jid=job.id: self.open_determination(jid))
+        return menu
+
+    def open_determination(self, job_id: str):
+        job = self.jobs.get(job_id)
+        if job is not None and self._is_pair(job) and not job.review_pending:
+            self.select(job_id)
+            self.openDetermination.emit(job_id)
 
     def _poll(self):
         if not self.isVisible():
@@ -252,20 +288,23 @@ class Report2Dock(QWidget):
         auto, manual = count(J.ACCEPTED_AUTO), count(J.ACCEPTED_MANUAL)
         theme.set_chip(self.chips["processed"], f"Processed {processed}", "info")
         theme.set_chip(self.chips["accepted"], f"Accepted {auto + manual} ({auto} automatic, {manual} analyst)", "ok")
-        theme.set_chip(self.chips["control"], f"Control needed {count(J.CONTROL)}", "warn" if count(J.CONTROL)
+        control_count = sum(j.state == J.CONTROL or bool(j.review_pending) for j in samples)
+        theme.set_chip(self.chips["control"], f"Control needed {control_count}", "warn" if control_count
                        else "neutral")
         for key, states, label in (("not_processed", (J.NOT_PROCESSED,), "Not processed"),
                                    ("waiting", (J.WAITING, J.QUEUED, J.PROCESSING), "Waiting"),
                                    ("failed", (J.FAILED,), "Failed"), ("rejected", (J.REJECTED,), "Rejected")):
-            n = count(*states)
+            n = sum(j.state in states and not j.review_pending for j in samples)
             theme.set_chip(self.chips[key], f"{label} {n}" if n else "", "bad" if key != "waiting" else "neutral")
-        self._fill(self.control, [j for j in jobs if j.state == J.CONTROL])
+        self._fill(self.control, [j for j in jobs if j.state == J.CONTROL or j.review_pending])
         self._fill(self.accepted, [j for j in jobs if j.state in J.ACCEPTED])
-        self._fill(self.pending, [j for j in jobs if j.state in (J.WAITING, J.QUEUED, J.PROCESSING)])
+        self._fill(self.pending, [j for j in jobs if j.state in (J.WAITING, J.QUEUED, J.PROCESSING)
+                                  and not j.review_pending])
         self._fill(self.problems, [j for j in jobs if j.state in (J.NOT_PROCESSED, J.FAILED, J.REJECTED, J.REMOVED)])
         self.others.setTabText(1, f"Not processed / failed / rejected / removed "
                                   f"({count(J.NOT_PROCESSED, J.FAILED, J.REJECTED, J.REMOVED)})")
-        self.others.setTabText(0, f"Waiting / processing ({count(J.WAITING, J.QUEUED, J.PROCESSING)})")
+        waiting = sum(j.state in (J.WAITING, J.QUEUED, J.PROCESSING) and not j.review_pending for j in samples)
+        self.others.setTabText(0, f"Waiting / processing ({waiting})")
         try:
             self._stamp = None
             n = self.journal.con.execute("SELECT COUNT(*), MAX(COALESCE(finished,0)), MAX(COALESCE(reviewed_at,0)), "
@@ -293,7 +332,11 @@ class Report2Dock(QWidget):
             tree.addTopLevelItem(top)
             for j in sorted(items, key=lambda j: (j.is_batch, float(j.created or 0))):
                 n = len(j.findings or [])
-                it = QTreeWidgetItem([j.group_name, J.STATE_LABELS.get(j.state, j.state),
+                label = j.group_name
+                if self._is_pair(j):
+                    label += " — " + " / ".join(Path(m).stem for m in j.members)
+                status = "Updating report" if j.review_pending else J.STATE_LABELS.get(j.state, j.state)
+                it = QTreeWidgetItem([label, status,
                                       str(n) if n else "", J.when(j.finished or j.created)])
                 it.setData(0, Qt.UserRole, j.id)
                 it.setBackground(1, theme.status_brush(LEVEL.get(j.state, "neutral")))
@@ -377,11 +420,12 @@ class Report2Dock(QWidget):
             for c, v in enumerate((J.when(e["ts"]), e.get("user") or "", e.get("text") or "")):
                 self.history.setItem(r, c, QTableWidgetItem(v))
         done = job.state in J.DONE
-        self.b_accept.setEnabled(job.state in (J.CONTROL, J.REJECTED) or (job.is_batch and done))
-        self.b_reject.setEnabled(done and job.state != J.REJECTED)
+        self.b_accept.setEnabled(not job.review_pending and
+                                 (job.state in (J.CONTROL, J.REJECTED) or (job.is_batch and done)))
+        self.b_reject.setEnabled(not job.review_pending and done and job.state != J.REJECTED)
         self.b_project.setEnabled(bool(job.project_path) and Path(job.project_path).exists())
-        self.a_rereport.setEnabled(bool(job.project_path) and not job.is_batch)
-        self.a_reprocess.setEnabled(job.state not in (J.QUEUED, J.PROCESSING))
+        self.a_rereport.setEnabled(bool(job.project_path) and not job.is_batch and not job.review_pending)
+        self.a_reprocess.setEnabled(job.state not in (J.QUEUED, J.PROCESSING) and not job.review_pending)
         self.a_noblank.setEnabled(job.state == J.NOT_PROCESSED)
         self.a_remove.setEnabled(job.state in J.REMOVABLE)
         self.a_export.setEnabled(job.state in (J.CONTROL, J.ACCEPTED_AUTO, J.ACCEPTED_MANUAL))
@@ -397,16 +441,20 @@ class Report2Dock(QWidget):
         job = self._job()
         if job is None:
             return False
+        if self.prepare_review is not None and not self.prepare_review(job.id):
+            return False
+        job = self._job()
         if comment is None:
             dlg = ReviewDialog(accept, job.group_name, len(job.findings or []), self)
             if not dlg.exec():
                 return False
             comment = dlg.text()
-        ok = self.journal.review(job.id, accept, comment)
+        ok = self.journal.accept_edited(job.id, comment) if accept and job.edited else \
+            self.journal.review(job.id, accept, comment)
         if not ok:
             QMessageBox.information(self, "Report²", "The report changed meanwhile (processed again?); "
                                     "look at it once more.")
-        elif accept and not self._watcher_running():
+        elif accept and not job.edited and not self._watcher_running():
             self.export_now()
         self.refresh()
         return ok

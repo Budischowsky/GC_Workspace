@@ -466,17 +466,7 @@ def ensure_ri_table(con: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS ix_ri_observed_cas ON ri_observed(cas)")
 
 
-def _ri_value(value: Any) -> Optional[float]:
-    """A retention index as a finite float, or None. Never raises."""
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        number = float(str(value).strip().replace(",", "."))
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
-
-
+# GCWS-PATCH: removed the unused private RI conversion helper.
 def _ri_key(cas: Any, method: Any = "") -> tuple[str, str]:
     """Normalised ``(cas, method)``. Both sides of every query go through here."""
     return (str(cas or "").strip(), str(method or "").strip())

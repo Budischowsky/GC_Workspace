@@ -78,7 +78,7 @@ class PreferencesDialog(QDialog):
             pass
         self.nist.setPlaceholderText("automatic")
         self.lib2nist = QLineEdit(qs.value("prefs/lib2nist", "") or "")
-        self.lib2nist.setPlaceholderText("automatic (NIST MS Search / SpectrAtlas Library\Software)")
+        self.lib2nist.setPlaceholderText(r"automatic (NIST MS Search / SpectrAtlas Library\Software)")
         self.reason = QCheckBox("Ask for a reason for every manual integration (GLP)")
         self.reason.setChecked(qs.value("prefs/require_reason", False, type=bool))
         self.sticky = QCheckBox("Keep an integration tool active after use")

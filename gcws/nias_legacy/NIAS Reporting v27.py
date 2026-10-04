@@ -11735,8 +11735,9 @@ def create_combined_word(excel_paths: list[Path], word_path: Path) -> Path:
         for row in table.rows:
             # Sliced: a result sheet with an unforeseen column count must come
             # out narrow, never as an IndexError in the middle of a report.
+            cells = row.cells
             for col_index, unit in enumerate(width_units[:table_columns]):
-                row.cells[col_index].width = int(table_width * unit / total_units)
+                cells[col_index].width = int(table_width * unit / total_units)
 
         merged_slaves = set()
         for merged_range in ws.merged_cells.ranges:
@@ -11752,12 +11753,16 @@ def create_combined_word(excel_paths: list[Path], word_path: Path) -> Path:
 
         h_map = {"left": WD_ALIGN_PARAGRAPH.LEFT, "center": WD_ALIGN_PARAGRAPH.CENTER,
                  "right": WD_ALIGN_PARAGRAPH.RIGHT}
+        # GCWS-PATCH: resolve each python-docx row once after merging. Table.cell
+        # rebuilds the entire cell grid on every lookup in this installed version.
+        word_rows = tuple(row.cells for row in table.rows)
         for row_index in range(1, max_row + 1):
+            word_cells = word_rows[row_index - 1]
             for col_index in range(1, table_columns + 1):
                 if (row_index, col_index) in merged_slaves:
                     continue
                 xcell = ws.cell(row_index, col_index)
-                wcell = table.cell(row_index - 1, col_index - 1)
+                wcell = word_cells[col_index - 1]
                 wcell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
                 paragraph = wcell.paragraphs[0]
                 paragraph.paragraph_format.space_after = Pt(0)

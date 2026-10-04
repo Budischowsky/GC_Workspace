@@ -150,8 +150,8 @@ Select a report to see
 | Button | What it does |
 |---|---|
 | **Open report** | Opens the Word, Excel or PDF file. |
-| **Open in GC Workspace** | Opens the sample exactly as it was processed - runs, integration, names, internal standards, blanks - to check or correct it. |
-| **Accept...** | Accepts the report with your name, the time and a comment (required when there are findings). It is then delivered along the arrows. |
+| **Open in GC Workspace** | Opens the sample exactly as it was processed - runs, integration, names, internal standards, blanks - to check or correct it. Right-click an A/B pair for **Open in Replicates / results**. |
+| **Accept...** | Accepts the report with your name and time; a comment is optional. If you changed the sample, Report² regenerates the report from the saved project first and checks for new findings. The updated report is delivered after acceptance. |
 | **Reject...** | Rejects it with a comment. |
 | **More > Report again from the (edited) project** | After you corrected the sample and saved the project: makes the report again from it. |
 | **More > Process again from the raw data** | Starts over from the raw data. |
@@ -161,8 +161,10 @@ Select a report to see
 | **More > Deliver to the target folders now** | Delivers the files again. |
 | **Rules...** | The rules, see below. |
 
-The usual way through a report that needs control: **Open in GC Workspace**, correct what the finding names,
-save the project, **More > Report again from the (edited) project**, then **Accept...**.
+The usual way through a report that needs control: open its double determination, correct what the finding names,
+then **Accept...**. Switching to another pair with **Load from Report²…** beside **Compare** saves changes to the
+current project. If the watcher is stopped, a requested report update waits in **Control needed** until it starts.
+An edited report with new findings stays in **Control needed** for another review.
 
 ## The rules
 

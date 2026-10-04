@@ -1,6 +1,6 @@
 """Workspace adapter for the NIAS MS deconvolution engine.
 
-The vendored algorithm is called unchanged. The highest sensitivity level
+The vendored algorithm retains its numerical behavior. The highest sensitivity level
 combines broad and narrow windows and scans a range more densely so weak
 neighbouring components can be perceived.
 """

@@ -124,11 +124,264 @@ def test_open_in_gc_workspace(qtbot, data, tmp_path, monkeypatch):
     assert got == [str(proj)]
 
 
+def test_accept_comment_is_optional_but_reject_comment_is_required(qtbot):
+    from PySide6.QtWidgets import QDialog
+    from gcws.ui.dialogs.report2 import ReviewDialog
+
+    accept = ReviewDialog(True, "S-control", 2)
+    qtbot.addWidget(accept)
+    assert not accept.required
+    accept._ok()
+    assert accept.result() == QDialog.Accepted
+
+    reject = ReviewDialog(False, "S-control", 0)
+    qtbot.addWidget(reject)
+    assert reject.required
+    reject._ok()
+    assert reject.result() != QDialog.Accepted
+
+
+def test_processed_pairs_are_nested_and_available_to_switch(qtbot, data, tmp_path, monkeypatch):
+    from gcws.automation import journal as J
+    from gcws.ui.docks.report2 import Report2Dock
+
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    project = tmp_path / "pair.gcws"
+    project.write_text("{}")
+    for name in ("S-control", "S-auto"):
+        jr.update_job(ids[name], members=[f"{name}_A.D", f"{name}_B.D"], project_path=str(project))
+    monkeypatch.setattr("gcws.automation.control.WatcherControl", lambda *a, **k: NoWatcher())
+    dock = Report2Dock(journal=jr)
+    qtbot.addWidget(dock)
+    child = dock.control.topLevelItem(0).child(0)
+    assert batch.name == dock.control.topLevelItem(0).text(0)
+    assert "S-control_A" in child.text(0) and "S-control_B" in child.text(0)
+    assert {j.id for j in dock.visible_pairs()} == {ids["S-control"], ids["S-auto"]}
+    opened = []
+    dock.openDetermination.connect(opened.append)
+    dock.open_determination(ids["S-control"])
+    assert opened == [ids["S-control"]]
+    opened.clear()
+    menu = dock._tree_context_menu(dock.control, dock.control.visualItemRect(child).center())
+    assert menu.actions()[0].text() == "Open in Replicates / results"
+    menu.actions()[0].trigger()
+    assert opened == [ids["S-control"]]
+    dock.search.setText("S-auto")
+    assert [j.id for j in dock.visible_pairs()] == [ids["S-auto"]]
+
+
+def test_edited_accept_queues_regeneration(qtbot, data, tmp_path, monkeypatch):
+    from gcws.automation import journal as J
+    from gcws.ui.docks.report2 import Report2Dock
+
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    project = tmp_path / "pair.gcws"
+    project.write_text("{}")
+    jr.update_job(ids["S-control"], project_path=str(project), edited=1)
+    monkeypatch.setattr("gcws.automation.control.WatcherControl", lambda *a, **k: NoWatcher())
+    dock = Report2Dock(journal=jr)
+    qtbot.addWidget(dock)
+    dock.select(ids["S-control"])
+    assert dock.review(True, comment="")
+    job = jr.job(ids["S-control"])
+    assert job.state == J.QUEUED and job.review_pending
+    assert _names(dock.control) == ["S-control"] and "S-control" not in _names(dock.pending)
+
+
 def test_docks_and_menus(qtbot, win):
     assert "report2" in win.docks and "automation" in win.docks
     labels = [a.text() for a in win.report_menu.actions()]
     assert "Batch report of this folder..." in labels
     assert "Report²" in [a.text() for a in win.automation_menu.actions()]
+
+
+def test_replicates_has_report2_pair_picker(qtbot, win, monkeypatch):
+    page = win.replicates.duplicate
+    assert page.b_report2.text() == "Load from Report²…"
+    page.resize(1000, 600)
+    page.show()
+    from PySide6.QtWidgets import QApplication
+    QApplication.processEvents()
+    assert page.b_report2.y() == page.b_compare.y()
+    assert page.b_report2.x() + page.b_report2.width() < 388  # fits the usual dock width
+    win.replicates.report2Requested.disconnect(win._show_report2_pair_menu)
+    selected = []
+    win.replicates.report2Requested.connect(lambda: selected.append(True))
+    page.b_report2.click()
+    assert selected == [True]
+
+
+def test_processed_pair_display_does_not_apply_automatic_changes(qtbot, win, monkeypatch):
+    page = win.replicates.duplicate
+    calls = []
+    monkeypatch.setattr(page, "compare", lambda sync=False: calls.append(sync))
+    page.set_pair("A", "B", processed=True)
+    assert calls == [False] and page._view_processed
+
+
+def test_switch_saves_accepted_project_and_returns_it_to_control(qtbot, win, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    from gcws.automation import journal as J
+
+    jr = J.Journal(tmp_path / "journal.sqlite")
+    batch = jr.batch("wf", tmp_path)
+    job = jr.ensure_job("wf", "method", batch["id"], "pair", "Pair", ["A.D", "B.D"], {}, "fp",
+                        state=J.QUEUED)
+    project = tmp_path / "pair.gcws"
+    project.write_text("original")
+    jr.transition(job.id, J.QUEUED, J.PROCESSING)
+    jr.transition(job.id, J.PROCESSING, J.ACCEPTED_AUTO, project_path=str(project))
+    win.report2._journal = jr
+    win._report2_job = (job.id, 1, project)
+    win._report2_baseline = {"quant": {"limit": 1}}
+    win.ws.project_path = project
+    win.ws.dirty = True
+    monkeypatch.setattr("gcws.ui.main_window.P.to_dict", lambda ws, path: {"quant": {"limit": 2}})
+    monkeypatch.setattr("gcws.ui.main_window.P.save", lambda ws, path: (project.write_text("edited"), project)[1])
+
+    assert win._save_report2_project()
+    assert project.read_text() == "edited"
+    assert jr.job(job.id).state == J.CONTROL and jr.job(job.id).edited == 1
+    assert jr.accept_edited(job.id, user="analyst")
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: None)
+    assert win._save_report2_project()  # switching after Accept must not trap the open project
+    writes = []
+    monkeypatch.setattr(win.ws, "states", lambda: [object()])
+    monkeypatch.setattr("gcws.ui.main_window.P.save", lambda ws, path: (writes.append(path), path)[1])
+    win.save_project()
+    assert writes == []  # Ctrl+S on an old revision must not overwrite the pending source
+
+
+def test_run_rename_marks_report2_project_edited(qtbot, win, tmp_path, monkeypatch):
+    from gcws.automation import journal as J
+    from gcws.ui.main_window import _report_inputs
+
+    jr = J.Journal(tmp_path / "journal.sqlite")
+    batch = jr.batch("wf", tmp_path)
+    job = jr.ensure_job("wf", "method", batch["id"], "pair", "Pair", ["A.D", "B.D"], {}, "fp",
+                        state=J.QUEUED)
+    project = tmp_path / "pair.gcws"
+    project.write_text("original")
+    jr.transition(job.id, J.QUEUED, J.PROCESSING)
+    jr.transition(job.id, J.PROCESSING, J.ACCEPTED_AUTO, project_path=str(project))
+    win.report2._journal = jr
+    win._report2_job = (job.id, 1, project)
+    original = {"runs": [{"id": "a", "name": "Old"}]}
+    renamed = {"runs": [{"id": "a", "name": "New"}]}
+    win._report2_baseline = _report_inputs(original)
+    win.ws.project_path = project
+    win.ws.dirty = False
+    monkeypatch.setattr("gcws.ui.main_window.P.to_dict", lambda ws, path: renamed)
+    monkeypatch.setattr("gcws.ui.main_window.P.save", lambda ws, path: (project.write_text("edited"), project)[1])
+
+    assert win._save_report2_project()
+    assert project.read_text() == "edited"
+    assert jr.job(job.id).state == J.CONTROL and jr.job(job.id).edited == 1
+
+
+def test_rejected_report2_project_can_be_saved_and_requeued(qtbot, win, tmp_path, monkeypatch):
+    from gcws.automation import journal as J
+    from gcws.ui.main_window import _report_inputs
+
+    jr = J.Journal(tmp_path / "journal.sqlite")
+    batch = jr.batch("wf", tmp_path)
+    job = jr.ensure_job("wf", "method", batch["id"], "pair", "Pair", ["A.D", "B.D"], {}, "fp",
+                        state=J.QUEUED)
+    project = tmp_path / "pair.gcws"
+    project.write_text("original")
+    jr.transition(job.id, J.QUEUED, J.PROCESSING)
+    jr.transition(job.id, J.PROCESSING, J.CONTROL, project_path=str(project))
+    assert jr.review(job.id, False, "bad data", user="reviewer")
+    win.report2._journal = jr
+    win._report2_job = (job.id, 1, project)
+    win._report2_baseline = _report_inputs({"quant": {"limit": 1}})
+    win.ws.project_path = project
+    win.ws.dirty = False
+    monkeypatch.setattr("gcws.ui.main_window.P.to_dict", lambda ws, path: {"quant": {"limit": 2}})
+    monkeypatch.setattr("gcws.ui.main_window.P.save", lambda ws, path: (project.write_text("edited"), project)[1])
+    monkeypatch.setattr("gcws.ui.main_window.QMessageBox.warning", lambda *args: None)
+
+    assert win._save_report2_project()
+    saved = jr.job(job.id)
+    assert project.read_text() == "edited"
+    assert saved.state == J.REJECTED and saved.edited == 1
+    assert saved.reviewer == "reviewer" and saved.comment == "bad data"
+    assert jr.accept_edited(job.id, user="analyst")
+    queued = jr.job(job.id)
+    assert queued.state == J.QUEUED and queued.review_pending["user"] == "analyst"
+    assert queued.reviewer is None and queued.comment is None and queued.reviewed_at is None
+
+
+def test_stale_report2_project_refuses_unsaved_display_changes(qtbot, win, tmp_path, monkeypatch):
+    from gcws.automation import journal as J
+    from gcws.ui.main_window import _report_inputs
+
+    jr = J.Journal(tmp_path / "journal.sqlite")
+    batch = jr.batch("wf", tmp_path)
+    job = jr.ensure_job("wf", "method", batch["id"], "pair", "Pair", ["A.D", "B.D"], {}, "fp",
+                        state=J.QUEUED)
+    project = tmp_path / "pair.gcws"
+    project.write_text("original")
+    win.report2._journal = jr
+    win._report2_job = (job.id, 1, project)
+    win._report2_baseline = _report_inputs({"runs": [{"id": "a", "color": "#111111"}]})
+    win.ws.project_path = project
+    win.ws.dirty = True
+    jr.update_job(job.id, revision=2, project_path=str(project))
+    monkeypatch.setattr("gcws.ui.main_window.P.to_dict", lambda ws, path: {"runs": [{"id": "a", "color": "#222222"}]})
+    monkeypatch.setattr("gcws.ui.main_window.P.save", lambda ws, path: pytest.fail("stale source overwritten"))
+    warnings = []
+    monkeypatch.setattr("gcws.ui.main_window.QMessageBox.warning", lambda *args: warnings.append(args[-1]))
+
+    assert not win._save_report2_project()
+    assert warnings and project.read_text() == "original"
+
+
+def test_incomplete_report2_project_is_not_attached_or_saved(qtbot, win, tmp_path, monkeypatch):
+    from gcws.automation import journal as J
+
+    jr = J.Journal(tmp_path / "journal.sqlite")
+    batch = jr.batch("wf", tmp_path)
+    job = jr.ensure_job("wf", "method", batch["id"], "pair", "Pair", ["A.D", "B.D"], {}, "fp",
+                        state=J.QUEUED)
+    project = tmp_path / "pair.gcws"
+    project.write_text("original")
+    jr.transition(job.id, J.QUEUED, J.PROCESSING)
+    jr.transition(job.id, J.PROCESSING, J.CONTROL, project_path=str(project))
+    win.report2._journal = jr
+    monkeypatch.setattr("gcws.ui.main_window.P.read", lambda path: {"runs": [{"id": "a"}, {"id": "b"}]})
+    monkeypatch.setattr("gcws.ui.main_window.P.resolve_run_path",
+                        lambda entry, path: project if entry["id"] == "a" else None)
+    warnings = []
+    monkeypatch.setattr("gcws.ui.main_window.QMessageBox.warning", lambda *args: warnings.append(args[-1]))
+
+    assert not win.open_report2_job(job.id)
+    assert win._report2_job is None and project.read_text() == "original"
+    assert warnings
+
+
+def test_async_report2_load_failure_does_not_bind_partial_workspace(qtbot, win, tmp_path, monkeypatch):
+    from gcws.automation import journal as J
+
+    jr = J.Journal(tmp_path / "journal.sqlite")
+    batch = jr.batch("wf", tmp_path)
+    job = jr.ensure_job("wf", "method", batch["id"], "pair", "Pair", ["A.D", "B.D"], {}, "fp",
+                        state=J.QUEUED)
+    project = tmp_path / "pair.gcws"
+    project.write_text("original")
+    jr.transition(job.id, J.QUEUED, J.PROCESSING)
+    jr.transition(job.id, J.PROCESSING, J.CONTROL, project_path=str(project))
+    win.report2._journal = jr
+    monkeypatch.setattr("gcws.ui.main_window.P.read", lambda path: {"runs": [{"id": "a"}, {"id": "b"}]})
+    monkeypatch.setattr("gcws.ui.main_window.P.resolve_run_path",
+                        lambda entry, path: tmp_path / f"{entry['id']}.D")
+    monkeypatch.setattr(win, "load_runs", lambda *args, **kwargs: win._finish_project_load())
+    warnings = []
+    monkeypatch.setattr("gcws.ui.main_window.QMessageBox.warning", lambda *args: warnings.append(args[-1]))
+
+    assert win.open_report2_job(job.id)
+    assert win._report2_job is None and project.read_text() == "original"
+    assert any("did not all load" in text for text in warnings)
 
 
 def test_batch_report_of_a_folder(qtbot, win, samples, tmp_path, monkeypatch):

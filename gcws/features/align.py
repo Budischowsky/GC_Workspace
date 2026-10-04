@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
+from math import isfinite
 from typing import Optional
 
 import numpy as np
@@ -94,23 +95,32 @@ def candidates(ref: RunInput, run: RunInput, tmap: TM.TimeMap, tol: float, setti
 def ordered_matching(n: int, m: int, cands: list[Candidate], ambiguity: float) -> list[tuple[Candidate, bool]]:
     """Maximum total score without crossing pairs; each pair with its ambiguity flag (another
     candidate of either peak within ``ambiguity`` of its score)."""
+    if not n or not m or not cands:
+        return []
     score = {(c.i, c.j): c for c in cands}
-    dp = np.zeros((n + 1, m + 1))
-    move = np.zeros((n + 1, m + 1), dtype=np.uint8)
-    for i in range(1, n + 1):
-        for j in range(1, m + 1):
-            best, mv = dp[i - 1, j], 1
-            if dp[i, j - 1] > best:
-                best, mv = dp[i, j - 1], 2
-            c = score.get((i - 1, j - 1))
-            if c is not None and dp[i - 1, j - 1] + c.score > best:
-                best, mv = dp[i - 1, j - 1] + c.score, 3
-            dp[i, j], move[i, j] = best, mv
     by_i: dict[int, list[Candidate]] = {}
     by_j: dict[int, list[Candidate]] = {}
     for c in cands:
         by_i.setdefault(c.i, []).append(c)
         by_j.setdefault(c.j, []).append(c)
+
+    # Only the preceding score row is needed; retain moves for backtracking.
+    previous = np.zeros(m + 1)
+    move = np.zeros((n + 1, m + 1), dtype=np.uint8)
+    for i in range(1, n + 1):
+        diagonal = np.full(m, -np.inf)
+        for c in by_i.get(i - 1, ()):
+            if 0 <= c.j < m:
+                diagonal[c.j] = previous[c.j] + c.score
+        above = previous[1:]
+        current = np.empty(m + 1)
+        current[0] = 0.0
+        np.maximum.accumulate(np.fmax(above, diagonal), out=current[1:])
+        left = current[:-1]
+        row_moves = np.where(left > above, 2, 1).astype(np.uint8)
+        row_moves[diagonal > np.maximum(above, left)] = 3
+        move[i, 1:] = row_moves
+        previous = current
     pairs = []
     i, j = n, m
     while i and j:
@@ -198,6 +208,8 @@ def align_many(inputs: list[RunInput], settings: Settings) -> tuple[list[Feature
     while any(remaining.values()):
         base_id = max((r.run_id for r in inputs), key=lambda k: (len(remaining[k]), -inputs.index(by_id[k])))
         base_rows = [{base_id: i} for i in sorted(remaining[base_id], key=lambda k: t_ref[base_id][k])]
+        base_times = [t_ref[base_id][row[base_id]] for row in base_rows]
+        finite_base = all(isfinite(t) for t in base_times)
         base_scores = [dict() for _ in base_rows]
         remaining[base_id] = set()
         found = []
@@ -206,7 +218,19 @@ def align_many(inputs: list[RunInput], settings: Settings) -> tuple[list[Feature
                 continue
             for j in remaining[r.run_id]:
                 tj = t_ref[r.run_id][j]
-                for k, row in enumerate(base_rows):
+                if finite_base and isfinite(tj) and isfinite(tol) and tol >= 0:
+                    lo = bisect_left(base_times, tj - tol)
+                    hi = bisect_right(base_times, tj + tol)
+                    # Keep values included by the original subtraction at a rounded boundary.
+                    while lo > 0 and abs(base_times[lo - 1] - tj) <= tol:
+                        lo -= 1
+                    while hi < len(base_times) and abs(base_times[hi] - tj) <= tol:
+                        hi += 1
+                    positions = range(lo, hi)
+                else:
+                    positions = range(len(base_rows))
+                for k in positions:
+                    row = base_rows[k]
                     i = row[base_id]
                     d = t_ref[base_id][i] - tj
                     if abs(d) > tol:

@@ -74,6 +74,65 @@ def test_coeluting_pair_matches_original_nias(sep):
     assert_same(D.deconvolute_window(ms, float(RT[200])).components, expected)
 
 
+def test_repeated_savgol_uses_one_coefficient_calculation(monkeypatch):
+    """Different traces with the same smoothing settings need one matrix inversion."""
+    import gc_deconv
+
+    pinv = np.linalg.pinv
+    calls = 0
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return pinv(*args, **kwargs)
+
+    monkeypatch.setattr(np.linalg, "pinv", counted)
+    x = np.linspace(-2.0, 2.0, 40)
+    a = gc_deconv.savgol(np.sin(x), width=9, order=3)
+    b = gc_deconv.savgol(np.cos(x), width=9, order=3)
+    assert a.shape == b.shape == x.shape
+    assert np.isfinite(a).all() and np.isfinite(b).all()
+    assert calls <= 1
+
+
+def test_zero_quartile_ion_noise_skips_sort(monkeypatch):
+    """Sparse, nonnegative ion traces have an exact zero MAD without sorting."""
+    import gc_deconv
+
+    calls = 0
+    original_sort = np.sort
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_sort(*args, **kwargs)
+
+    monkeypatch.setattr(np, "sort", counted)
+    col = np.zeros(80)
+    col[::12] = np.arange(1.0, 8.0)
+    assert gc_deconv._ion_sigma(col) == 0.0
+    assert calls == 0
+
+
+def test_repeated_savgol_reuses_edge_weights(monkeypatch):
+    """Repeated smoothing settings should form each polynomial evaluation weight once."""
+    import gc_deconv
+
+    calls = 0
+    original = gc_deconv._sg_weights
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(gc_deconv, "_sg_weights", counted)
+    x = np.linspace(-2.0, 2.0, 50)
+    gc_deconv.savgol(np.sin(x), width=13, order=5)
+    gc_deconv.savgol(np.cos(x), width=13, order=5)
+    assert calls <= 13
+
+
 @pytest.mark.parametrize("rt", [10.0, 13.0, 13.409, 20.0, 30.0])
 def test_real_data_matches_original_reader(run07, rt):
     import gc_deconv

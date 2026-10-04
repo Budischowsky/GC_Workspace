@@ -1,6 +1,7 @@
 """Main window: dock panels, loaded samples, menus and workflows."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QSettings, Qt, QTimer
@@ -39,6 +40,17 @@ DOCKS = [  # key, title
 ]
 
 
+_REPORT_RUN_FIELDS = ("id", "name", "role", "blanks", "blanks_istd", "blanks_manual", "methods", "manual",
+                      "identifications", "delay", "delay_override", "spectrum_overrides")
+
+
+def _report_inputs(data: dict) -> dict:
+    """Project values that can change a generated report; omit display state and audit timestamps."""
+    inputs = {"quant": data.get("quant") or {}, "replicate_groups": data.get("replicate_groups") or [],
+              "runs": [{key: run.get(key) for key in _REPORT_RUN_FIELDS} for run in data.get("runs") or []]}
+    return json.loads(json.dumps(inputs, sort_keys=True, default=str))
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         from gcws.ui import theme
@@ -53,6 +65,9 @@ class MainWindow(QMainWindow):
         self.docks: dict[str, QDockWidget] = {}
         self.loading = 0
         self._pending_project = None
+        self._project_open_callback = None
+        self._report2_job = None                 # (job id, journal revision, original project path)
+        self._report2_baseline = None
         self._fresh_folders: set = set()      # batch folders of runs loaded (not from a project) in this load
         self._maximized = None          # (dock, saved main-window state | floating geometry)
         central = QWidget()
@@ -504,7 +519,10 @@ class MainWindow(QMainWindow):
         self.replicates.reportRequested.connect(lambda kind, gid: self.report(kind, gid))
         self.replicates.previewRequested.connect(lambda kind, gid: self.report(kind, gid, preview=True))
         self.automation.showReport2.connect(lambda: self._show_dock("report2"))
-        self.report2.openProject.connect(self.open_project)
+        self.report2.openProject.connect(self._open_report2_selected_project)
+        self.report2.openDetermination.connect(self.open_report2_job)
+        self.report2.prepare_review = self._save_report2_project
+        self.replicates.report2Requested.connect(self._show_report2_pair_menu)
         self._tool_changed("select")
 
     # -- helpers -------------------------------------------------------------
@@ -699,9 +717,15 @@ class MainWindow(QMainWindow):
         self.ws.remove_run(run_id)
 
     def close_all(self):
+        if self._report2_job is not None:
+            if not self._save_report2_project():
+                return False
+            self._report2_job = None
+            self._report2_baseline = None
         for rid in list(self.ws.order):
             self.ws.remove_run(rid)
         self.ws.automation = {}
+        return True
 
     # -- integration -------------------------------------------------------------
 
@@ -800,6 +824,10 @@ class MainWindow(QMainWindow):
     def library_search(self):
         from gcws.identify.service import LibrarySearchWorker, build_items
         from gcws.ui.dialogs.identify import SearchStartDialog
+        current = getattr(self, "_search", None)
+        if current is not None and current.timer.isActive():
+            self.statusBar().showMessage("Library search is already running.", 6000)
+            return
         if not self.ws.states():
             return
         dlg = SearchStartDialog(self.ws, self, filter_text=self.table.info.text()
@@ -923,10 +951,12 @@ class MainWindow(QMainWindow):
         from gcws.ui.dialogs.identify import CompoundReview
         self.progress.hide()
         self.cancel_btn.hide()
-        try:
-            self.cancel_btn.clicked.disconnect()
-        except (RuntimeError, TypeError):
-            pass
+        search = getattr(self, "_search", None)
+        if search is not None:
+            try:
+                self.cancel_btn.clicked.disconnect(search.cancel)
+            except (RuntimeError, TypeError):
+                pass
         done = [it for it in items if it.job.done and not it.job.error]
         if not done:
             self.statusBar().showMessage("Library search: nothing found" + (" (cancelled)" if cancelled else ""))
@@ -1216,6 +1246,106 @@ class MainWindow(QMainWindow):
         if run_id:
             self.replicates.show_pair(run_id, partner)
 
+    def _show_report2_pair_menu(self):
+        """Choose any processed pair currently visible in Report², grouped by batch."""
+        self.report2.refresh()
+        menu = QMenu(self)
+        batches = {}
+        for job in self.report2.visible_pairs():
+            batch = self.report2._batches.get(job.batch_id, {}).get("name", "Batch")
+            if batch not in batches:
+                batches[batch] = menu.addMenu(batch)
+            sub = batches[batch]
+            action = sub.addAction(job.group_name)
+            action.setToolTip(" / ".join(Path(m).stem for m in job.members))
+            action.triggered.connect(lambda _=False, jid=job.id: self.open_report2_job(jid))
+        if not batches:
+            menu.addAction("No processed A/B pairs under the current Report² filters").setEnabled(False)
+        button = self.replicates.duplicate.b_report2
+        menu.exec(button.mapToGlobal(button.rect().bottomLeft()))
+
+    def _open_report2_selected_project(self, path):
+        job = self.report2.journal.job(self.report2.current) if self.report2.current else None
+        if job is not None and job.project_path == path and self.report2._is_pair(job):
+            self.open_report2_job(job.id)
+        else:
+            self.open_project(path)
+
+    def open_report2_job(self, job_id: str) -> bool:
+        job = self.report2.journal.job(job_id)
+        if job is None or not self.report2._is_pair(job) or job.review_pending:
+            return False
+        path = Path(job.project_path)
+        if self.loading:
+            self.statusBar().showMessage("Wait for the current project to finish loading.", 6000)
+            return False
+        if self._report2_job and self._report2_job[0] == job_id and self.ws.project_path == path:
+            self._show_report2_job(job_id)
+            return True
+        previous = self._report2_job
+        previous_path = Path(self.ws.project_path) if self.ws.project_path else None
+
+        def loaded(data, jid=job_id, revision=job.revision, project=path):
+            expected = {entry.get("id") for entry in data.get("runs") or []}
+            if not expected <= set(self.ws.runs):
+                QMessageBox.warning(self, "Report²", "The project's runs did not all load. The saved project "
+                                    "was left unchanged.")
+                if previous_path and previous_path != project and previous_path.is_file():
+                    def restored(old_data):
+                        if previous is not None:
+                            self._report2_job = previous
+                            self._report2_baseline = _report_inputs(old_data)
+                            self._show_report2_job(previous[0])
+                    self.open_project(previous_path, confirm_close=False, on_loaded=restored)
+                return
+            self._report2_job = (jid, revision, project)
+            self._report2_baseline = _report_inputs(data)
+            self._show_report2_job(jid)
+
+        return self.open_project(path, confirm_close=self._report2_job is None, on_loaded=loaded)
+
+    def _show_report2_job(self, job_id: str):
+        job = self.report2.journal.job(job_id)
+        if job is None:
+            return
+        by_name = {st.run.path.name.casefold(): st.id for st in self.ws.states()}
+        members = [by_name.get(name.casefold()) for name in job.members or []]
+        if len(members) != 2 or any(m is None for m in members):
+            QMessageBox.warning(self, "Report²", "The project's A/B determinations could not be loaded.")
+            return
+        self._show_dock("replicates")
+        self.replicates.show_pair(*members, processed=True)
+        self.report2.select(job_id)
+
+    def _save_report2_project(self, job_id: str | None = None) -> bool:
+        """Save report-affecting edits before leaving or accepting the loaded Report² pair."""
+        if self._report2_job is None or (job_id is not None and job_id != self._report2_job[0]):
+            return True
+        jid, revision, path = self._report2_job
+        job = self.report2.journal.job(jid)
+        try:
+            snapshot = _report_inputs(P.to_dict(self.ws, path))
+            changed = snapshot != self._report2_baseline
+            if job is None or job.revision != revision or Path(job.project_path or "") != path:
+                if not changed and not self.ws.dirty:
+                    return True  # Accept already queued a new revision; the reviewed project is safe to leave
+                QMessageBox.warning(self, "Report²", "This report changed while it was open. Save a copy of "
+                                    "your additional edits, then reload the current revision.")
+                return False
+            if self.ws.dirty or changed:
+                P.save(self.ws, path)
+                self.ws.project_path = path
+                self.ws.dirty = False
+            if changed and not job.edited and not self.report2.journal.mark_edited(jid, revision):
+                raise RuntimeError("The report changed while it was being saved. Reload it before continuing.")
+        except Exception as exc:  # noqa: BLE001 - leave the current project open on any save failure
+            QMessageBox.warning(self, "Report²", f"Could not save the edited project:\n{exc}")
+            return False
+        self._report2_baseline = snapshot
+        if changed:
+            self.report2.refresh()
+        return True
+
     def _group_for_report(self, group_id=None):
         groups = self.ws.replicate_groups
         if group_id:
@@ -1401,6 +1531,10 @@ class MainWindow(QMainWindow):
     def save_project(self, ask=False):
         if not self.ws.states():
             return
+        if self._report2_job is not None and not ask:
+            if self._save_report2_project():
+                self.statusBar().showMessage(f"Saved {self._report2_job[2]}", 5000)
+            return
         path = self.ws.project_path
         if ask or path is None:
             first = self.ws.states()[0].run.path.parent
@@ -1409,6 +1543,9 @@ class MainWindow(QMainWindow):
             if not fn:
                 return
             path = Path(fn)
+        if self._report2_job is not None and path == self._report2_job[2]:
+            self._save_report2_project()
+            return
         try:
             path = P.save(self.ws, path)
         except OSError as exc:
@@ -1419,42 +1556,26 @@ class MainWindow(QMainWindow):
         self._add_recent(path)
         self.setWindowTitle(f"GC Workspace - {path.name}")
         self.statusBar().showMessage(f"Saved {path}", 5000)
+        if self._report2_job is not None:
+            self._report2_job = None  # Save As leaves the journal's processed project unchanged
+            self._report2_baseline = None
+            self.statusBar().showMessage(f"Saved a separate copy at {path}; Report² is unchanged", 8000)
 
-    def open_project(self, path=None):
+    def open_project(self, path=None, *, confirm_close=True, on_loaded=None):
         if not isinstance(path, (str, Path)):        # QAction.triggered passes its checked state
             path = None
         if path is None:
             fn, _ = QFileDialog.getOpenFileName(self, "Open project", self.tree.root,
                                                 "GC Workspace project (*.gcws)")
             if not fn:
-                return
+                return False
             path = fn
         path = Path(path)
         try:
             data = P.read(path)
         except (OSError, ValueError) as exc:
             QMessageBox.warning(self, "Open project", str(exc))
-            return
-        if self.ws.states() and QMessageBox.question(
-                self, "Open project", "Close the loaded chromatograms?") != QMessageBox.Yes:
-            return
-        self.close_all()
-        self.ws.audit.load(data.get("audit"))
-        self.audit.reload()
-        self.ws.replicate_groups = data.get("replicate_groups", [])
-        self.ws.quant = data.get("quant", {})
-        self.ws.automation = data.get("automation") or {}
-        if self.ws.automation:
-            self.statusBar().showMessage(
-                f"Processed by the automation ({self.ws.automation.get('sample', '')}): after changes, save the "
-                "project and choose 'Report again' in Report²", 20000)
-        panels = data.get("panels") or {}
-        if panels.get("keys"):
-            self.ws.set_panels(panels["keys"], panels.get("blank") or [False, False], panels.get("table", 0))
-        else:                                      # older projects: one working signal
-            self.ws.set_panels([data.get("signal_key", FID), self.ws.panel_keys[1]], [False, False], 0)
-            self.ws.set_signal_key(data.get("signal_key", FID))
-        self._pending_project = (path, data)
+            return False
         entries = {}
         missing = []
         for entry in data.get("runs", []):
@@ -1463,7 +1584,38 @@ class MainWindow(QMainWindow):
                 missing.append(entry.get("name", "?"))
                 continue
             entries[str(rp)] = entry
-
+        if on_loaded is not None and (missing or len(entries) != len(data.get("runs") or [])):
+            QMessageBox.warning(self, "Open project", "One or more runs are missing from the processed "
+                                "project. The current project was left open.")
+            return False
+        if not entries:
+            QMessageBox.warning(self, "Open project", "No raw data from this project could be found.")
+            return False
+        if confirm_close and self.ws.states() and QMessageBox.question(
+                self, "Open project", "Close the loaded chromatograms?") != QMessageBox.Yes:
+            return False
+        if not self._save_report2_project():
+            return False
+        self._report2_job = None
+        self._report2_baseline = None
+        self._project_open_callback = on_loaded
+        self.close_all()
+        self.ws.audit.load(data.get("audit"))
+        self.audit.reload()
+        self.ws.replicate_groups = data.get("replicate_groups", [])
+        self.ws.quant = data.get("quant", {})
+        self.ws.automation = data.get("automation") or {}
+        if self.ws.automation:
+            self.statusBar().showMessage(
+                f"Processed by the automation ({self.ws.automation.get('sample', '')}): changes to a Report² "
+                "pair are saved when you switch samples or accept the report", 20000)
+        panels = data.get("panels") or {}
+        if panels.get("keys"):
+            self.ws.set_panels(panels["keys"], panels.get("blank") or [False, False], panels.get("table", 0))
+        else:                                      # older projects: one working signal
+            self.ws.set_panels([data.get("signal_key", FID), self.ws.panel_keys[1]], [False, False], 0)
+            self.ws.set_signal_key(data.get("signal_key", FID))
+        self._pending_project = (path, data)
         def after(run, entries=entries):
             entry = entries.get(str(run.path.resolve()))
             if entry is not None:
@@ -1472,11 +1624,9 @@ class MainWindow(QMainWindow):
 
         if missing:
             QMessageBox.warning(self, "Open project", "Raw data not found for:\n" + "\n".join(missing))
-        if not entries:
-            self._pending_project = None
-            return
         self.ws.project_path = path
         self.load_runs(list(entries), "", after=after)
+        return True
 
     def _finish_project_load(self):
         path, data = self._pending_project
@@ -1500,6 +1650,9 @@ class MainWindow(QMainWindow):
         self.ws.dirty = False
         self._add_recent(path)
         self.setWindowTitle(f"GC Workspace - {path.name}")
+        callback, self._project_open_callback = self._project_open_callback, None
+        if callback is not None:
+            callback(data)
         if changed:
             QMessageBox.information(self, "Open project",
                                     "The integration now differs from the saved state for:\n" + "\n".join(changed)
@@ -1634,6 +1787,10 @@ class MainWindow(QMainWindow):
         return False
 
     def closeEvent(self, ev):
+        if self._report2_job is not None:
+            if not self._save_report2_project():
+                ev.ignore()
+                return
         if self.ws.dirty and self.ws.states():
             r = QMessageBox.question(self, "GC Workspace", "Save the project before closing?",
                                      QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)

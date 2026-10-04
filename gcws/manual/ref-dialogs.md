@@ -269,5 +269,6 @@ pattern). See [Unattended processing](wf-automation.md#the-rules).
 
 ## Accept or reject a report
 
-**Accept...** and **Reject...** in the **Report²** panel: a **Comment** - what was checked, why it is rejected.
+**Accept...** and **Reject...** in the **Report²** panel: a **Comment** is optional when accepting and required
+when rejecting.
 It is required when the report has findings. Your name and the time are recorded with it.

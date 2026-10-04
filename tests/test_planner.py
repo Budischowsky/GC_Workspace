@@ -158,19 +158,27 @@ def test_simulated_acquisition_is_seen_run_by_run(samples, tmp_path):
     from gcws.automation import simulate
     from gcws.io import sequence as SQ
     before = {p: p.stat().st_mtime_ns for p in samples.rglob("*") if p.is_file()}
+    source_seq = SQ.read_sequence(samples, siblings=False)
     steps = simulate.steps(samples, tmp_path, chunks=2, skip=("09_", "10_", "12_"))
-    assert next(steps) == "sequence log"
+    first = next(steps)
+    if source_seq.tsv is not None:
+        assert first == "sequence log"
+    else:
+        assert first.endswith("part 1")
     batch = tmp_path / samples.name
     seq = SQ.read_sequence(batch)
-    assert len(seq.stems) == 8 and not seq.finished
-    seen = []
+    assert seq.stems == source_seq.stems and not seq.finished
+    seen = [first] if source_seq.tsv is None else []
     for what in steps:
         seen.append(what)
         if what.endswith("part 1"):
             obs = {o.stem: o for o in SC.observe(batch)}
             run = what.split(" ")[0]
             assert not obs[run[:-2].casefold()].marker          # checksum.xml comes last
-    assert seen[-1] == "sequence completed" and SQ.read_sequence(batch).completed
+    if source_seq.log is not None:
+        assert seen[-1] == "sequence completed" and SQ.read_sequence(batch).completed
+    else:
+        assert seen[-1].endswith("finished") and not SQ.read_sequence(batch).completed
     assert sorted(p.name for p in batch.glob("*.D")) == [p.name for p in sorted(samples.glob("*.D"))
                                                          if not p.name.startswith(("09_", "10_", "12_"))]
     assert all(o.marker for o in SC.observe(batch))

@@ -216,6 +216,7 @@ Two tabs. Described in [Double determination](wf-double.md).
 | **A**, **B** boxes | The two determinations. |
 | **⇄** | Swaps A and B. |
 | **Compare** | Pairs the two determinations and fills the list. |
+| **Load from Report²…** | Switches to another processed A/B sample visible in Report², grouped by batch. Changes to the current pair are saved first. The empty menu says **No processed A/B pairs under the current Report² filters**. |
 | **3+ determinations…** | Goes to the **Groups (N-fold)** tab. |
 | **Accept a difference up to** | The difference limit in percent (a report parameter). |
 | **Only red and yellow** | Shows only the substances that need attention. |

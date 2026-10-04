@@ -87,6 +87,7 @@ class _Card(QFrame):
 class DuplicatePage(QWidget):
     reportRequested = QtSignal(str, str)        # kind, group id
     previewRequested = QtSignal(str, str)       # kind, group id
+    report2Requested = QtSignal()
 
     def __init__(self, ws, set_groups, parent=None):
         super().__init__(parent)
@@ -98,6 +99,7 @@ class DuplicatePage(QWidget):
         self._filling = False
         self.members: list[str] = []
         self._loading = False
+        self._view_processed = False
 
         self.a = QComboBox()
         self.b = QComboBox()
@@ -113,6 +115,9 @@ class DuplicatePage(QWidget):
         self.b_compare = QPushButton("Compare")
         theme.set_primary(self.b_compare)
         self.b_compare.clicked.connect(lambda: self.compare(sync=True))
+        self.b_report2 = QPushButton("Load from Report²…")
+        self.b_report2.setToolTip("Switch to a processed double determination shown in Report²")
+        self.b_report2.clicked.connect(self.report2Requested.emit)
         more = QToolButton()
         more.setText("3+ determinations…")
         more.setToolTip("Triplicates and more: the Groups (N-fold) tab")
@@ -120,9 +125,12 @@ class DuplicatePage(QWidget):
         pick = QHBoxLayout()
         for w in (QLabel("A"), self.a, swap, QLabel("B"), self.b):
             pick.addWidget(w)
-        pick.addWidget(self.b_compare)
         pick.addStretch(1)
-        pick.addWidget(more)
+        actions = QHBoxLayout()
+        actions.addWidget(self.b_compare)
+        actions.addWidget(self.b_report2)
+        actions.addStretch(1)
+        actions.addWidget(more)
 
         self.limit = QDoubleSpinBox()
         self.limit.setRange(0.0, 200.0)
@@ -262,6 +270,7 @@ class DuplicatePage(QWidget):
         lay.setContentsMargins(4, 4, 4, 4)
         lay.setSpacing(6)
         lay.addLayout(pick)
+        lay.addLayout(actions)
         lay.addLayout(lim)
         lay.addLayout(cards)
         lay.addWidget(self.banner)
@@ -320,15 +329,16 @@ class DuplicatePage(QWidget):
         i = combo.findData(data if data is not None else "")
         combo.setCurrentIndex(max(0, i))
 
-    def set_pair(self, a, b=None, compare=True):
+    def set_pair(self, a, b=None, compare=True, processed=False):
         """Show the double determination of ``a`` (partner ``b`` or the suggested one)."""
         if a is None:
             return
+        self._view_processed = processed
         self._select(self.a, a)
         partner = b if b is not None else DV.suggest_partner(self.ws, a)
         self._select(self.b, partner or "")
         if compare:
-            self.compare(sync=b is not None)
+            self.compare(sync=b is not None and not processed)
 
     def _a_picked(self):
         a = self.a.currentData()
@@ -405,6 +415,8 @@ class DuplicatePage(QWidget):
             self.compare(sync=False)
 
     def compare(self, sync: bool = False):
+        if sync:
+            self._view_processed = False
         if self._comparing:                         # re-entered through a signal: once more afterwards
             self._refresh.start()
             return
@@ -462,7 +474,7 @@ class DuplicatePage(QWidget):
         if hasattr(window, "update_activity"):
             window.update_activity(f"compare:{id(self)}", "Drawing comparison results…")
         self._show(DV.apply_edits(rows, verdicts, self.edits(), self._tol()), verdicts, problems)
-        if self.table_features is not None:
+        if self.table_features is not None and not self._view_processed:
             self._start_consensus_search()
 
     # -- analyst edits ------------------------------------------------------------------------

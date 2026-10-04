@@ -22,6 +22,7 @@ without overshooting between sparse anchors.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import isfinite
 from typing import Iterable, Optional
 
 import numpy as np
@@ -130,16 +131,31 @@ def build_map(anchors: Iterable[Anchor], shift: float, *, max_local: float = 0.1
               slope: tuple[float, float] = (0.9, 1.1)) -> TimeMap:
     """A monotone map through the reliable ``anchors`` (``shift`` = run minus reference)."""
     items = sorted(anchors, key=lambda a: a.run_rt)
+    times = [a.run_rt for a in items]
+    offsets = [a.run_rt - a.ref_rt for a in items]
+    finite_times = all(isfinite(t) for t in times)
     candidates = []
-    for a in items:
-        d = a.run_rt - a.ref_rt
+    left = right = 0
+    no_neighbours = isinstance(neighbour_window, (float, np.floating)) and bool(np.isnan(neighbour_window))
+    for i, a in enumerate(items):
+        src, d = times[i], offsets[i]
         if abs(d - shift) > max_local:
             continue
-        near = [b.run_rt - b.ref_rt for b in items if abs(b.run_rt - a.run_rt) <= neighbour_window]
+        if finite_times:
+            if not no_neighbours:
+                while left < len(items) and src - times[left] > neighbour_window:
+                    left += 1
+                right = max(right, i)
+                while right < len(items) and times[right] - src <= neighbour_window:
+                    right += 1
+            near = [] if no_neighbours else offsets[left:right]
+        else:
+            # NaN and infinities do not have the ordered-window comparisons used above.
+            near = [b.run_rt - b.ref_rt for b in items if abs(b.run_rt - a.run_rt) <= neighbour_window]
         local = float(np.median(near)) if len(near) >= 3 else shift
         if abs(d - local) > residual:
             continue
-        candidates.append((a.run_rt, a.ref_rt))
+        candidates.append((src, a.ref_rt))
     chosen: list[tuple[float, float]] = []
     for src, tgt in candidates:
         if chosen and src - chosen[-1][0] < min_gap:

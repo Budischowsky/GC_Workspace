@@ -137,7 +137,7 @@ class ReviewDialog(QDialog):
         self.comment.setPlaceholderText("Comment (what was checked, why it is rejected)")
         self.comment.setFixedHeight(90)
         lay.addWidget(self.comment)
-        self.required = bool(findings) or not accept
+        self.required = not accept
         self.note = theme.hint("A comment is required." if self.required else "")
         lay.addWidget(self.note)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
