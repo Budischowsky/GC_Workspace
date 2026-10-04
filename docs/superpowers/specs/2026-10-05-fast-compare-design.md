@@ -104,20 +104,37 @@ keeps today's arithmetic. Caches are content-addressed, so a stale entry can nev
   already does for its correlations.
 - Estimate: about 0.25 s → 0.03 s per peak. This also speeds up loading and integrating runs.
 
-### Part 3 — exact fast library search (new `gcws/libsearch/fast_score.py`; vendored files unchanged)
+### Part 3 — exact fast library search for the consensus spectra (vendored files unchanged)
 
-**3a. Stage-2 scoring.** `LocalEngine._score` is overridden by a copy of the vendored `_score` with
-three changes:
+*Revised while planning:* `gcws/libsearch/fast.py` already does what the first draft of 3a planned
+(a new scorer). Its *Fast search* (`FastSearch`, reached through `libsearch.service.analyze_many`)
+computes the standard search's hits for many spectra at once and exactly:
+- block screening with exact recomputation;
+- the PBM query side once per peak;
+- a decoded-reference cache that outlives the batch;
+- a tie fallback.
 
-- the PBM query side (percent spectrum, the 20 most informative ions with their weights, the
-  attainable bits) is computed once per search;
-- the `PeakStatistics` lookups use Python lists (`float(array[i]) == list[i]`);
-- `nominal_peaks(self.peaks(row))` is cached per library row (LRU, 10 000 rows, about 40 MB; a
-  search scores about 700 candidates).
+It is switched on per search method (`data/library_search_fast.json`; on for "NIAS Standard"), and
+the batch peak search uses it. The consensus search does not: `search_consensus` calls
+`search_spectrum` one spectrum at a time.
 
-The reverse and forward confidences run the same expressions in the same order, so the floats
-are identical. Prototype result: identical hit lists, every field, on 83 real searches; 200–240 →
-about 100 ms per search.
+**3a. The consensus search uses the Fast search.** `consensus.search_consensus`:
+- computes each spectrum's search range exactly as `search_spectrum` does
+  (`acquired = (max(1, int(min m/z)), int(max m/z) + 1)`, then `SM.mz_range(method, acquired)`);
+- groups the spectra by range (a Fast search batch shares one settings dict), and searches the
+  groups in ascending (min, max) order;
+- calls `LS.analyze_many` per group when `is_fast(method)`; otherwise it calls `search_spectrum`
+  per spectrum, in the same order.
+
+Each spectrum's hits are independent of the grouping and the order.
+
+Measured on 23 real consensus spectra in 11 ranges:
+
+| | standard (today) | Fast search, grouped | Fast search, grouped, with 3b |
+|---|---|---|---|
+| time | 6.3 s | 4.3 s | 2.5 s |
+
+The hits were identical in every field. The standard path with 3b took 4.6 s.
 
 **3b. Resumable library norms.** `LocalEngine.shard_norms(index, minimum, maximum)` is overridden:
 
@@ -128,10 +145,11 @@ about 100 ms per search.
 - Per (shard, minimum), the running sum and snapshots at the requested maxima are kept. A
   request continues from the nearest snapshot at or below its maximum. Snapshots are bounded at
   64 arrays in total (LRU), like the engine's own cache.
-- `consensus.search_consensus` searches its spectra in ascending order of (lowest m/z, highest
-  m/z). Each spectrum's hits are independent of the order. In the measured batch there were
-  2 lower bounds (41 and 39), so about one pass per library and lower bound instead of one per
-  spectrum.
+- Because 3a searches in ascending (min, max) order, each library needs about one pass per lower
+  bound instead of one per spectrum. The measured batch had 2 lower bounds (41 and 39). The
+  standard engine and the Fast search both call `shard_norms`, so both benefit.
+- `Engine.close()` calls `shard_norms.cache_clear()`. The override provides that call, and
+  `LocalEngine.close` drops the running sums.
 
 ### Part 4 — no wasted searches (`gcws/features/service.py`, `consensus.py`)
 
@@ -184,11 +202,12 @@ The one-time library load per session (1–2 s) stays, but only when a search is
     must give the same components;
   - the borderline fallback is exercised.
 - **Part 3:**
-  - fast vs vendored `_score` on a synthetic in-memory library (PBM and similarity, sequential
-    and combined, dedupe, constraints);
   - `shard_norms` bit-equal to the vendored computation for many ranges, including resumed,
     descending and out-of-order requests and eviction;
-  - on the real libraries (skipped when absent), identical `analyze` results for a set of spectra.
+  - closing the engine works;
+  - on the synthetic MSP libraries of `tests/test_fast_search.py`, `search_consensus` gives
+    exactly the per-spectrum `search_spectrum` hits, with Fast search on and off, for spectra
+    with several ranges.
 - **Part 4:**
   - the manual and ISTD skip;
   - the key changes with spectrum, method and library signature;
@@ -210,9 +229,10 @@ The one-time library load per session (1–2 s) stays, but only when a search is
 One commit per part, in this order:
 1. split-fit cache;
 2. closer look;
-3. library scoring and norms;
-4. no wasted searches;
-5. benchmark tool, end-to-end test, README note.
+3. resumable library norms;
+4. consensus search through the Fast search;
+5. no wasted searches;
+6. benchmark tool, end-to-end test, README note.
 
 Nothing is pushed or merged without the user's word.
 
