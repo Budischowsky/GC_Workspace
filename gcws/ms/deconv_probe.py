@@ -13,6 +13,8 @@ are fitted to every ion (the AMDIS way of finding a shoulder). All components ar
 jointly, as the engine does it. What it finds still has to pass the split gates of the method.
 
 The vendored engine is called through its helpers; its numerical algorithm is unchanged.
+:func:`probe` computes the same steps on arrays (:mod:`gcws.ms.deconv_probe_fast`); a peak whose
+decision lies within rounding of a threshold is computed again by :func:`probe_reference`.
 """
 from __future__ import annotations
 
@@ -146,6 +148,14 @@ def _sensitive_window(ms, t0: float, t1: float, apex: float,
 
 def probe(ms, t0: float, t1: float, apex: float, settings: D.DeconvSettings | None = None) -> list[D.Component]:
     """The components of the peak ``t0``..``t1`` (MS time, apex ``apex``) found by the closer look."""
+    from gcws.ms import deconv_probe_fast
+    comps, robust = deconv_probe_fast.probe_fast(ms, t0, t1, apex, settings)
+    return comps if robust else probe_reference(ms, t0, t1, apex, settings)
+
+
+def probe_reference(ms, t0: float, t1: float, apex: float,
+                    settings: D.DeconvSettings | None = None) -> list[D.Component]:
+    """:func:`probe` on the vendored engine's helpers, ion by ion (the reference and the fallback)."""
     params = params_of(settings)
     scan_rt = np.asarray(ms.rt, dtype=float)
     sel = np.flatnonzero(np.abs(scan_rt - apex) <= params.window)
