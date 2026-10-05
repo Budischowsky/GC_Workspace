@@ -116,7 +116,7 @@ into two "substances". So the two hit lists are read together.
 |---|---|---|
 | **A** | Both determinations have the same first hit. | That name. Green. |
 | **B** | The first hits differ, but one candidate is clearly the best over both. | That name for both determinations. Yellow: *Check: name by consensus*. |
-| **C** | The first hits differ and no candidate leads clearly. | Both names, "name 1 / name 2", status *Manual review*. Yellow: *Check: 2 candidates*. Right-click the row and choose **Name: ...** to decide. |
+| **C** | The first hits differ and no candidate leads clearly. | Both names, "name 1 / name 2", status *Manual review*. Yellow: *Check: 2 candidates*. Right-click the row and choose **Name: ...** to decide. If the search method reports hydrocarbons as 'Hydrocarbon' and both candidates are non-aromatic hydrocarbons, the row is *Hydrocarbon*, *Accepted* instead. |
 | **D** | The spectra of the two determinations differ (see step 2). | No common name: *Conflict; manual review*. Red. |
 
 For case **B** the program builds a **consensus spectrum**: the average of the two spectra, each scaled to

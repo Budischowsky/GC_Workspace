@@ -177,7 +177,7 @@ class Identity:
     name: str = ""
     cas: str = ""
     status: str = ""                      # Accepted | Manual review | Unknown | Conflict; manual review
-    case: str = ""                        # A | B | C | D | manual | istd | none
+    case: str = ""                        # A | B | C | H | D | manual | istd | none
     candidates: list = field(default_factory=list)   # [{name, cas, score, scores:{label: s}}]
     margin: Optional[float] = None
     basis: str = ""                       # human-readable: how it was decided

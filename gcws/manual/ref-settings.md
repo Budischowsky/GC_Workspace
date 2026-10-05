@@ -141,7 +141,7 @@ The choices of the search start window are remembered:
 | **Peaks** | TIC peaks |
 | **Give the names also to the FID peaks at the same time** | on |
 | **Spectrum** | Assigned component, otherwise average minus background |
-| **Skip peaks that already have a name** | off |
+| **Skip peaks that already have a name (unknowns are still searched)** | off |
 | **Only peaks with a score below** | off; 80 |
 
 ## Double determination

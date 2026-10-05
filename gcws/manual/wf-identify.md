@@ -40,7 +40,7 @@ All fields are explained in [How the library search works](library-search.md#the
 | **Scope** | **Active chromatogram** or **All loaded chromatograms**. |
 | **Only peaks shown in the peak table** | Searches only the peaks that pass the table's filters - fewer peaks, a faster search. |
 | **Spectrum** | How the spectrum of each peak is formed (see below). |
-| **Skip peaks that already have a name** | Leaves named peaks alone. |
+| **Skip peaks that already have a name (unknowns are still searched)** | Leaves named peaks alone; peaks named "unknown ..." are searched again. |
 | **Only peaks with a score below** | Searches again only the peaks whose present score is below the number. |
 | **Review hits before applying** | Shows all first hits in a table before anything is changed. |
 

@@ -51,7 +51,7 @@ class SearchStartDialog(QDialog):
         for k, v in MODES.items():
             self.mode.addItem(v, k)
         self.mode.setCurrentIndex(max(0, self.mode.findData(qs.value("search/mode", "average_bg"))))
-        self.skip = QCheckBox("Skip peaks that already have a name")
+        self.skip = QCheckBox("Skip peaks that already have a name (unknowns are still searched)")
         self.skip.setChecked(qs.value("search/skip", False, type=bool))
         self.rescan = QCheckBox("Only peaks with a score below")
         self.rescan.setChecked(qs.value("search/rescan", False, type=bool))

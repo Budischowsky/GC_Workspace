@@ -804,6 +804,13 @@ def test_library_search_on_tic_copies_names_to_fid(qtbot, win, samples):
     # one undo step takes back both
     win.a_undo.trigger()
     assert not any(i.name.startswith("Substance") for i in st.ident_set("FID").items + st.ident_set("TIC").items)
+    # "skip peaks that already have a name": an unknown is still searched
+    named, unknown = items[0].peak_index, items[1].peak_index
+    tic = ws.result(st.id, "TIC")
+    st.ident_set("TIC").set(Identification(apex_rt=tic.peaks[named].apex_rt, name="Named"))
+    st.ident_set("TIC").set(Identification(apex_rt=tic.peaks[unknown].apex_rt, name="unknown (m/z 57, 71)"))
+    again = {it.peak_index for it in build_items(ws, [st.id], "TIC", "average_bg", skip_identified=True)[0]}
+    assert unknown in again and named not in again
     # co-elution: two TIC names on one FID peak -> the better score wins
     p = fid.peaks[j0 + 1]
     t = p.apex_rt - st.delay_value

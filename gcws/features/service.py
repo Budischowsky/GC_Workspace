@@ -205,7 +205,11 @@ def consensus(ws, table: FeatureTable, cfg: Settings, members: list[str], search
     if note and cfg.consensus_search:
         table.notes.append(note)
     delay = ws.runs[members[0]].delay_value if members and members[0] in ws.runs else 0.0
-    CO.resolve(table, cfg, quality_limit(ws), ri_function(ws, table.key, delay))
+    try:
+        hydrocarbons = bool(search_method(ws, members).hydrocarbons)
+    except Exception:  # noqa: BLE001 - no search methods: the rule is off
+        hydrocarbons = False
+    CO.resolve(table, cfg, quality_limit(ws), ri_function(ws, table.key, delay), hydrocarbons)
 
 
 def build(ws, members: list[str], group: Optional[dict] = None, cfg: Optional[Settings] = None,

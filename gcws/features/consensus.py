@@ -14,6 +14,8 @@ lists of the determinations are read together:
   (a missing hit counts 0) decides the same way.
 * **C** -- no candidate leads clearly: both candidates are reported ("c1 / c2", both CAS) with
   the status "Manual review"; one click chooses (the analyst's decision).
+* **H** -- case C where both candidates are non-aromatic hydrocarbons and the search method reports
+  those as "Hydrocarbon": that name, accepted (which isomer does not matter then).
 * **D** -- the determinations have different spectra at the same retention time: no consensus;
   "Conflict; manual review".
 
@@ -206,7 +208,7 @@ def _rank(hits: list, groups: Groups, g: str) -> Optional[int]:
 
 
 def decide(feature: Feature, settings: Settings, quality_limit: float = 70.0,
-           ri: Optional[float] = None) -> Identity:
+           ri: Optional[float] = None, hydrocarbons: bool = False) -> Identity:
     found = feature.found
     if not found:
         return Identity(case="none")
@@ -292,6 +294,12 @@ def decide(feature: Feature, settings: Settings, quality_limit: float = 70.0,
     # C: no clear leader -- the accepted candidates, best first
     pair = [first_hit[g] for g in ranked_e[:2]]
     name = " / ".join(_hit_label(h) for h in pair)
+    if hydrocarbons and len(pair) == 2:
+        import gc_identify as GI
+        if all(GI.is_hydrocarbon(h) for h in pair):
+            # either way a hydrocarbon: the search method reports it under the common name
+            return Identity(GI.HYDROCARBON_NAME, "", ACCEPTED, "H", cands, margin,
+                            f"both candidates are hydrocarbons: {name}")
     cas = " / ".join(c for c in (clean_cas(h.get("cas")) for h in pair) if c)
     why = f"{basis}: " + " vs ".join(f"{_hit_label(first_hit[g])} {total(g):.0f}" for g in ranked_e[:2])
     if len(pair) == 1:
@@ -340,9 +348,10 @@ def write_back(feature: Feature, identity: Identity, key: str, quality_limit: fl
     return out
 
 
-def resolve(table, settings: Settings, quality_limit: float = 70.0, ri_of=None) -> None:
+def resolve(table, settings: Settings, quality_limit: float = 70.0, ri_of=None,
+            hydrocarbons: bool = False) -> None:
     """Decide the identity of every feature and add the write-back proposals."""
     for f in table.features:
         ri = ri_of(f) if ri_of is not None else None
-        f.identity = decide(f, settings, quality_limit, ri)
+        f.identity = decide(f, settings, quality_limit, ri, hydrocarbons)
         f.proposals += write_back(f, f.identity, table.key, quality_limit)

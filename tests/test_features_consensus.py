@@ -50,6 +50,24 @@ def test_case_c_swapped_close_candidates_report_both():
     assert C.write_back(f, ident, "FID") == []
 
 
+def test_case_c_two_hydrocarbons_counts_as_hydrocarbon():
+    def hc(name, cas, score, formula):
+        return {"name": name, "cas": cas, "score": score, "formula": formula}
+    und, dod = ("Undecane", "1120-21-4", "C11H24"), ("Dodecane", "112-40-3", "C12H26")
+    a = [hc(und[0], und[1], 86, und[2]), hc(dod[0], dod[1], 84, dod[2])]
+    b = [hc(dod[0], dod[1], 85, dod[2]), hc(und[0], und[1], 84.5, und[2])]
+    f = feature(member("A", a), member("B", b))
+    assert C.decide(f, Settings()).case == "C"                        # rule off
+    ident = C.decide(f, Settings(), hydrocarbons=True)
+    assert (ident.case, ident.name, ident.cas, ident.status) == ("H", "Hydrocarbon", "", C.ACCEPTED)
+    assert "Undecane / Dodecane" in ident.basis
+    assert C.write_back(f, ident, "FID") == []
+    # one candidate is not a hydrocarbon: still two candidates
+    b[0] = hc("Xylene", "95-47-6", 85, "C8H10")
+    a[1] = hc("Xylene", "95-47-6", 84, "C8H10")
+    assert C.decide(feature(member("A", a), member("B", b)), Settings(), hydrocarbons=True).case == "C"
+
+
 def test_case_b_clear_leader_over_both_hit_lists():
     f = feature(member("A", hits((*X, 88), (*Y, 80))), member("B", hits((*Y, 82), (*X, 81))))
     ident = C.decide(f, Settings())

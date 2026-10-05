@@ -96,8 +96,9 @@ def build_items(ws, run_ids: list[str], key: str, spectrum_mode: str,
             if ident is not None and (ident.manual or ident.istd):
                 protected += 1
                 continue
-            if ident is not None and skip_identified and ident.name:
-                continue
+            if ident is not None and skip_identified and ident.name \
+                    and not ident.name.casefold().startswith("unknown"):
+                continue                               # unknowns are searched again
             if rescan_below is not None and ident is not None and ident.score is not None \
                     and ident.score >= rescan_below:
                 continue
