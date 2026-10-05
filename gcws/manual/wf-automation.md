@@ -162,6 +162,7 @@ list for every finding (rule, substance, retention time, determination, what was
 | **Reject** | Rejects it: choose a reason, or **Other...** for a comment of your own (optional). **View > Reject reasons...** changes the list. A rejected report can still be accepted. |
 | **Open report** | Opens the Word, Excel or PDF file. |
 | **Open in GC Workspace** | Opens the sample exactly as it was processed - runs, integration, names, internal standards, blanks - to check or correct it. |
+| **Preview** | Shows the PDF of the selected report beside the list (a batch row: its batch report). Reports without a PDF are opened with **Open report**; add PDF to the report's formats in the workflow to see them here. |
 | **Undo** | For a few seconds after an accept, a reject or a delete, under the list. An accepted report is delivered only after that time. |
 | **Rules...** | The rules, see below. |
 | **View** | **Show deleted reports** lists what was deleted (greyed); **Reject reasons...** edits the reasons. |

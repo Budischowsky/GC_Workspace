@@ -380,6 +380,42 @@ def test_with_a_running_watcher_the_accept_is_left_to_it(qtbot, data, tmp_path, 
     assert dock._items[f"j:{ids['S-control']}"].text(3) == "pending"
 
 
+def _pdf(path):
+    from PySide6.QtGui import QPainter, QPdfWriter
+    w = QPdfWriter(str(path))
+    p = QPainter(w)
+    p.drawText(200, 200, "NIAS report")
+    p.end()
+    return path
+
+
+def test_pdf_preview(qtbot, data, tmp_path, monkeypatch):
+    from PySide6.QtCore import QCoreApplication, QSettings
+    QCoreApplication.setOrganizationName("GCWorkspaceTest")
+    QCoreApplication.setApplicationName("pytest")
+    QSettings.setDefaultFormat(QSettings.IniFormat)
+    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path))
+    QSettings().clear()
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    job = jr.job(ids["S-control"])
+    files = dict(job.files)
+    node = next(iter(files))
+    pdf = _pdf(tmp_path / "S-control_NIAS_Report.pdf")
+    files[node] = dict(files[node], pdf=str(pdf))
+    jr.update_job(job.id, files=files)
+    dock = _dock(jr, monkeypatch, qtbot)
+    assert dock.b_preview.isChecked()
+    dock.select(ids["S-auto"])                                  # Word and Excel only
+    assert dock.preview.currentWidget() is dock.preview_note and "no PDF" in dock.preview_note.text()
+    dock.select(ids["S-control"])
+    assert dock.preview.currentWidget() is dock.pdf_view and dock._pdf_doc.pageCount() == 1
+    pdf.unlink()                                                # read into memory: the file is not held open
+    dock.b_preview.setChecked(False)
+    assert not dock.preview.isVisibleTo(dock) and QSettings().value("report2/preview", type=bool) is False
+    dock.b_preview.setChecked(True)
+    assert dock.preview.isVisibleTo(dock)
+
+
 def test_docks_and_menus(qtbot, win):
     assert "report2" in win.docks and "automation" in win.docks
     labels = [a.text() for a in win.report_menu.actions()]

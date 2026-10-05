@@ -3,8 +3,8 @@
 How many samples the automation processed, which reports were accepted automatically or by the
 analyst and which need control, grouped by batch folder. "To do" holds the open batches; a batch
 whose reports are all accepted and delivered moves to the "Archive" by itself ("Reopen" brings it
-back). The chips above the list filter it. Selecting a report shows why it needs control; accept is
-one click, reject takes a reason, and both can be undone for a few seconds. Right-click a sample
+back). The chips above the list filter it. Selecting a report shows why it needs control and a
+preview of its PDF; accept is one click, reject takes a reason, and both can be undone for a few seconds. Right-click a sample
 or a batch for everything else; "Delete" only hides (View > Show deleted reports brings it back).
 Everything is read from the automation journal every few seconds (the watcher writes it).
 """
@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-from PySide6.QtCore import QEvent, QItemSelectionModel, QRect, Qt, QTimer, Signal
+from PySide6.QtCore import QBuffer, QEvent, QIODevice, QItemSelectionModel, QRect, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QIcon, QKeySequence, QPainter, QPalette, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QComboBox, QFrame, QHBoxLayout,
                                QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton, QSplitter,
@@ -292,14 +292,31 @@ class Report2Dock(QWidget):
         for b in (self.b_accept, self.b_reject, self.b_open, self.b_project):
             acts.addWidget(b)
         acts.addStretch(1)
+        self.b_preview = QToolButton()
+        self.b_preview.setText("Preview")
+        self.b_preview.setCheckable(True)
+        self.b_preview.setToolTip("Show the PDF of the selected report here")
+        self.b_preview.setChecked(QSettings().value("report2/preview", True, type=bool))
+        self.b_preview.toggled.connect(self._preview_toggled)
+        acts.addWidget(self.b_preview)
         dl.addLayout(acts)
-        self.preview_area = QWidget()
-        dl.addWidget(self.preview_area, 1)
-        body = QSplitter(Qt.Horizontal)
+        # the preview: the report's PDF (read into memory, so the file is never held open)
+        self.preview = QStackedWidget()
+        self.preview_note = theme.hint("")
+        self.preview_note.setAlignment(Qt.AlignCenter)
+        self.preview.addWidget(self.preview_note)
+        self.pdf_view = None
+        self._pdf_doc = None
+        self._preview_path = None
+        dl.addWidget(self.preview, 1)
+        dl.addStretch(0)                                   # takes the room while the preview is off
+        self.body = body = QSplitter(Qt.Horizontal)
         body.addWidget(self.list_stack)
         body.addWidget(self.detail)
         body.setStretchFactor(0, 3)
         body.setStretchFactor(1, 2)
+        body.splitterMoved.connect(lambda *_: QSettings().setValue("report2/split", body.sizes()))
+        self._sized = False
         lay.addWidget(body, 1)
         # the message bar ("Accepted S12 - Undo")
         self.bar = QFrame()
@@ -362,6 +379,14 @@ class Report2Dock(QWidget):
         self.a_delete = act("Delete...", self.delete_selected,
                             "Hide in Report² (nothing on disk is deleted; View > Show deleted reports)", "Del")
         self.a_restore = act("Restore", self.restore_selected)
+
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        if not self._sized:                    # the list gets the larger part, not the PDF's size hint
+            self._sized = True
+            saved = [int(v) for v in (QSettings().value("report2/split") or []) if str(v).isdigit()]
+            total = max(2, self.body.width())
+            self.body.setSizes(saved if len(saved) == 2 and sum(saved) else [total * 58 // 100, total * 42 // 100])
 
     # -- data --------------------------------------------------------------------------------------
 
@@ -714,11 +739,13 @@ class Report2Dock(QWidget):
                 self.title.setText(f"<b>{b.get('name', '')}</b><br>{it.text(1) if it else ''}<br>"
                                    f"batch folder {b.get('folder', '')}")
                 self.reasons.setText("Right-click the batch for its actions.")
+                report = next((j for j in self._by_batch.get(bid, []) if j.is_batch and not j.deleted), None)
             else:
                 self.title.setText("Select a report to see why it needs control.")
                 self.reasons.setText("")
+                report = None
             self.b_open.setEnabled(False)
-            self._update_preview(None)
+            self._update_preview(report)
             return
         if len(jobs) > 1:
             self.title.setText(f"<b>{len(jobs)} reports selected</b><br>" +
@@ -752,8 +779,60 @@ class Report2Dock(QWidget):
         self.b_open.setEnabled(not menu.isEmpty() and len(jobs) == 1)
         self._update_preview(job if len(jobs) == 1 else None)
 
+    @staticmethod
+    def _pdf_of(job: Optional[J.Job]) -> Optional[str]:
+        for files in ((job.files or {}) if job is not None else {}).values():
+            for fmt in ("pdf", "batch_pdf"):
+                if fmt in files:
+                    return files[fmt]
+        return None
+
+    def _preview_toggled(self, on: bool):
+        QSettings().setValue("report2/preview", on)
+        self._show_detail(self._job())
+
     def _update_preview(self, job: Optional[J.Job]):
-        """The report preview (a later phase)."""
+        """The PDF of ``job`` in the panel (a batch row: its batch report)."""
+        self.preview.setVisible(self.b_preview.isChecked())
+        if not self.b_preview.isChecked():
+            return
+        path = self._pdf_of(job)
+        if path is None or not Path(path).is_file():
+            self._preview_path = None
+            self.preview_note.setText(
+                "Select a report to preview it." if job is None else
+                "This report has no PDF. Open report shows it in Word or Excel;\nwith PDF among the report's "
+                "formats in the workflow it is shown here.")
+            self.preview.setCurrentWidget(self.preview_note)
+            return
+        if path == self._preview_path:
+            return
+        from PySide6.QtPdf import QPdfDocument
+        if self.pdf_view is None:
+            from PySide6.QtPdfWidgets import QPdfView
+            self._pdf_doc = QPdfDocument(self)
+            self.pdf_view = QPdfView()
+            self.pdf_view.setDocument(self._pdf_doc)
+            self.pdf_view.setPageMode(QPdfView.PageMode.MultiPage)
+            self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
+            self.preview.addWidget(self.pdf_view)
+        self._pdf_doc.close()
+        buf = QBuffer(self._pdf_doc)
+        try:
+            buf.setData(Path(path).read_bytes())
+        except OSError as exc:
+            self.preview_note.setText(f"The PDF could not be read: {exc}")
+            self.preview.setCurrentWidget(self.preview_note)
+            return
+        buf.open(QIODevice.ReadOnly)
+        self._pdf_doc.load(buf)
+        if self._pdf_doc.status() == QPdfDocument.Status.Error or self._pdf_doc.pageCount() == 0:
+            self._preview_path = None
+            self.preview_note.setText("The PDF could not be opened.")
+            self.preview.setCurrentWidget(self.preview_note)
+            return
+        self._preview_path = path
+        self.preview.setCurrentWidget(self.pdf_view)
 
     def _update_actions(self, jobs: list):
         one = jobs[0] if len(jobs) == 1 else None
