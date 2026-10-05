@@ -57,8 +57,9 @@ def submit(fn, *args, on_done=None, on_error=None, on_progress=None, with_progre
     return w
 
 
-def load_and_integrate(path, role: str, workspace_methods):
-    """Worker body: read raw data, estimate the FID-MS offset, integrate."""
+def load_and_integrate(path, role: str, workspace_methods, integrate: bool = True):
+    """Worker body: read raw data, estimate the FID-MS offset, integrate (``integrate``; runs loaded
+    fresh are only read until Method > Run Method, runs of a project are integrated again)."""
     from gcws.core.model import FID, TIC
     from gcws.integration.engine import integrate
     from gcws.io.run_loader import load_run
@@ -67,7 +68,7 @@ def load_and_integrate(path, role: str, workspace_methods):
     if role:
         run.role = role
     results = {}
-    for key in run.available_signals():
+    for key in run.available_signals() if integrate else ():
         if key in (FID, TIC):
             kind = FID if key == FID else TIC
             m = workspace_methods.get(workspace_methods.default_name(kind))

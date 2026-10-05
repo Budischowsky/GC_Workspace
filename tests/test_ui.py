@@ -26,10 +26,14 @@ def win(qtbot, tmp_path, monkeypatch):
     w.close()             # while "No" is still the answer: a test run must never wait for a dialog
 
 
-def _load(qtbot, w, samples, prefixes):
+def _load(qtbot, w, samples, prefixes, process=True):
+    """Load runs through the window; ``process`` integrates them as Method > Run Method does
+    (loading alone only reads them)."""
     paths = [str(next(samples.glob(p + "*.D"))) for p in prefixes]
     w.load_runs(paths)
     qtbot.waitUntil(lambda: w.loading == 0 and len(w.ws.runs) == len(paths), timeout=60000)
+    if process:
+        w.ws.process_runs()
 
 
 def test_bottom_activity_keeps_running_jobs_visible(win):
@@ -1480,3 +1484,46 @@ def test_double_determination_features_panel(qtbot, win, samples):
     win.a_undo.trigger()
     page.compare(sync=False)
     assert page.rows and all(r.get("feature_id") for r in page.rows)
+
+
+def test_loading_only_reads_and_run_method_processes(qtbot, win, samples, monkeypatch):
+    """Loading a run integrates nothing; Method > Run Method integrates, searches and quantifies."""
+    _load(qtbot, win, samples, ["07_", "11_"], process=False)
+    ws = win.ws
+    for st in ws.states():
+        assert not st.processed and st.results == {}
+        assert ws.result(st.id, "FID") is None and ws.result(st.id, "TIC") is None
+    win.a_run_method.trigger()                       # no method loaded, "Load one now?" answered No
+    assert win._method_run is None and not any(st.processed for st in ws.states())
+    searched = {}
+
+    def fake_search(items, v, protected, then=None):
+        searched.update(n=len(items), key=v["key"], review=v["review"])
+        then("Library search: 0 peaks identified")
+
+    monkeypatch.setattr(win, "_start_search", fake_search)
+    monkeypatch.setattr(win, "_current_method", lambda: {"name": "T", "sections": {"search": {"target": "TIC"}}})
+    win.a_run_method.trigger()
+    qtbot.waitUntil(lambda: win._method_run is None, timeout=120000)
+    for st in ws.states():
+        assert st.processed and ws.result(st.id, "FID").peaks and ws.result(st.id, "TIC").peaks
+    assert searched["n"] > 0 and searched["key"] == "TIC" and searched["review"] is False
+    rec = ws.audit.records[-1]
+    assert rec.action == "Processing method run" and rec.detail == "T" and "2 run(s) integrated" in rec.after
+
+
+def test_unprocessed_runs_stay_unprocessed_in_a_project(qtbot, win, samples, tmp_path):
+    from gcws.automation import headless as H
+    from gcws.core import project as P
+    _load(qtbot, win, samples, ["07_"], process=False)
+    path = P.save(win.ws, tmp_path / "p.gcws")
+    assert P.read(path)["runs"][0]["processed"] is False
+    ws = H.new_workspace()
+    H.open_project(ws, path)
+    assert not ws.states()[0].processed and ws.states()[0].results == {}
+    assert win.open_project(path, confirm_close=False)
+    qtbot.waitUntil(lambda: win.loading == 0 and win._pending_project is None and bool(win.ws.states()), timeout=60000)
+    st = win.ws.states()[0]
+    assert not st.processed and st.results == {}
+    win.integrate()                                  # F5: an explicit integration processes the run
+    assert st.processed and st.results

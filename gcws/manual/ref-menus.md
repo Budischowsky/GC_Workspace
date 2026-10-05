@@ -33,6 +33,7 @@ Every item of the menu bar, in the order of the menus. Items ending in "..." ope
 |---|---|
 | **Save current settings as Method...** | Stores all processing settings under a name. |
 | **Load Method...** | Applies a stored method, wholly or in parts; also imports, exports and deletes methods. |
+| **Run Method** (`Ctrl+R`) | Processes the loaded runs with the loaded method: integration, blank subtraction, library search, internal standards, quantification. Loading runs does none of this. |
 
 See [Methods and projects](wf-methods.md#processing-methods).
 

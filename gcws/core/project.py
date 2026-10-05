@@ -66,6 +66,7 @@ def to_dict(ws, project_path: Path) -> dict:
             "delay_override": st.delay_override,
             "spectrum_overrides": {str(k): v for k, v in st.spectrum_overrides.items()},
             "result_digest": {k: r.digest for k, r in st.results.items()},
+            "processed": st.processed,
         })
     return {
         "format": FORMAT, "schema": SCHEMA, "app_version": gcws.__version__,
@@ -144,6 +145,7 @@ def apply_run_state(st, entry: dict) -> list[str]:
     from gcws.ms.assignment import restore_overrides
     st.spectrum_overrides = restore_overrides(entry.get("spectrum_overrides") or {})
     st.saved_digests = dict(entry.get("result_digest") or {})
+    st.processed = bool(entry.get("processed", True))      # older projects: always integrated
     fp_saved = entry.get("fingerprint") or {}
     fp_now = _fingerprint(st.run.path)
     changed = [k for k in fp_saved if fp_now.get(k) != fp_saved[k]]

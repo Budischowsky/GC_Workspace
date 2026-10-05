@@ -74,6 +74,8 @@ def open_project(ws, path) -> list[str]:
         run.id = entry["id"]
         st = ws.add_run(run, results, delay=delay)
         notes += P.apply_run_state(st, entry)
+        if not st.processed:                 # saved before Method > Run Method: raw data only
+            st.results.clear()
         for key in list(st.results):
             ws.integrate(st.id, key, emit=False)
     order = [e["id"] for e in data.get("runs", []) if e["id"] in ws.runs]

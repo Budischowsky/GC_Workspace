@@ -80,6 +80,30 @@ def test_coeluted_fid_peak_is_split_by_the_fid_fit_and_keeps_its_area(app):
     assert [p.extra["spectrum_id"] for p in fragments(ws, st)] == ids
 
 
+def test_the_split_uses_the_refined_fid_ms_delay(app):
+    """Each FID integration refines the FID-MS delay from the FID/TIC apex pairs. The automatic split
+    of that integration uses the refined delay, not the estimate it replaces (a run loaded fresh had
+    its IS1 peak split with an estimate 0.3 scans off), and the split's fragments do not feed back
+    into the refinement."""
+    from gcws.core.model import TIC
+    from gcws.integration.engine import integrate
+    from gcws.signal.delay import DelayEstimate
+    from test_deconv import SPEC_A, SPEC_B
+    run = make_run("S_D", ms_parts=[(200.0, SPEC_A, 60000.0), (203.0, SPEC_B, 45000.0), (60.0, SPEC_A, 40000.0),
+                                    (120.0, SPEC_C, 50000.0), (300.0, SPEC_B, 40000.0)],
+                   fid_parts=[(200, 3000), (203, 6000), (60, 8000), (120, 8000), (300, 8000)])
+    ws = workspace()
+    results = {FID: integrate(run.fid, ws.default_method(FID)), TIC: integrate(run.signal(TIC), ws.default_method(TIC))}
+    st = ws.add_run(run, results, delay=DelayEstimate(DELAY - 0.002, 0.9, "cross-correlation"))
+    assert st.delay.method == "apex pairs" and st.delay_value == pytest.approx(DELAY, abs=0.0005)
+    parts = fragments(ws, st)
+    assert len(parts) == 2
+    assert all(p.extra["deconv_component"]["delay"] == st.delay_value for p in parts)
+    refined = st.delay_value
+    ws.integrate(st.id, FID)
+    assert st.delay_value == refined
+
+
 def test_fragments_are_searched_with_their_component_spectrum(app):
     from gcws.identify.service import fragment_items
     from test_deconv import SPEC_A, SPEC_B
@@ -147,6 +171,58 @@ def test_bleed_components_and_identical_spectra_are_not_split_off():
     # the same spectrum within two scans: one compound
     a, b = component(10.0, mz=57), component(10.012, mz=57)
     assert not _plan([a, b], parts=((10.0, 400.), (10.012, 700.))).events
+
+
+def test_an_isotopologue_never_takes_the_standards_peak():
+    """IS1 of run 09: a weak isotopologue 1.2 scans after the standard (alike profile) and a bleed
+    component on the tail. Whatever the FID-MS delay, the standard keeps the FID peak (before, at some
+    delays the isotopologue took over 90 % and the standard's fragment carried its spectrum)."""
+    from test_component_fit import component, standard_and_isotopologue, trace
+    from gcws.core.model import Baseline, Peak
+    from gcws.integration.auto_deconv import plan_peaks
+    from gcws.integration.method import IntegrationMethod
+    main, minor = standard_and_isotopologue()
+    bleed = component(10.0426, sigma=0.0064, mz=221)
+    bleed.profile_y = bleed.profile_y * 1.2
+    t, y = trace([(10.0, 400.), (10.0426, 12.)], 0.0068, 0.93, sigma=0.0095, noise=1.0)
+    lo, hi = 9.975, 10.11
+    use = (t >= lo) & (t <= hi)
+    area = float(np.trapezoid(y[use], t[use] * 60))
+    peak = Peak(start=lo, end=hi, apex_rt=10.0068, baseline=Baseline("hold", lo, 100.0, hi, 100.0),
+                area=area, area_raw=area)
+    m = IntegrationMethod(deconv_split="auto", deconv_level=5, deconv_min_r=0.5, deconv_fit_r2=0.95,
+                          deconv_min_sn=1.5, deconv_min_share=0.003)
+    for delay in np.arange(0.0040, 0.0100, 0.0004):
+        plan = plan_peaks(Signal(FID, t, y + 100.0), SimpleNamespace(peaks=[peak]), FID, float(delay),
+                          [main, minor, bleed], m)
+        (split,) = plan.plans
+        shares = {split.candidates[i].component.model_mz: s for i, s in zip(split.checked, split.shares)}
+        assert shares[66] > 0.9 and shares.get(275, 0.0) < 0.05, (delay, shares)
+
+
+def test_is1_of_run_09_keeps_its_own_component(samples):
+    """The reported case: IS1 (heptadecane-d36, 13.42 min) of run 09 at level 5. Whatever the FID-MS
+    delay (0.00452 min was the estimate before its refinement), the standard's component (model m/z 66)
+    keeps the peak; it is not split into the D35H isotopologue (m/z 275) and a bleed component (221)."""
+    from conftest import run_dir
+    from gcws.core.model import Baseline, Peak
+    from gcws.integration.auto_deconv import plan_peaks
+    from gcws.integration.method import IntegrationMethod
+    from gcws.io.run_loader import load_run
+    from gcws.ms import deconv as D
+    run = load_run(run_dir("09_"))
+    comps = D.deconvolute_range(run.ms, 13.2, 13.7, D.settings_for_level(D.DeconvSettings(), 5))
+    fid = run.fid
+    lo, hi = 13.38, 13.5192
+    y0, y1 = (float(np.interp(x, fid.rt, fid.y)) for x in (lo, hi))
+    peak = Peak(start=lo, end=hi, apex_rt=13.4167, baseline=Baseline("line", lo, y0, hi, y1),
+                area=9.67e6, area_raw=9.67e6)
+    m = IntegrationMethod(deconv_split="auto", deconv_level=5, deconv_min_r=0.5, deconv_fit_r2=0.95,
+                          deconv_min_sn=1.5, deconv_min_share=0.003, deconv_probe=False)
+    assert sorted(c.model_mz for c in comps if 13.37 <= c.rt <= 13.51) == [66, 221, 275]
+    for delay in np.arange(0.0040, 0.0100, 0.0004).tolist() + [0.00452]:
+        plan = plan_peaks(fid, SimpleNamespace(peaks=[peak]), FID, delay, comps, m)
+        assert not plan.events, (delay, plan.events[0].comment)
 
 
 def test_poor_fit_splits_by_ms_proportions_and_is_flagged():

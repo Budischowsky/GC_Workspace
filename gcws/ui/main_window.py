@@ -69,6 +69,7 @@ class MainWindow(QMainWindow):
         self._report2_job = None                 # (job id, journal revision, original project path)
         self._report2_baseline = None
         self._fresh_folders: set = set()      # batch folders of runs loaded (not from a project) in this load
+        self._method_run = None              # Method > Run Method in progress: {"name", "method", "ids", "steps"}
         self._maximized = None          # (dock, saved main-window state | floating geometry)
         central = QWidget()
         central.hide()
@@ -205,6 +206,9 @@ class MainWindow(QMainWindow):
         self.a_search = A("Library search...", self.library_search, "Ctrl+F", icon("search"),
                           "Automatic library search of all integrated peaks (your libraries)")
         self.a_search_method = A("Search methods...", self.edit_search_methods)
+        self.a_run_method = A("Run Method", self.run_method, "Ctrl+R", None,
+                              "Process the loaded runs with the loaded method: integration, blank subtraction, "
+                              "library search, ISTDs, quantification")
         self.a_subtract = A("Subtract baseline", self.spectrum.toggle_subtraction, None, icon("subtract"),
                             "Mass spectrum minus a baseline scan: click, then right-click the apex and then "
                             "the baseline in a chromatogram (Escape clears)", True)
@@ -296,6 +300,8 @@ class MainWindow(QMainWindow):
         m = mb.addMenu("&Method")                  # processing methods: all settings under one name
         m.addAction("Save current settings as Method...", self.save_method)
         m.addAction("Load Method...", self.load_method)
+        m.addSeparator()
+        m.addAction(self.a_run_method)
         self.method_menu = m
 
         from gcws.ui.widgets.stay_open_menu import StayOpenMenu
@@ -661,7 +667,8 @@ class MainWindow(QMainWindow):
             todo.append(p)
         for p in todo:
             self._loading(+1)
-            workers.submit(workers.load_and_integrate, p, role, self.ws.methods,
+            # a run is only read; it is integrated by Method > Run Method (a project's runs again now)
+            workers.submit(workers.load_and_integrate, p, role, self.ws.methods, after is not None,
                            on_done=lambda res, p=p: self._loaded(res, after),
                            on_error=lambda err, p=p: self._load_failed(p, err))
 
@@ -677,7 +684,8 @@ class MainWindow(QMainWindow):
     def _loaded(self, result, after=None):
         run, results, delay = result
         entry = after(run) if after else None
-        st = self.ws.add_run(run, results, delay=delay)
+        processed = entry is not None and bool(entry.get("processed", True))
+        st = self.ws.add_run(run, results if processed else None, delay=delay, processed=processed)
         if entry is not None:
             notes = P.apply_run_state(st, entry)
             for n in notes:
@@ -691,7 +699,8 @@ class MainWindow(QMainWindow):
         # Finish the initial fit before reporting the load complete; later gestures win.
         self.view_link.reset()
         self._loading(-1)
-        self.statusBar().showMessage(f"Loaded {st.name}", 4000)
+        self.statusBar().showMessage(f"Loaded {st.name}" if processed else
+                                     f"Loaded {st.name}: not processed yet (Method > Run Method)", 6000)
         self._load_finished()
 
     def _load_failed(self, path, err):
@@ -822,7 +831,7 @@ class MainWindow(QMainWindow):
     # -- identification --------------------------------------------------------------
 
     def library_search(self):
-        from gcws.identify.service import LibrarySearchWorker, build_items
+        from gcws.identify.service import build_items
         from gcws.ui.dialogs.identify import SearchStartDialog
         current = getattr(self, "_search", None)
         if current is not None and current.timer.isActive():
@@ -847,6 +856,11 @@ class MainWindow(QMainWindow):
         if not items:
             QMessageBox.information(self, "Library search", "No peaks with MS data to search.")
             return
+        self._start_search(items, v, protected)
+
+    def _start_search(self, items, v, protected, then=None):
+        """Search ``items`` in the background (progress bar, Cancel); ``then(status text)`` afterwards."""
+        from gcws.identify.service import LibrarySearchWorker
         self._search = LibrarySearchWorker(items, v["method"], self)
         self.progress.setRange(0, len(items))
         self.progress.setValue(0)
@@ -857,7 +871,7 @@ class MainWindow(QMainWindow):
         self._search.progress.connect(lambda t: self.statusBar().showMessage(t))
         self._search.hit.connect(lambda i: self.progress.setValue(self._search.done))
         self._search.failed.connect(self._search_failed)
-        self._search.finished.connect(lambda cancelled: self._search_done(items, v, protected, cancelled))
+        self._search.finished.connect(lambda cancelled: self._search_done(items, v, protected, cancelled, then))
         self._search.start()
 
     def shown_peaks(self, run_ids, key: str) -> dict:
@@ -937,6 +951,132 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Method '{dlg.method['name']}' loaded: {len(dlg.applied)} parts applied",
                                          8000)
 
+    def run_method(self):
+        """Method > Run Method: process the loaded runs with the processing method loaded (or saved) last.
+
+        Loading only reads the runs. This integrates them with the method's integration (solvent cut,
+        automatic deconvolution split), rebuilds the blank-subtracted traces, searches the libraries
+        when the method holds a library search, binds the internal standards the detection finds with
+        high confidence, and quantifies."""
+        if self._method_run is not None:
+            self.statusBar().showMessage("Run Method is already running.", 6000)
+            return
+        search = getattr(self, "_search", None)
+        if search is not None and search.timer.isActive():
+            self.statusBar().showMessage("A library search is running: Run Method can start when it has finished.",
+                                         8000)
+            return
+        if not self.ws.states():
+            QMessageBox.information(self, "Run Method", "No runs are loaded: load the runs first.")
+            return
+        method = self._current_method()
+        if method is None:
+            if QMessageBox.question(self, "Run Method", "No processing method is loaded.\n\nLoad one now?") \
+                    != QMessageBox.Yes:
+                return
+            self.load_method()
+            method = self._current_method()
+            if method is None:
+                return
+        name = method.get("name", "")
+        ids = list(self.ws.order)
+        self._method_run = {"name": name, "method": method, "ids": ids, "steps": []}
+        self.begin_activity("method", f"Run Method '{name}': integrating {len(ids)} run(s)")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            self.ws.process_runs(ids)
+        except Exception:
+            self._method_run = None
+            self.end_activity("method")
+            raise
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._method_run["steps"].append(f"{len(ids)} run(s) integrated")
+        self._method_after_integration()
+
+    def _current_method(self):
+        from gcws.core import proc_method as PM
+        name = QSettings().value("method/current", "") or ""
+        if not name:
+            return None
+        try:
+            return PM.load(name)
+        except (KeyError, OSError, ValueError):
+            return None
+
+    def _method_after_integration(self):
+        """Run Method, step 2: the library search, once the automatic splits are deconvoluted."""
+        from gcws.core import proc_method as PM
+        from gcws.core.keys import is_fid
+        from gcws.identify.service import build_items, fragment_items
+        job = self._method_run
+        if job is None:
+            return
+        if self.ws.deconv_busy():                      # the split peaks are searched, not their parents
+            self.update_activity("method", f"Run Method '{job['name']}': waiting for the deconvolution")
+            QTimer.singleShot(250, self._method_after_integration)
+            return
+        ids = [i for i in job["ids"] if i in self.ws.runs]
+        if "search" not in (job["method"].get("sections") or {}) or not ids:
+            self._method_finish()
+            return
+        cfg = PM.search_config(job["method"])
+        s = QSettings()
+        rescan = int(s.value("search/rescan_limit", 80)) if s.value("search/rescan", False, type=bool) else None
+        v = {"method": cfg.method, "target": cfg.target, "transfer": cfg.transfer and cfg.target == "TIC",
+             "mode": cfg.mode, "skip": s.value("search/skip", False, type=bool), "rescan": rescan, "review": False}
+        v["key"] = self.search_key(cfg.target)
+        items, protected = build_items(self.ws, ids, v["key"], v["mode"], v["rescan"], v["skip"], None)
+        if not is_fid(v["key"]):
+            items += fragment_items(self.ws, ids, FID, v["rescan"], v["skip"], None)[0]
+        if not items:
+            job["steps"].append("no peaks with MS data to search")
+            self._method_finish()
+            return
+        self.update_activity("method", f"Run Method '{job['name']}': library search of {len(items)} peaks")
+        self._start_search(items, v, protected, then=self._method_finish)
+
+    def _method_finish(self, search_text: str = ""):
+        """Run Method, last step: internal standards and quantification."""
+        job, self._method_run = self._method_run, None
+        if job is None:
+            return
+        try:
+            steps = job["steps"]
+            if search_text:
+                steps.append(search_text[0].lower() + search_text[1:])
+            ids = [i for i in job["ids"] if i in self.ws.runs]
+            n = self._method_detect_istds(ids)
+            if n:
+                steps.append(f"{n} ISTD peak(s) detected and bound")
+            self.ws.recompute_quant()
+        finally:
+            self.end_activity("method")
+        self.ws.log("Processing method run", "", job["name"], "", "; ".join(steps))
+        self.statusBar().showMessage(f"Method '{job['name']}' run: " + "; ".join(steps), 15000)
+
+    def _method_detect_istds(self, ids) -> int:
+        """Bind the internal standards the detection finds with high confidence (one undo step);
+        returns the number of bindings."""
+        from gcws.io import sequence
+        from gcws.quant import istd_detect as ID
+        if not ids or not ID.definitions(self.ws):
+            return 0
+        found = {}
+        for rid in ids:
+            if self.ws.runs[rid].role in (sequence.BLANK, sequence.LADDER):
+                continue
+            try:
+                ok = ID.detect(self.ws, rid).confident("high")
+            except Exception as exc:  # noqa: BLE001 - the rest of the method still runs
+                self.ws.message.emit(f"ISTD detection failed for {self.ws.runs[rid].name}: {exc}")
+                continue
+            if ok:
+                found[rid] = {c: k.rt for c, k in ok.items()}
+        if found:
+            self.ws.push_quant("Run Method: ISTDs detected", ID.with_bindings(self.ws, found), "ISTD bindings")
+        return sum(len(v) for v in found.values())
+
     def manage_libraries(self):
         from gcws.ui.dialogs.libraries import LibraryManagerDialog
         LibraryManagerDialog(self).exec()
@@ -946,7 +1086,16 @@ class MainWindow(QMainWindow):
         from gcws.core.keys import base_key
         return next((self.ws.panel_key(i) for i in (0, 1) if base_key(self.ws.panel_key(i)) == target), target)
 
-    def _search_done(self, items, v, protected, cancelled):
+    def _search_done(self, items, v, protected, cancelled, then=None):
+        text = ""
+        try:
+            text = self._apply_search(items, v, protected, cancelled)
+        finally:
+            if then is not None:
+                then(text)
+
+    def _apply_search(self, items, v, protected, cancelled) -> str:
+        """Apply the hits of a finished search; returns the status bar text."""
         from gcws.identify.service import apply_search_results
         from gcws.ui.dialogs.identify import CompoundReview
         self.progress.hide()
@@ -959,13 +1108,14 @@ class MainWindow(QMainWindow):
                 pass
         done = [it for it in items if it.job.done and not it.job.error]
         if not done:
-            self.statusBar().showMessage("Library search: nothing found" + (" (cancelled)" if cancelled else ""))
-            return
+            text = "Library search: nothing found" + (" (cancelled)" if cancelled else "")
+            self.statusBar().showMessage(text)
+            return text
         method = v["method"]
         if v["review"]:
             dlg = CompoundReview(done, method.min_score, self)
             if dlg.exec() != CompoundReview.Accepted:
-                return
+                return "Library search: hits not applied"
         hits = apply_search_results(self.ws, done, method, transfer=bool(v.get("transfer")),
                                     fid_key=self.search_key("FID"))
         copied, n = hits.copied, hits.identified
@@ -975,7 +1125,9 @@ class MainWindow(QMainWindow):
             if copied["unmatched"]:
                 msg += f" ({copied['unmatched']} TIC peaks without an FID peak"
                 msg += f", {copied['protected']} FID names kept)" if copied["protected"] else ")"
-        self.statusBar().showMessage(msg + (" (cancelled)" if cancelled else ""), 12000)
+        msg += " (cancelled)" if cancelled else ""
+        self.statusBar().showMessage(msg, 12000)
+        return msg
 
     def edit_library(self, from_spectrum: bool = True):
         """Identify > Edit library: add the spectrum on display to a library, or browse one."""
@@ -1819,7 +1971,8 @@ class MainWindow(QMainWindow):
 
     def show_shortcuts(self):
         lines = [f"{key:>6}   {label}" for name, label, key, tip in TOOLS]
-        lines += ["", "    F1   User manual", "    F5   Integrate active", "Shift+F5   Integrate all", "Ctrl+F   Library search",
+        lines += ["", "    F1   User manual", "    F5   Integrate active", "Shift+F5   Integrate all", "Ctrl+R   Run Method",
+                  "Ctrl+F   Library search",
                   "Ctrl+E   Library hit list", "Ctrl+N   NIST search", "Ctrl+I   Extracted ion chromatogram",
                   "Ctrl+K   Deconvolution: split the selected peak into its components",
                   "Ctrl+Z / Ctrl+Y   Undo / Redo",

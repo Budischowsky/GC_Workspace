@@ -55,6 +55,9 @@ class RunState:
     # and the integration before it (the parents of the fragments)
     auto_split: dict = field(default_factory=dict)
     presplit: dict = field(default_factory=dict)
+    # False while a run is only loaded: nothing is integrated until Method > Run Method
+    # (Workspace.process_runs) or an explicit integration
+    processed: bool = True
 
     @property
     def id(self) -> str:
@@ -175,11 +178,12 @@ class Workspace(QObject):
         return None
 
     def add_run(self, run: Run, results: dict | None = None, color: str | None = None,
-                delay: DelayEstimate | None = None) -> RunState:
+                delay: DelayEstimate | None = None, processed: bool = True) -> RunState:
         st = RunState(run=run, color=color or self.next_color())
         st.undo = QUndoStack(self)
         self.undo_group.addStack(st.undo)
         st.delay = delay
+        st.processed = processed
         run.derive = self._derive
         self._folder_rank.setdefault(self.folder_key(st), len(self._folder_rank))
         for kind in (FID, TIC):
@@ -312,7 +316,7 @@ class Workspace(QObject):
             self.panel_blank[i] = bool(blank)
         k = self.panel_key(i)
         for st in self.states():
-            if st.run.signal(k) is not None and k not in st.results:
+            if st.processed and st.run.signal(k) is not None and k not in st.results:
                 self.integrate(st.id, k, emit=False)
         self.panelsChanged.emit()
         if i == self.table_panel:
@@ -350,7 +354,7 @@ class Workspace(QObject):
         self.signal_key = key
         self.selected = -1
         for st in self.states():
-            if st.run.signal(key) is not None and key not in st.results:
+            if st.processed and st.run.signal(key) is not None and key not in st.results:
                 self.integrate(st.id, key, emit=False)
         self.signalKeyChanged.emit(key)
 
@@ -450,6 +454,7 @@ class Workspace(QObject):
         st = self.runs.get(run_id)
         if st is None:
             return None
+        st.processed = True                  # an explicit integration processes a run that was only loaded
         key = key or self.signal_key
         sig = st.run.signal(key)
         if sig is None:
@@ -458,19 +463,43 @@ class Workspace(QObject):
         method = self._derived_method(st, key, sig) if is_derived(key) else self.method_for(st, key)
         t_min = self.solvent_cut(st, key)
         res = integrate(sig, method, st.events(key), t_min=t_min)
-        res = self._auto_split(st, key, sig, method, res, t_min)
-        st.results[key] = res
-        stale = [] if is_derived(key) or not self.blank_options().auto else self._drop_derived_of(run_id, key)
+        # The FID-MS delay is refined before the automatic split, which maps the MS components with
+        # it, and from the integrator's peaks: the split's fragments must not feed back into it.
         if key == FID and st.run.ms is not None and st.delay is not None and st.delay_override is None:
             tic = st.results.get(TIC)
             if tic is not None:
                 st.delay = refine_with_peaks(st.delay, [p.apex_rt for p in res.peaks],
                                              [p.apex_rt for p in tic.peaks])
+        res = self._auto_split(st, key, sig, method, res, t_min)
+        st.results[key] = res
+        stale = [] if is_derived(key) or not self.blank_options().auto else self._drop_derived_of(run_id, key)
         if emit:
             self.resultChanged.emit(run_id, key)
             for rid, dk in stale:
                 self.resultChanged.emit(rid, dk)
         return res
+
+    def process_runs(self, run_ids=None) -> list[str]:
+        """Integrate ``run_ids`` (default: all runs) with their methods: the integration step of
+        Method > Run Method (loading a run only reads it). The base signals of every run are
+        integrated first, then the blank-subtracted traces are rebuilt, since they use the blanks'
+        integrations. Returns the processed run ids."""
+        ids = [i for i in (self.order if run_ids is None else run_ids) if i in self.runs]
+        for rid in ids:
+            self.runs[rid].processed = True
+        for rid in ids:
+            st = self.runs[rid]
+            keys = [FID, TIC] + [base_key(self.panel_key(i)) for i in (0, 1)]
+            keys += [k for k in st.results if not is_derived(k)]
+            for key in dict.fromkeys(keys):
+                if st.run.signal(key) is not None:
+                    self.integrate(rid, key)
+        self.invalidate_blank(ids)
+        return ids
+
+    def deconv_busy(self) -> bool:
+        """True while a whole-run deconvolution for the automatic split runs in the background."""
+        return bool(self._deconv_jobs)
 
     def _auto_split(self, st: RunState, key: str, sig, method: IntegrationMethod, res: IntegrationResult,
                     t_min) -> IntegrationResult:
@@ -590,7 +619,7 @@ class Workspace(QObject):
         if st is None:
             return None
         key = self.effective_key(st, key or self.signal_key)
-        if key not in st.results and st.run.signal(key) is not None:
+        if st.processed and key not in st.results and st.run.signal(key) is not None:
             self.integrate(run_id, key, emit=False)
         return st.results.get(key)
 

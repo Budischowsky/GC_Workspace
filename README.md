@@ -98,7 +98,8 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
      scaling and whole-run deconvolution, and therefore from peak-based library searches and exports.
      Exported chromatogram pictures show the cut curves. Changes are audited and undoable; the project and
      processing method save both settings, and a new session remembers the last FID on/off choice.
-   - Integration runs automatically on load, with the method of each signal. The *Integration method* panel
+   - Loading only reads the runs. *Method > Run Method* (Ctrl+R) integrates them with the method of each
+     signal, then subtracts the blanks, searches the libraries, detects the ISTDs and quantifies. The *Integration method* panel
      holds the parameters (auto or fixed), the timed events and the list of manual events. F5 re-integrates the
      signals of both panels.
 3. **Peaks / substances** table:
@@ -511,6 +512,8 @@ the peak table's columns and value filter.
 undo step; the integration methods also become the default for runs loaded later. Methods can be exported
 and imported as `.json` files to share them. Things that belong to single runs (ISTD peak bindings, manual
 integration, blank assignments) are not part of a method. The status bar shows the current method.
+*Method > Run Method* (Ctrl+R) processes all loaded runs with it: integration (solvent cut and automatic
+deconvolution split), blank subtraction, the library search, high-confidence ISTD detection and quantification.
 Reference spectra learned for the ISTDs and the ISTD detection options are part of the quantification section.
 
 ## User manual

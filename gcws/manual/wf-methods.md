@@ -16,7 +16,7 @@ Two things store your work, and they are easy to mix up.
 |---|---|
 | **File > Save project** (`Ctrl+S`) | Saves. The first time it asks for a file name. |
 | **File > Save project as...** (`Ctrl+Shift+S`) | Saves under a new name. |
-| **File > Open project...** (`Ctrl+O`) | Opens a project. The runs are loaded and integrated again. If an integration now gives a different result than when it was saved - after an update of the program - you are told. |
+| **File > Open project...** (`Ctrl+O`) | Opens a project. The runs are loaded and integrated again (runs saved before **Run Method** stay unprocessed). If an integration now gives a different result than when it was saved - after an update of the program - you are told. |
 | **File > Recent projects** | The projects opened last. |
 | **File > Recover autosave...** | Opens the automatic save, which is written every two minutes. |
 | **File > Close all chromatograms** | Closes all runs. Nothing is deleted on disk. |
@@ -46,6 +46,11 @@ for runs loaded afterwards.
 **Delete** removes one.
 
 The status bar shows the name of the method loaded or saved last.
+
+## Run Method
+
+Loading runs only reads them: the chromatograms are shown, but nothing is integrated, searched or quantified.
+**Method > Run Method** (`Ctrl+R`) processes all loaded runs with the method loaded (or saved) last: it integrates them with the method's integration (solvent cut and automatic deconvolution split included), rebuilds the blank-subtracted traces, runs the method's library search, binds the internal standards that the detection finds with high confidence, and quantifies. The bottom status bar shows the step it is on; the status bar and the audit trail tell what was done. Without a loaded method it offers **Load Method...** first. Running it again integrates the runs again; manual integration events are kept.
 
 ## Integration methods and search methods
 

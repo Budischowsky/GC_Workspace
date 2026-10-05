@@ -87,6 +87,26 @@ def test_fit_is_deterministic_and_masked_points_are_ignored():
     assert F.fit_trace(t, spiked, shapes, 0.006).r2 < masked.r2
 
 
+def standard_and_isotopologue():
+    """A deuterated standard and its weak D(n-1)H isotopologue 1.2 scans later (IS1 of run 09):
+    alike profiles on the MS scale, 19:1."""
+    main, minor = component(10.0, sigma=0.0095, mz=66), component(10.0093, sigma=0.0064, mz=275)
+    main.profile_y = main.profile_y * 19.0
+    return main, minor
+
+
+def test_an_alignment_the_trace_cannot_decide_follows_the_ms_signal():
+    """Either component explains the FID peak with its own time shift, about equally well. Whatever
+    the expected delay and wherever the coarse grid falls, the fit lines the trace up with the MS
+    signal: the standard takes the peak (the coarse shift step is 0.00375 min)."""
+    shapes = [F.Shape.of(c) for c in standard_and_isotopologue()]
+    t, y = trace([(10.0, 400.)], 0.0068, 0.93, sigma=0.0095, noise=1.0)
+    for shift0 in np.arange(0.0048, 0.0090, 0.0004):
+        fit = F.fit_trace(t, y, shapes, float(shift0))
+        assert fit.shares[0] > 0.9, shift0
+        assert fit.shift == pytest.approx(0.0068, abs=0.001), shift0
+
+
 def test_components_the_trace_cannot_resolve_are_flagged():
     shapes = [F.Shape.of(component(10.0)), F.Shape.of(component(10.0015))]
     t, y = trace([(10.0, 300.), (10.0015, 300.)], 0.0, 1.0)

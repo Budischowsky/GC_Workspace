@@ -5,7 +5,7 @@ links to the chapter that explains it.
 
 | Step | What you do | Where |
 |---|---|---|
-| 1 | Load the runs of the batch: the two determinations, the blank, the blank with internal standards. | [Load and view data](wf-load.md) |
+| 1 | Load the runs of the batch: the two determinations, the blank, the blank with internal standards. Then **Method > Run Method** processes them. | [Load and view data](wf-load.md) |
 | 2 | Check the integration and correct single peaks if needed. | [Integrate and correct peaks](wf-integrate.md) |
 | 3 | Check the roles and the blanks that were suggested. | [Blanks, internal standards and quantification](wf-quantify.md) |
 | 4 | Run the library search. | [Identify the peaks](wf-identify.md) |
@@ -18,7 +18,9 @@ links to the chapter that explains it.
 
 Much of this needs no click:
 
-- A run is **integrated when it is loaded**, with the integration method of its signal.
+- Loading a run only reads it. **Method > Run Method** (`Ctrl+R`) **integrates** every loaded run with the
+  integration method of its signal, subtracts the blanks, searches the libraries, detects the internal
+  standards and quantifies.
 - The **role** of a run (sample, blank, blank + ISTD, alkane ladder) is read from its name and the sequence,
   and the **blanks** of a sample are suggested from the injection order in its batch folder.
 - The **FID-MS delay** - the small time difference between the two detectors - is estimated for each run, so

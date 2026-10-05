@@ -8,6 +8,12 @@ the measured trace with non-negative amplitudes. The fitted curves give each
 component's share of the trace signal, and their crossings are the natural
 cut points between the fragments.
 
+Components with alike profiles a scan or so apart (a deuterated standard and
+its weak D(n-1)H isotopologue) make the alignment ambiguous: either of them
+explains the trace's peak about equally well, each with its own shift. The
+trace cannot decide which component it shows, so where the MS signal as a
+whole lines up with the trace decides (:func:`fit_trace_uncached`).
+
 numpy only (scipy is not installed): a Fritsch-Carlson PCHIP interpolant and
 the Lawson-Hanson NNLS of the vendored NIAS engine. Deterministic: the grid
 search visits the same points in the same order and keeps the first minimum.
@@ -39,6 +45,12 @@ SUGGEST_MIN_SHARE = 0.01
 #: value) and of the common width factor (trace width / MS profile width).
 SHIFT_SPAN_SCANS = 2.0
 STRETCH_RANGE = (0.6, 1.8)
+#: Alignments whose R² differ by less than this explain the trace equally well
+#: (within the mismatch of an MS elution profile and the trace's peak shape).
+ALIGN_TIE_R2 = 0.005
+#: A coarse-grid start this far below the best coarse R² is not refined: it
+#: cannot become an equally good alignment (seen on real runs: at most 0.04).
+ALIGN_START_R2 = 0.1
 
 
 # -- interpolation -------------------------------------------------------------------------------
@@ -276,12 +288,67 @@ def fit_trace(t, y, shapes: Sequence[Shape], shift0: float, scan_dt: Optional[fl
     return _copy(fit)
 
 
+def _search(ss_of, shift0: float, dt: float) -> tuple[tuple, list[tuple]]:
+    """The coarse grid around ``shift0``: its best point ``(ss, shift, log_k)`` (the first minimum)
+    and, per shift, the best point over the width factors (the shift profile)."""
+    lo, hi = STRETCH_RANGE
+    logs = np.log(lo) + np.log(hi / lo) / 12 * np.arange(13)
+    best, profile = None, []
+    for shift in _grid(shift0, dt * SHIFT_SPAN_SCANS / 4, 4):
+        row = None
+        for log_k in logs:
+            ss = ss_of(shift, log_k)
+            if row is None or ss < row[0]:
+                row = (ss, float(shift), float(log_k))
+        profile.append(row)
+        if best is None or row[0] < best[0]:
+            best = row
+    return best, profile
+
+
+def _refine(ss_of, start: tuple, dt: float) -> tuple:
+    """Two finer grid levels around ``start``, each with a third of the previous step."""
+    lo, hi = STRETCH_RANGE
+    best = start
+    shift_step, log_step = dt * SHIFT_SPAN_SCANS / 4, np.log(hi / lo) / 12
+    for _level in range(2):
+        shift_step /= 3
+        log_step /= 3
+        shifts = _grid(best[1], shift_step, 2)
+        logs = np.clip(_grid(best[2], log_step, 2), np.log(lo), np.log(hi))
+        for shift in shifts:
+            for log_k in logs:
+                ss = ss_of(shift, log_k)
+                if ss < best[0]:
+                    best = (ss, float(shift), float(log_k))
+    return best
+
+
+def _other_minima(profile: list[tuple], best: tuple, yu: np.ndarray) -> list[tuple]:
+    """The local minima of the coarse shift profile besides ``best`` worth refining."""
+    ss = [p[0] for p in profile]
+    total = float(((yu - yu.mean()) ** 2).sum()) if yu.size else 0.0
+    out = []
+    for j, point in enumerate(profile):
+        if point[1] == best[1] or (j > 0 and not ss[j] < ss[j - 1]) or (j + 1 < len(ss) and not ss[j] <= ss[j + 1]):
+            continue
+        if total > 0 and (point[0] - best[0]) / total > ALIGN_START_R2:
+            continue
+        out.append(point)
+    return out
+
+
 def fit_trace_uncached(t, y, shapes: Sequence[Shape], shift0: float, scan_dt: Optional[float] = None,
                        mask: Optional[np.ndarray] = None) -> TraceFit:
     """Best common shift and width factor, searched on a coarse grid and refined twice.
 
     ``shift0`` is the expected detector offset (the FID-MS delay, or 0 for an MS
     trace). ``mask`` excludes points (e.g. skimmed riders) from the fit.
+
+    The other local minima of the coarse search are refined as well. Of the alignments that explain
+    the trace equally well (R² within ALIGN_TIE_R2 of the best), the one nearest the shift that lines
+    the MS signal as a whole (the sum of the profiles) up with the trace is taken: the coarse grid
+    alone would take whichever of them it happens to sample better, which depends on ``shift0``.
     """
     if not shapes:
         raise ValueError("no component shapes to fit")
@@ -290,23 +357,25 @@ def fit_trace_uncached(t, y, shapes: Sequence[Shape], shift0: float, scan_dt: Op
     use = np.ones(t.size, dtype=bool) if mask is None else np.asarray(mask, dtype=bool)
     tu, yu = t[use], y[use]
     dt = scan_dt or min(s.scan_dt for s in shapes)
-    lo, hi = STRETCH_RANGE
-    shift_step = dt * SHIFT_SPAN_SCANS / 4
-    log_step = np.log(hi / lo) / 12
-    shifts = _grid(shift0, shift_step, 4)
-    logs = np.log(lo) + log_step * np.arange(13)
-    best = None
-    for _level in range(3):
-        for shift in shifts:
-            for log_k in logs:
-                ss, _x = _residual(_design(shapes, tu, shift, float(np.exp(log_k))), yu)
-                if best is None or ss < best[0]:
-                    best = (ss, float(shift), float(log_k))
-        shift_step /= 3
-        log_step /= 3
-        shifts = _grid(best[1], shift_step, 2)
-        logs = np.clip(_grid(best[2], log_step, 2), np.log(lo), np.log(hi))
-    return solve(t, y, shapes, best[1], float(np.exp(best[2])), use)
+
+    def ss_of(shift, log_k):
+        return _residual(_design(shapes, tu, shift, float(np.exp(log_k))), yu)[0]
+
+    best, profile = _search(ss_of, shift0, dt)
+    found = [_refine(ss_of, best, dt)]
+    if len(shapes) > 1:
+        found += [_refine(ss_of, start, dt) for start in _other_minima(profile, best, yu)]
+    fits = [solve(t, y, shapes, shift, float(np.exp(log_k)), use) for _ss, shift, log_k in found]
+    top = max(f.r2 for f in fits)
+    tied = [f for f in fits if f.r2 >= top - ALIGN_TIE_R2]
+    if len(tied) == 1:
+        return tied[0]
+
+    def ms_ss(shift, log_k):
+        return _residual(_design(shapes, tu, shift, float(np.exp(log_k))).sum(axis=1)[:, None], yu)[0]
+
+    ms_shift = _refine(ms_ss, _search(ms_ss, shift0, dt)[0], dt)[1]
+    return min(tied, key=lambda f: abs(f.shift - ms_shift))
 
 
 def cut_points(t, curves: np.ndarray, apexes: Sequence[float]) -> list[float]:

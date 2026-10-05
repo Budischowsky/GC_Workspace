@@ -2,7 +2,7 @@
 
 ## Automatic integration
 
-A run is integrated when it is loaded. Each signal has its own integration method: one for the FID and one for
+A run is integrated by **Method > Run Method** (`Ctrl+R`); loading only reads it. Each signal has its own integration method: one for the FID and one for
 the MS traces (TIC, BPC, EIC).
 
 - **Integrate** (`F5`) integrates the active chromatogram again with its method.
@@ -95,6 +95,9 @@ with processing methods and used by the automation.
    same way as **Split peak** does it: the component curves are fitted to the trace, the peak's area is divided
    by the fitted areas, and the total stays exactly the same. If the fit is below **Min. fit R²**, the MS
    component proportions are used.
+   Two components with almost the same curve a scan or so apart (a deuterated standard and its slightly
+   lighter isotopologue) fit the trace about equally well either way round; the curves are then placed where
+   the MS signal of the peak as a whole lies, so the standard keeps its peak and its spectrum.
    A peak in which the whole-run deconvolution finds only one component, although its trace shows a shoulder
    (or one component fits it badly), gets a **closer look**: its MS is deconvoluted again, more sensitively
    and with a pass over what the found component leaves. This finds a substance that elutes on the tail of a

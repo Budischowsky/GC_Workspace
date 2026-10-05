@@ -166,6 +166,7 @@ def test_hs_full_window_qgd(qtbot, monkeypatch, tmp_path):
     win.show()
     win.load_runs([str(p)])
     qtbot.waitUntil(lambda: win.loading == 0 and win.ws.active is not None, timeout=30000)
+    win.ws.process_runs()
     ws, st = win.ws, win.ws.active
     win.quant.mode.setCurrentIndex(win.quant.mode.findData("hs_screening"))
     win.quant._mode_changed()

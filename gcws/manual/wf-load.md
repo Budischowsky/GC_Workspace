@@ -8,6 +8,8 @@
    A right-click offers **Load as** with a role (for example as Blank) and **Load all runs in folder**.
 3. The runs appear in the **Loaded samples** list below the tree, in injection order and each in its own
    colour. Click one to make it the active chromatogram.
+4. Loading only reads the runs: nothing is integrated yet. **Method > Run Method** (`Ctrl+R`) processes them
+   with the loaded method. See [Methods and projects](wf-methods.md#run-method).
 
 **File > Load chromatograms...** (`Ctrl+L`) asks for a folder instead of using the tree: a single run, or a
 batch folder, whose runs are then all loaded. **File > Load Shimadzu QGD files...** asks for `.qgd` files.
