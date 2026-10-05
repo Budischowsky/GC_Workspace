@@ -78,9 +78,27 @@ def _names(dock, bucket=None):
     return out
 
 
-def _dock(jr, monkeypatch, qtbot):
+def _no_word(docx, pdf):
+    raise RuntimeError("no Word in the tests")
+
+
+@pytest.fixture()
+def settings(tmp_path):
+    """QSettings of the test only (the preview switch is remembered there)."""
+    from PySide6.QtCore import QCoreApplication, QSettings
+    QCoreApplication.setOrganizationName("GCWorkspaceTest")
+    QCoreApplication.setApplicationName("pytest")
+    QSettings.setDefaultFormat(QSettings.IniFormat)
+    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path))
+    QSettings().clear()
+
+
+def _dock(jr, monkeypatch, qtbot, word=_no_word):
+    """Report² on ``jr``; Microsoft Word (the preview of Word reports) is replaced by ``word``."""
+    from gcws.report import service as RS
     from gcws.ui.docks.report2 import Report2Dock
     monkeypatch.setattr("gcws.automation.control.WatcherControl", lambda *a, **k: NoWatcher())
+    monkeypatch.setattr(RS, "docx_to_pdf", word)
     dock = Report2Dock(journal=jr, poll_ms=60000)
     qtbot.addWidget(dock)
     return dock
@@ -370,6 +388,7 @@ def test_with_a_running_watcher_the_accept_is_left_to_it(qtbot, data, tmp_path, 
     from gcws.ui.docks.report2 import Report2Dock
     wf, jr, ids, batch = _seed(data, tmp_path)
     monkeypatch.setattr("gcws.automation.control.WatcherControl", lambda *a, **k: RunningWatcher())
+    monkeypatch.setattr("gcws.report.service.docx_to_pdf", _no_word)
     dock = Report2Dock(journal=jr, poll_ms=60000)
     qtbot.addWidget(dock)
     assert dock.watcher.text() == "● Watcher running" and dock.start_btn.isHidden()
@@ -389,13 +408,8 @@ def _pdf(path):
     return path
 
 
-def test_pdf_preview(qtbot, data, tmp_path, monkeypatch):
-    from PySide6.QtCore import QCoreApplication, QSettings
-    QCoreApplication.setOrganizationName("GCWorkspaceTest")
-    QCoreApplication.setApplicationName("pytest")
-    QSettings.setDefaultFormat(QSettings.IniFormat)
-    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(tmp_path))
-    QSettings().clear()
+def test_pdf_preview(qtbot, data, tmp_path, monkeypatch, settings):
+    from PySide6.QtCore import QSettings
     wf, jr, ids, batch = _seed(data, tmp_path)
     job = jr.job(ids["S-control"])
     files = dict(job.files)
@@ -405,8 +419,8 @@ def test_pdf_preview(qtbot, data, tmp_path, monkeypatch):
     jr.update_job(job.id, files=files)
     dock = _dock(jr, monkeypatch, qtbot)
     assert dock.b_preview.isChecked()
-    dock.select(ids["S-auto"])                                  # Word and Excel only
-    assert dock.preview.currentWidget() is dock.preview_note and "no PDF" in dock.preview_note.text()
+    dock.select(ids["S-auto"])                                  # Word and Excel only, and no Word here
+    qtbot.waitUntil(lambda: "no Word in the tests" in dock.preview_note.text())
     dock.select(ids["S-control"])
     assert dock.preview.currentWidget() is dock.pdf_view and dock._pdf_doc.pageCount() == 1
     pdf.unlink()                                                # read into memory: the file is not held open
@@ -414,6 +428,55 @@ def test_pdf_preview(qtbot, data, tmp_path, monkeypatch):
     assert not dock.preview.isVisibleTo(dock) and QSettings().value("report2/preview", type=bool) is False
     dock.b_preview.setChecked(True)
     assert dock.preview.isVisibleTo(dock)
+
+
+def test_word_report_is_previewed_through_a_pdf_made_once(qtbot, data, tmp_path, monkeypatch, settings):
+    """No PDF among the report's formats: Word converts the Word report once (in a thread); the PDF is
+    kept beside it in the job folder, made again only when the Word report is newer."""
+    import os
+    import shutil
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    made = _pdf(tmp_path / "made_by_word.pdf")
+    calls = []
+
+    def word(docx, pdf):
+        calls.append(Path(docx).name)
+        shutil.copyfile(made, pdf)
+        return Path(pdf)
+    dock = _dock(jr, monkeypatch, qtbot, word)
+    assert dock.b_preview.isChecked()
+    dock.select(ids["S-control"])
+    assert "Making a preview" in dock.preview_note.text()
+    qtbot.waitUntil(lambda: dock.pdf_view is not None and dock.preview.currentWidget() is dock.pdf_view)
+    docx = Path(jr.job(ids["S-control"]).files[next(iter(jr.job(ids["S-control"]).files))]["docx"])
+    kept = dock.preview_pdf(docx)
+    assert kept == docx.with_name(docx.stem + ".preview.pdf") and kept.is_file()
+    assert calls == [docx.name]
+    dock.select(ids["S-auto"])                                  # another report: converted as well
+    qtbot.waitUntil(lambda: len(calls) == 2 and dock.preview.currentWidget() is dock.pdf_view)
+    dock.select(ids["S-control"])                               # kept: no Word again
+    assert dock.preview.currentWidget() is dock.pdf_view and len(calls) == 2
+    later = kept.stat().st_mtime + 10
+    os.utime(docx, (later, later))                              # the Word report was made again
+    dock.select(ids["S-auto"])
+    dock.select(ids["S-control"])
+    qtbot.waitUntil(lambda: len(calls) == 3 and dock.preview.currentWidget() is dock.pdf_view)
+
+
+def test_word_preview_failure_is_shown_once(qtbot, data, tmp_path, monkeypatch, settings):
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    calls = []
+
+    def no_word(docx, pdf):
+        calls.append(docx)
+        raise RuntimeError("Word is not installed")
+    dock = _dock(jr, monkeypatch, qtbot, no_word)
+    dock.select(ids["S-control"])
+    qtbot.waitUntil(lambda: "Word is not installed" in dock.preview_note.text())
+    dock.select(ids["S-auto"])
+    qtbot.waitUntil(lambda: len(calls) == 2 and dock._converting is None)
+    dock.select(ids["S-control"])                               # not tried again and again
+    assert len(calls) == 2 and "Word could not convert" in dock.preview_note.text()
 
 
 def test_docks_and_menus(qtbot, win):

@@ -266,5 +266,5 @@ Described in [Unattended processing](wf-automation.md#report²-what-needs-your-c
 | **Reject** | With a reason, or **Other...** for a comment. |
 | **Open report** | Opens one of its files. |
 | **Open in GC Workspace** | Opens the sample as it was processed. |
-| **Preview** | Shows the PDF of the selected report beside the list. |
+| **Preview** | Shows the selected report beside the list (its PDF, or its Word report converted once by Microsoft Word). |
 | **Undo** | Takes back the last accept, reject or delete for a few seconds. |

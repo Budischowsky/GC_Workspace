@@ -4,13 +4,15 @@ How many samples the automation processed, which reports were accepted automatic
 analyst and which need control, grouped by batch folder. "To do" holds the open batches; a batch
 whose reports are all accepted and delivered moves to the "Archive" by itself ("Reopen" brings it
 back). The chips above the list filter it. Selecting a report shows why it needs control and a
-preview of its PDF; accept is one click, reject takes a reason, and both can be undone for a few seconds. Right-click a sample
+preview (its PDF, or its Word report converted once by Microsoft Word); accept is one click, reject takes a reason, and both can be undone for a few seconds. Right-click a sample
 or a batch for everything else; "Delete" only hides (View > Show deleted reports brings it back).
 Everything is read from the automation journal every few seconds (the watcher writes it).
 """
 from __future__ import annotations
 
+import hashlib
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Callable, Optional
@@ -148,6 +150,10 @@ class _Chip(QLabel):
 class Report2Dock(QWidget):
     openProject = Signal(str)                    # path of a job's .gcws project
     openDetermination = Signal(str)              # Report² job id, resolved by the main window
+    _converted = Signal(str, str)                # Word report, error ("" = the preview PDF is written)
+
+    #: seconds Word may take for a preview before it is given up
+    WORD_TIMEOUT = 120.0
 
     def __init__(self, parent=None, journal: Optional[J.Journal] = None, poll_ms: int = 3000):
         super().__init__(parent)
@@ -308,6 +314,11 @@ class Report2Dock(QWidget):
         self.pdf_view = None
         self._pdf_doc = None
         self._preview_path = None
+        self._preview_job = None
+        self._converting: Optional[str] = None   # the Word report being converted for the preview
+        self._pending: Optional[str] = None      # the next one (only the latest request waits)
+        self._preview_errors: dict = {}          # Word report -> why no preview could be made
+        self._converted.connect(self._preview_converted)
         dl.addWidget(self.preview, 1)
         dl.addStretch(0)                                   # takes the room while the preview is off
         self.body = body = QSplitter(Qt.Horizontal)
@@ -787,23 +798,106 @@ class Report2Dock(QWidget):
                     return files[fmt]
         return None
 
+    @staticmethod
+    def _docx_of(job: Optional[J.Job]) -> Optional[str]:
+        for files in ((job.files or {}) if job is not None else {}).values():
+            for fmt in ("docx", "batch_docx"):
+                if fmt in files:
+                    return files[fmt]
+        return None
+
+    @staticmethod
+    def preview_pdf(docx) -> Path:
+        """Where the preview of a Word report is kept: beside it in the job folder (never delivered), or
+        in the automation folder when the job folder cannot be written."""
+        docx = Path(docx)
+        if os.access(docx.parent, os.W_OK):
+            return docx.with_name(docx.stem + ".preview.pdf")
+        from gcws.automation import store
+        key = hashlib.sha1(str(docx).casefold().encode("utf-8")).hexdigest()[:16]
+        return store.root() / "preview" / f"{docx.stem}.{key}.pdf"
+
+    @classmethod
+    def _fresh_preview(cls, docx) -> Optional[Path]:
+        pdf = cls.preview_pdf(docx)
+        try:
+            return pdf if pdf.stat().st_mtime >= Path(docx).stat().st_mtime else None
+        except OSError:
+            return None
+
+    def _convert(self, docx: str):
+        """Make the preview PDF of a Word report with Microsoft Word, in a thread (one at a time)."""
+        if docx == self._converting:
+            return
+        if self._converting is not None:
+            self._pending = docx
+            return
+        self._converting = docx
+        target = self.preview_pdf(docx)
+
+        def work():
+            from gcws.report import service as RS
+            err = ""
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                tmp = target.with_name(target.stem + ".part.pdf")
+                RS.docx_to_pdf(Path(docx), tmp)
+                stamp = max(time.time(), Path(docx).stat().st_mtime)   # newer than its Word report, even
+                os.utime(tmp, (stamp, stamp))                         # when that one's clock runs ahead
+                os.replace(tmp, target)
+            except Exception as exc:  # noqa: BLE001 - no Word, a damaged file, ...
+                err = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
+            self._converted.emit(docx, err)
+
+        threading.Thread(target=work, daemon=True, name="report2-preview").start()
+        QTimer.singleShot(int(self.WORD_TIMEOUT * 1000), lambda d=docx: self._convert_timeout(d))
+
+    def _convert_timeout(self, docx: str):
+        if self._converting == docx:
+            self._preview_converted(docx, f"Word did not answer within {self.WORD_TIMEOUT:.0f} s")
+
+    def _preview_converted(self, docx: str, err: str):
+        if self._converting != docx:
+            return                                     # given up already (timeout)
+        self._converting = None
+        if err:
+            self._preview_errors[docx] = err
+        if self._docx_of(self._preview_job) == docx:
+            self._update_preview(self._preview_job)
+        nxt, self._pending = self._pending, None
+        if nxt and nxt != docx and self._fresh_preview(nxt) is None:
+            self._convert(nxt)
+
     def _preview_toggled(self, on: bool):
         QSettings().setValue("report2/preview", on)
         self._show_detail(self._job())
 
     def _update_preview(self, job: Optional[J.Job]):
         """The PDF of ``job`` in the panel (a batch row: its batch report)."""
+        self._preview_job = job
         self.preview.setVisible(self.b_preview.isChecked())
         if not self.b_preview.isChecked():
             return
         path = self._pdf_of(job)
         if path is None or not Path(path).is_file():
-            self._preview_path = None
-            self.preview_note.setText(
-                "Select a report to preview it." if job is None else
-                "This report has no PDF. Open report shows it in Word or Excel;\nwith PDF among the report's "
-                "formats in the workflow it is shown here.")
-            self.preview.setCurrentWidget(self.preview_note)
+            path = None
+            docx = self._docx_of(job)
+            if docx and Path(docx).is_file():
+                fresh = self._fresh_preview(docx)
+                if fresh is not None:
+                    path = str(fresh)
+                elif docx in self._preview_errors:
+                    self._note(f"No preview: Word could not convert the report ({self._preview_errors[docx]}).\n"
+                               "Open report shows it in Word.")
+                    return
+                else:
+                    self._convert(docx)
+                    self._note("Making a preview of the Word report with Microsoft Word ...\n"
+                               "(the first time only; it is kept with the job)")
+                    return
+        if path is None:
+            self._note("Select a report to preview it." if job is None else
+                       "This report has no PDF and no Word file to preview. Open report shows it in Excel.")
             return
         if path == self._preview_path:
             return
@@ -821,18 +915,20 @@ class Report2Dock(QWidget):
         try:
             buf.setData(Path(path).read_bytes())
         except OSError as exc:
-            self.preview_note.setText(f"The PDF could not be read: {exc}")
-            self.preview.setCurrentWidget(self.preview_note)
+            self._note(f"The PDF could not be read: {exc}")
             return
         buf.open(QIODevice.ReadOnly)
         self._pdf_doc.load(buf)
         if self._pdf_doc.status() == QPdfDocument.Status.Error or self._pdf_doc.pageCount() == 0:
-            self._preview_path = None
-            self.preview_note.setText("The PDF could not be opened.")
-            self.preview.setCurrentWidget(self.preview_note)
+            self._note("The PDF could not be opened.")
             return
         self._preview_path = path
         self.preview.setCurrentWidget(self.pdf_view)
+
+    def _note(self, text: str):
+        self._preview_path = None
+        self.preview_note.setText(text)
+        self.preview.setCurrentWidget(self.preview_note)
 
     def _update_actions(self, jobs: list):
         one = jobs[0] if len(jobs) == 1 else None
