@@ -490,6 +490,8 @@ class Report2Dock(QWidget):
             b = self._batches.get(bid, {})
             if b.get("deleted") and not self.show_deleted:
                 continue
+            if not self.show_deleted and all(j.deleted for j in jobs):
+                continue                               # nothing left to show (only deleted reports)
             mode = "archive" if J.batch_closed(b, jobs) else "todo"
             n_batches[mode] += 1
             if mode != self.mode:
@@ -631,7 +633,6 @@ class Report2Dock(QWidget):
         return it
 
     def _job_item(self, j: J.Job) -> QTreeWidgetItem:
-        from gcws.automation.rules import RULES
         label = j.group_name
         if self._is_pair(j):
             label += " — " + " / ".join(Path(m).stem for m in j.members)
@@ -659,19 +660,22 @@ class Report2Dock(QWidget):
             it.setToolTip(1, j.reason)
         if n:
             it.setToolTip(2, "\n".join(f.get("text") or "" for f in j.findings))
-        for f in j.findings or []:
-            what = " · ".join(x for x in (RULES.get(f.get("rule"), (f.get("rule", ""),))[0], f.get("substance") or "",
-                                          f"RT {f['rt']:.3f}" if f.get("rt") is not None else "",
-                                          f.get("member") or "") if x)
-            child = QTreeWidgetItem([what, f.get("text") or ""])
-            child.setData(0, ROLE_KIND, "finding")
-            child.setFlags(Qt.ItemIsEnabled)
-            child.setToolTip(0, what)
-            child.setToolTip(1, f.get("text") or "")
-            child.setFirstColumnSpanned(False)
-            child.setBackground(1, theme.status_brush("warn" if f.get("level", "control") == "control"
-                                                      else "neutral"))
-            it.addChild(child)
+        # expanded: how many substances the double determination marked red and yellow (not every finding)
+        features = (j.evidence or {}).get("features") or []
+        if features:
+            for light, label, level in (("red", "Red - to decide", "bad"), ("yellow", "Yellow - to check", "warn")):
+                rows = [f for f in features if f.get("light") == light]
+                child = QTreeWidgetItem([label, str(len(rows))])
+                child.setData(0, ROLE_KIND, "finding")
+                child.setFlags(Qt.ItemIsEnabled)
+                child.setIcon(0, _dot(level if rows else "neutral"))
+                if rows:
+                    child.setBackground(1, theme.status_brush(level))
+                    names = [f"{f.get('rt'):.3f}  {f.get('name') or f.get('feature_id') or ''}"
+                             if isinstance(f.get("rt"), (int, float)) else str(f.get("name") or "") for f in rows]
+                    child.setToolTip(0, "\n".join(names[:25] + ([f"... {len(names) - 25} more"]
+                                                                  if len(names) > 25 else [])))
+                it.addChild(child)
         self._items[f"j:{j.id}"] = it
         return it
 
@@ -781,7 +785,7 @@ class Report2Dock(QWidget):
                 if f.get("substance"):
                     what += f": {f['substance']}"
                 chips.append(theme.chip_html(what, "warn" if f.get("level", "control") == "control" else "neutral"))
-            more = f" +{len(findings) - 6} more (expand the sample)" if len(findings) > 6 else ""
+            more = f" +{len(findings) - 6} more (hover for all)" if len(findings) > 6 else ""
             self.reasons.setText(" ".join(chips) + more if findings else "")
             self.reasons.setToolTip("\n".join(f.get("text") or "" for f in findings))
         for node, files in (job.files or {}).items():

@@ -261,7 +261,7 @@ Described in [Unattended processing](wf-automation.md#report²-what-needs-your-c
 | Watcher chip, **Start watcher** | Whether the watcher runs; the button is shown when it does not. |
 | **Rules...** | The rules that decide *control needed*. |
 | **View** | **Show deleted reports**, **Reject reasons...**. |
-| The list | Batches with their samples (**Sample**, **Status**, **Findings**, **Delivered**, **Processed**); a sample expands to its findings. Right-click a sample or a batch for more. |
+| The list | Batches with their samples (**Sample**, **Status**, **Findings**, **Delivered**, **Processed**); a sample expands to its number of red and yellow substances. Right-click a sample or a batch for more. |
 | **Accept** | Your decision, one click; the arrow: **Accept with comment...**. |
 | **Reject** | With a reason, or **Other...** for a comment. |
 | **Open report** | Opens one of its files. |

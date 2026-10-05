@@ -124,8 +124,14 @@ def test_report2_list_counters_and_review(qtbot, data, tmp_path, monkeypatch):
     assert batch_row.text(0) == batch.name and batch_row.text(1) == "1/5 accepted · 1 control · 2 failed/rejected · 1 waiting"
     dock.select(ids["S-control"])
     assert "Bisphenol A" in dock.reasons.text() and dock.b_accept.isEnabled() and dock.b_open.isEnabled()
+    assert dock._items[f"j:{ids['S-control']}"].childCount() == 0     # no double determination: nothing below
+    jr.update_job(ids["S-control"], evidence={"features": [
+        {"light": "red", "name": "Bisphenol A", "rt": 17.2}, {"light": "red", "name": "unknown", "rt": 9.1},
+        {"light": "yellow", "name": "BHT", "rt": 11.87}, {"light": "green", "name": "x"}, {"light": "grey"}]})
+    dock.refresh()
     row = dock._items[f"j:{ids['S-control']}"]
-    assert row.childCount() == 1 and "Bisphenol A" in row.child(0).text(0)   # the finding, under the sample
+    assert [(row.child(k).text(0), row.child(k).text(1)) for k in range(row.childCount())] ==         [("Red - to decide", "2"), ("Yellow - to check", "1")]                # counts, not every finding
+    assert "Bisphenol A" in row.child(0).toolTip(0)
     # accept: one click, no comment; delivered once the undo time is over (no watcher running)
     assert dock.review(True)
     j = jr.job(ids["S-control"])
@@ -349,6 +355,20 @@ def test_archive_and_reopen(qtbot, data, tmp_path, monkeypatch):
     assert set(_names(dock)) == {"S-control", "S-auto"}
     dock.select(ids["S-auto"])
     assert dock.reject("Repeat measurement") and jr.job(ids["S-auto"]).state == J.REJECTED
+
+
+def test_to_do_counts_only_batches_with_something_to_show(qtbot, data, tmp_path, monkeypatch):
+    """A batch folder without samples, or whose reports were all deleted, is neither listed nor counted."""
+    from gcws.automation import journal as J
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    jr.batch(wf.id, tmp_path / "watch" / "26016700_EMPTY")                  # seen, no sample
+    gone = jr.batch(wf.id, tmp_path / "watch" / "26016701_GONE")
+    j = jr.ensure_job(wf.id, wf.methods()[0].id, gone["id"], "g", "S-gone", ["g.D"], {}, "fp", state=J.QUEUED)
+    jr.delete([j.id])
+    dock = _dock(jr, monkeypatch, qtbot)
+    assert dock.b_todo.text() == "To do (1)" and dock.tree.topLevelItemCount() == 1
+    dock.a_show_deleted.setChecked(True)
+    assert dock.b_todo.text() == "To do (2)" and "S-gone" in _names(dock)
 
 
 def test_keys_history_and_watcher(qtbot, data, tmp_path, monkeypatch):
