@@ -123,7 +123,7 @@ def test_report2_list_counters_and_review(qtbot, data, tmp_path, monkeypatch):
     batch_row = dock.tree.topLevelItem(0)
     assert batch_row.text(0) == batch.name and batch_row.text(1) == "1/5 accepted · 1 control · 2 failed/rejected · 1 waiting"
     dock.select(ids["S-control"])
-    assert "Bisphenol A" in dock.reasons.text() and dock.b_accept.isEnabled() and dock.b_open.isEnabled()
+    assert dock.reasons.text() == "" and dock.b_accept.isEnabled() and dock.b_open.isEnabled()   # no labels
     assert dock._items[f"j:{ids['S-control']}"].childCount() == 0     # no double determination: nothing below
     jr.update_job(ids["S-control"], evidence={"features": [
         {"light": "red", "name": "Bisphenol A", "rt": 17.2}, {"light": "red", "name": "unknown", "rt": 9.1},

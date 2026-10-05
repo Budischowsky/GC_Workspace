@@ -459,7 +459,7 @@ analyst), need control, were not processed, are waiting or failed - per workflow
 - One list grouped by batch folder; the status chips (control needed, accepted, waiting, ...) count and
   filter it. **To do** holds the open batches; a batch whose reports are all accepted and delivered moves to
   the **Archive** by itself (searchable by batch or sample; *Reopen* brings it back).
-- Selecting a report shows its findings as labels; a sample expands to its number of red and yellow
+- Selecting a report shows its preview; a sample expands to its number of red and yellow
   substances. *Show history...* (right-click, `H`) lists what happened and where the files went.
 - **Accept** is one click, **Reject** takes a reason from a list you can edit (*Other...* for a comment); both
   record your name and the time, act on all selected reports and can be undone for a few seconds - an

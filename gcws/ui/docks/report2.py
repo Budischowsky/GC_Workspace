@@ -3,10 +3,11 @@
 How many samples the automation processed, which reports were accepted automatically or by the
 analyst and which need control, grouped by batch folder. "To do" holds the open batches; a batch
 whose reports are all accepted and delivered moves to the "Archive" by itself ("Reopen" brings it
-back). The chips above the list filter it. Selecting a report shows why it needs control and a
-preview (its PDF, or its Word report converted once by Microsoft Word); accept is one click, reject takes a reason, and both can be undone for a few seconds. Right-click a sample
-or a batch for everything else; "Delete" only hides (View > Show deleted reports brings it back).
-Everything is read from the automation journal every few seconds (the watcher writes it).
+back). The chips above the list filter it; a sample expands to its number of red and yellow
+substances. Selecting a report shows a preview (its PDF, or its Word report converted once by
+Microsoft Word). Accept is one click, reject takes a reason, and both can be undone for a few
+seconds. Right-click a sample or a batch for everything else; "Delete" only hides (View > Show
+deleted reports brings it back). Everything is read from the automation journal every few seconds (the watcher writes it).
 """
 from __future__ import annotations
 
@@ -738,7 +739,6 @@ class Report2Dock(QWidget):
         self._show_detail(self.journal.job(job_id))
 
     def _show_detail(self, job: Optional[J.Job]):
-        from gcws.automation.rules import RULES
         self.current = job.id if job is not None else None
         jobs = self.selected_jobs() if job is not None else []
         if job is not None and len(jobs) <= 1:
@@ -778,16 +778,7 @@ class Report2Dock(QWidget):
             if job.reason:
                 text += f"<br>{job.reason}"
             self.title.setText(text)
-            findings = job.findings or []
-            chips = []
-            for f in findings[:6]:
-                what = RULES.get(f.get("rule"), (f.get("rule", ""),))[0]
-                if f.get("substance"):
-                    what += f": {f['substance']}"
-                chips.append(theme.chip_html(what, "warn" if f.get("level", "control") == "control" else "neutral"))
-            more = f" +{len(findings) - 6} more (hover for all)" if len(findings) > 6 else ""
-            self.reasons.setText(" ".join(chips) + more if findings else "")
-            self.reasons.setToolTip("\n".join(f.get("text") or "" for f in findings))
+            self.reasons.setText("")                  # the red / yellow counts are in the list
         for node, files in (job.files or {}).items():
             for fmt, path in files.items():
                 menu.addAction(FILE_LABELS.get(fmt, fmt), lambda p=path: self.open_path(p)).setToolTip(str(path))

@@ -152,8 +152,7 @@ The chips above the list - **All**, **Control needed**, **Accepted**, **Waiting*
 **Failed**, **Rejected**, **Removed** - count the samples and filter the list: click one to see only those,
 click it again for all. The chip at the right shows whether the watcher is running; **Start watcher** starts it.
 
-Select a report: the findings that sent it to control appear as labels above the buttons (hover over them for
-all of them). Expand a sample in the list to see how many substances its double determination marked **Red - to
+Select a report to act on it and see its preview. Expand a sample in the list to see how many substances its double determination marked **Red - to
 decide** and **Yellow - to check** (hover for their names); the details are in **Replicates / results**. **Delivered** shows ✓,
 *pending*, *partly* or *failed*. Several reports can be selected (Ctrl / Shift); the buttons act on all of them.
 
