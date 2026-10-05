@@ -135,6 +135,22 @@ def save_default_rules(rules: list[Rule]) -> None:
     store.atomic_write_json(store.default_rules_path(), to_list(rules))
 
 
+#: the reasons Report² offers when a report is rejected (the analyst can change the list)
+DEFAULT_REJECT_REASONS = ["Bad chromatography", "ISTD out of range", "Wrong sample / mix-up",
+                          "Repeat measurement"]
+
+
+def load_reject_reasons() -> list[str]:
+    data = store.read_json(store.reject_reasons_path())
+    if not isinstance(data, list):
+        return list(DEFAULT_REJECT_REASONS)
+    return [str(r).strip() for r in data if str(r).strip()]
+
+
+def save_reject_reasons(reasons: list[str]) -> None:
+    store.atomic_write_json(store.reject_reasons_path(), [r.strip() for r in reasons if r.strip()])
+
+
 def rules_for(node_params: dict) -> list[Rule]:
     """The rules of a Report² step (its own, else the saved default rule set)."""
     own = (node_params or {}).get("rules")

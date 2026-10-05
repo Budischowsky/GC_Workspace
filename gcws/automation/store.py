@@ -34,6 +34,10 @@ def default_rules_path() -> Path:
     return root() / "default_rules.json"
 
 
+def reject_reasons_path() -> Path:
+    return root() / "reject_reasons.json"
+
+
 def atomic_write_json(path, data: Any) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

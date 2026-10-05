@@ -271,6 +271,8 @@ class WatcherCore(QObject):
     def _scan_batch(self, wf, folder: Path, now: float, cfg: SC.Readiness, baseline_new: bool) -> None:
         from gcws.io import sequence as SQ
         b = self.journal.batch(wf.id, folder)
+        if b.get("deleted"):
+            return                                     # deleted in Report²: not looked at any more
         prev = self.journal.runs(b["id"])
         obs = SC.observe(folder)
         seq = SQ.read_sequence(folder, present=[o.name for o in obs])
@@ -556,9 +558,10 @@ class WatcherCore(QObject):
 
     def deliver_pending(self) -> None:
         from gcws.automation import export
+        now = self.clock()
         for job in self.journal.jobs(states=[J.CONTROL, J.ACCEPTED_AUTO, J.ACCEPTED_MANUAL]):
-            if not job.export_pending:
-                continue
+            if not job.export_pending or float(job.deliver_after or 0) > now:
+                continue                               # nothing to deliver, or the analyst may still undo
             wf = self.workflows.get(job.workflow_id) or W.find(job.workflow_id)
             if wf is None:
                 continue

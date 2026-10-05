@@ -19,7 +19,9 @@ from typing import Iterable, Optional
 
 from gcws.automation import store
 
-SCHEMA = 2
+SCHEMA = 3
+#: seconds an analyst's accept waits before it is delivered (Report² offers "Undo" meanwhile)
+UNDO_GRACE = 10.0
 
 # job states
 WAITING = "waiting"                     # runs or blanks still being acquired
@@ -48,7 +50,7 @@ TRANSITIONS = {
     CONTROL: {ACCEPTED_MANUAL, REJECTED, QUEUED},
     ACCEPTED_AUTO: {REJECTED, QUEUED, CONTROL},
     ACCEPTED_MANUAL: {REJECTED, QUEUED, CONTROL},
-    REJECTED: {QUEUED, CONTROL},
+    REJECTED: {QUEUED, CONTROL, ACCEPTED_MANUAL},
 }
 #: the states of the queue (not yet processed, or processing could not finish)
 QUEUE = (WAITING, QUEUED, PROCESSING, FAILED, NOT_PROCESSED)
@@ -61,7 +63,8 @@ CREATE TABLE IF NOT EXISTS watcher(id INTEGER PRIMARY KEY CHECK (id = 1), pid IN
     state TEXT, heartbeat REAL, current_job TEXT, message TEXT, started REAL);
 CREATE TABLE IF NOT EXISTS batches(id INTEGER PRIMARY KEY, workflow_id TEXT, folder TEXT, folder_key TEXT,
     name TEXT, first_seen REAL, last_change REAL, has_log INTEGER DEFAULT 0, seq_completed INTEGER DEFAULT 0,
-    state TEXT DEFAULT 'open', plan_json TEXT, UNIQUE(workflow_id, folder_key));
+    state TEXT DEFAULT 'open', plan_json TEXT, deleted INTEGER DEFAULT 0, reopened REAL DEFAULT 0,
+    UNIQUE(workflow_id, folder_key));
 CREATE TABLE IF NOT EXISTS runs(id INTEGER PRIMARY KEY, batch_id INTEGER, path TEXT, stem TEXT, role TEXT,
     fingerprint TEXT, stable_count INTEGER DEFAULT 0, first_seen REAL, last_change REAL, state TEXT,
     marker INTEGER DEFAULT 0, baseline INTEGER DEFAULT 0, UNIQUE(batch_id, stem));
@@ -71,8 +74,8 @@ CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, workflow_id TEXT, method_no
     created REAL, queued_at REAL, started REAL, finished REAL, pid INTEGER, job_dir TEXT, project_path TEXT,
     files_json TEXT, summary_json TEXT, evidence_json TEXT, findings_json TEXT, reviewer TEXT, comment TEXT,
     reviewed_at REAL, export_state TEXT DEFAULT 'none', export_pending INTEGER DEFAULT 0, override_json TEXT,
-    mode TEXT DEFAULT 'full', edited INTEGER DEFAULT 0, review_pending_json TEXT,
-    UNIQUE(workflow_id, method_node, batch_id, group_key));
+    mode TEXT DEFAULT 'full', edited INTEGER DEFAULT 0, review_pending_json TEXT, deleted INTEGER DEFAULT 0,
+    deliver_after REAL DEFAULT 0, UNIQUE(workflow_id, method_node, batch_id, group_key));
 CREATE TABLE IF NOT EXISTS exports(id INTEGER PRIMARY KEY, job_id TEXT, revision INTEGER, folder_node TEXT,
     report_node TEXT, fmt TEXT, src TEXT, dst TEXT, ts REAL, state TEXT, error TEXT);
 CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, ts REAL, level TEXT, user TEXT, workflow_id TEXT,
@@ -160,6 +163,15 @@ class Journal:
             self.con.execute("ALTER TABLE jobs ADD COLUMN edited INTEGER DEFAULT 0")
         if "review_pending_json" not in columns:
             self.con.execute("ALTER TABLE jobs ADD COLUMN review_pending_json TEXT")
+        if "deleted" not in columns:
+            self.con.execute("ALTER TABLE jobs ADD COLUMN deleted INTEGER DEFAULT 0")
+        if "deliver_after" not in columns:
+            self.con.execute("ALTER TABLE jobs ADD COLUMN deliver_after REAL DEFAULT 0")
+        columns = {r["name"] for r in self.con.execute("PRAGMA table_info(batches)")}
+        if "deleted" not in columns:
+            self.con.execute("ALTER TABLE batches ADD COLUMN deleted INTEGER DEFAULT 0")
+        if "reopened" not in columns:
+            self.con.execute("ALTER TABLE batches ADD COLUMN reopened REAL DEFAULT 0")
         self.con.execute(f"PRAGMA user_version={SCHEMA}")
 
     def close(self):
@@ -265,7 +277,8 @@ class Journal:
                    members: list, blanks: dict, input_fp: str, state: str = WAITING, reason: str = "") -> Job:
         """The job of one sample; created waiting. A finished job whose input changed (a run was
         acquired again) gets a new revision and is processed again; its review is reset. A job the
-        analyst removed from the queue stays removed ("Process again" brings it back)."""
+        analyst removed from the queue stays removed ("Process again" brings it back); one deleted in
+        Report² stays as it is (hidden) until it is restored."""
         from gcws.automation.workflow import new_id
         now = time.time()
         with self.tx():
@@ -280,7 +293,7 @@ class Journal:
                 what = "batch report" if group_key == BATCH_KEY else "new sample"
                 self._event_raw("info", workflow_id, batch_id, jid, f"{group_name}: {what} ({reason or state})")
                 return self.job(jid)
-            if cur.state == REMOVED:
+            if cur.state == REMOVED or cur.deleted:
                 return cur
             if cur.input_fp != input_fp and cur.state not in (QUEUED, PROCESSING, WAITING):
                 self.con.execute(
@@ -394,20 +407,114 @@ class Journal:
                                 f"{job.group_name}: accepted by {user}; regenerating the edited report", user)
             return ok
 
-    def review(self, job_id: str, accept: bool, comment: str = "", user: Optional[str] = None) -> bool:
-        """The analyst accepts or rejects a processed report."""
+    def review(self, job_id: str, accept: bool, comment: str = "", user: Optional[str] = None,
+               grace: float = 0.0) -> bool:
+        """The analyst accepts or rejects a processed report. ``grace``: seconds the watcher waits
+        before it delivers an accepted report (so the analyst can still undo it)."""
         user = user or _user()
         j = self.job(job_id)
         if j is None or j.review_pending or (accept and j.edited):
             return False
         to = ACCEPTED_MANUAL if accept else REJECTED
+        now = time.time()
         ok = self.transition(job_id, (CONTROL, ACCEPTED_AUTO, ACCEPTED_MANUAL, REJECTED), to, reviewer=user,
-                             comment=comment, reviewed_at=time.time(), export_pending=1 if accept else 0)
+                             comment=comment, reviewed_at=now, export_pending=1 if accept else 0,
+                             deliver_after=now + grace if accept and grace else 0)
         if ok:
             self.event("info", f"{j.group_name}: {'accepted' if accept else 'rejected'} by {user}"
                        + (f" - {comment}" if comment else ""), job_id=job_id, workflow_id=j.workflow_id,
                        batch_id=j.batch_id, user=user)
         return ok
+
+    #: the fields a review changes, which :meth:`undo_review` puts back
+    REVIEW_FIELDS = ("state", "reviewer", "comment", "reviewed_at", "export_pending", "deliver_after")
+
+    def undo_review(self, job_id: str, before: dict, user: Optional[str] = None) -> bool:
+        """Take back an accept or reject: ``before`` holds :attr:`REVIEW_FIELDS` as they were. Only
+        while the job is still as the review left it (same revision, nothing delivered since)."""
+        user = user or _user()
+        with self.tx():
+            j = self.job(job_id)
+            if j is None or j.state not in (ACCEPTED_MANUAL, REJECTED) or j.revision != before.get("revision"):
+                return False
+            if any(e["revision"] == j.revision and float(e["ts"] or 0) >= float(j.reviewed_at or 0)
+                   for e in self.exports(job_id)):
+                return False                                # already delivered: reject it instead
+            fields = {k: before.get(k) for k in self.REVIEW_FIELDS}
+            sets = ", ".join(f"{k}=?" for k in fields)
+            cur = self.con.execute(f"UPDATE jobs SET {sets} WHERE id=? AND state=? AND revision=?",
+                                   (*fields.values(), job_id, j.state, j.revision))
+            if cur.rowcount:
+                self._event_raw("info", j.workflow_id, j.batch_id, job_id,
+                                f"{j.group_name}: {'accept' if j.state == ACCEPTED_MANUAL else 'reject'} "
+                                f"undone by {user}", user)
+            return cur.rowcount == 1
+
+    def delete(self, job_ids: Iterable[str], user: Optional[str] = None) -> list[str]:
+        """Hide jobs in Report² (nothing on disk is touched). A job still in the queue is removed from
+        it as well, so the watcher does not process what nobody sees; :meth:`restore` shows it again."""
+        user = user or _user()
+        done = []
+        for jid in job_ids:
+            j = self.job(jid)
+            if j is None or j.deleted:
+                continue
+            if j.state in REMOVABLE:
+                self.transition(jid, REMOVABLE, REMOVED, reason=f"deleted in Report² by {user} "
+                                f"(was: {j.label.lower()})", not_before=0)
+            self.con.execute("UPDATE jobs SET deleted=1 WHERE id=?", (jid,))
+            done.append(jid)
+            self.event("info", f"{j.group_name}: deleted in Report² by {user}", job_id=jid,
+                       workflow_id=j.workflow_id, batch_id=j.batch_id, user=user)
+        return done
+
+    def restore(self, job_ids: Iterable[str], user: Optional[str] = None) -> list[str]:
+        """Show deleted jobs again (a job removed from the queue stays removed: "Process again")."""
+        user = user or _user()
+        done = []
+        for jid in job_ids:
+            j = self.job(jid)
+            if j is None or not j.deleted:
+                continue
+            self.con.execute("UPDATE jobs SET deleted=0 WHERE id=?", (jid,))
+            done.append(jid)
+            self.event("info", f"{j.group_name}: restored in Report² by {user}", job_id=jid,
+                       workflow_id=j.workflow_id, batch_id=j.batch_id, user=user)
+        return done
+
+    def delete_batch(self, batch_id: int, user: Optional[str] = None) -> bool:
+        """Hide a batch folder with all its reports; the watcher no longer looks at it."""
+        user = user or _user()
+        b = self.batch_by_id(batch_id)
+        if not b or b.get("deleted"):
+            return False
+        self.delete([j.id for j in self.jobs(batch_id=batch_id)], user)
+        self.update_batch(batch_id, deleted=1)
+        self.event("info", f"Batch {b['name']}: deleted in Report² by {user}", workflow_id=b["workflow_id"],
+                   batch_id=batch_id, user=user)
+        return True
+
+    def restore_batch(self, batch_id: int, user: Optional[str] = None) -> bool:
+        user = user or _user()
+        b = self.batch_by_id(batch_id)
+        if not b or not b.get("deleted"):
+            return False
+        self.update_batch(batch_id, deleted=0)
+        self.restore([j.id for j in self.jobs(batch_id=batch_id)], user)
+        self.event("info", f"Batch {b['name']}: restored in Report² by {user}", workflow_id=b["workflow_id"],
+                   batch_id=batch_id, user=user)
+        return True
+
+    def reopen_batch(self, batch_id: int, user: Optional[str] = None) -> bool:
+        """Bring an archived batch back to "To do" (until its reports are decided again)."""
+        user = user or _user()
+        b = self.batch_by_id(batch_id)
+        if not b:
+            return False
+        self.update_batch(batch_id, reopened=time.time())
+        self.event("info", f"Batch {b['name']}: reopened by {user}", workflow_id=b["workflow_id"],
+                   batch_id=batch_id, user=user)
+        return True
 
     def request(self, job_id: str, mode: str = "full", override: Optional[dict] = None,
                 user: Optional[str] = None) -> bool:
@@ -417,7 +524,7 @@ class Journal:
             return False
         fields = {"mode": mode, "attempts": 0, "not_before": 0, "queued_at": time.time(), "reviewer": None,
                   "comment": None, "reviewed_at": None, "export_pending": 0, "revision": int(j.revision or 1) + 1,
-                  "edited": 0, "review_pending": None}
+                  "edited": 0, "review_pending": None, "deliver_after": 0}
         if override is not None:
             fields["override"] = override
         ok = self.transition(job_id, (CONTROL, ACCEPTED_AUTO, ACCEPTED_MANUAL, REJECTED, FAILED, NOT_PROCESSED,
@@ -483,3 +590,40 @@ def when(ts) -> str:
     if not ts:
         return ""
     return datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%d %H:%M")
+
+
+def ago(ts, now: Optional[float] = None) -> str:
+    """A journal time stamp relative to now ("5 min ago", "yesterday"); the date when older."""
+    if not ts:
+        return ""
+    now = time.time() if now is None else now
+    d = max(0.0, now - float(ts))
+    if d < 60:
+        return "just now"
+    if d < 3600:
+        return f"{int(d // 60)} min ago"
+    then, today = datetime.fromtimestamp(float(ts)).date(), datetime.fromtimestamp(now).date()
+    if then == today:
+        return f"{int(d // 3600)} h ago"
+    if (today - then).days == 1:
+        return "yesterday"
+    if (today - then).days < 7:
+        return f"{(today - then).days} days ago"
+    return then.strftime("%Y-%m-%d")
+
+
+def batch_closed(batch: dict, jobs: list) -> bool:
+    """True when every report of the batch is accepted and delivered (Report² archives it). A
+    reopened batch stays open until one of its reports is decided again."""
+    live = [j for j in jobs if not j.deleted and j.state != REMOVED]
+    if not live or any(j.state not in ACCEPTED or j.export_pending or j.export_state == "error" or j.review_pending
+                       for j in live):
+        return False
+    try:
+        plan = json.loads(batch.get("plan_json") or "null")
+    except ValueError:
+        plan = None
+    if isinstance(plan, dict) and not plan.get("complete", True):
+        return False
+    reopened = float(batch.get("reopened") or 0)
+    return not reopened or max(float(j.reviewed_at or j.finished or 0) for j in live) > reopened
