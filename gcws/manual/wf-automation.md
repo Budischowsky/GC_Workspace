@@ -125,7 +125,7 @@ The instrument's sequence log tells which runs are still to come, so the watcher
 for the blank after it. Without a log, the folder must be quiet for the **Quiet time**.
 
 A sample **without the required blank** in its batch folder is not processed at all. Report² lists it under
-**Not processed**; **More > Process without a blank...** overrides that, and the report then carries a finding.
+**Not processed**; right-click it > **Process again > Process without a blank...** overrides that, and the report then carries a finding.
 
 ## The queue
 
@@ -138,31 +138,60 @@ it and press **Remove from queue**. The watcher then skips it and the batch repo
 
 ## Report²: what needs your control
 
-**Automation > Report²** opens the panel. It has two areas, **Control needed** and **Accepted**, grouped by
-batch folder, and tabs for **Waiting / processing** and **Not processed / failed / rejected**.
+**Automation > Report²** opens the panel: one list of the reports, grouped by batch folder. A batch row shows a
+bar with how many of its reports are accepted (green), need control (yellow), wait (blue) or failed / were
+rejected (red), how many are delivered, and when something last happened.
 
-Select a report to see
+**To do** lists the open batches: something still waits, needs control, failed or is not yet delivered.
+**Archive** lists the batches whose reports are all accepted and delivered - a batch moves there by itself. The
+archive shows one row per batch; the period box (**Today**, **7 days**, **30 days**, **12 months**) and
+**Search sample or batch** find older ones (a sample name finds its batch). Double-click a batch for its batch
+report, right-click it for **Reopen**, which brings it back to **To do** until its reports are decided again.
 
-- **Findings** - why it needs control: rule, determination, substance, retention time, what was found;
-- **Files** - the report files and where they were delivered;
-- **History** - what happened to it, who accepted it and when.
+The chips above the list - **All**, **Control needed**, **Accepted**, **Waiting**, **Not processed**,
+**Failed**, **Rejected**, **Removed** - count the samples and filter the list: click one to see only those,
+click it again for all. The chip at the right shows whether the watcher is running; **Start watcher** starts it.
+
+Select a report: the findings that sent it to control appear as labels above the buttons; expand the sample in the
+list for every finding (rule, substance, retention time, determination, what was found). **Delivered** shows ✓,
+*pending*, *partly* or *failed*. Several reports can be selected (Ctrl / Shift); the buttons act on all of them.
 
 | Button | What it does |
 |---|---|
+| **Accept** | Accepts the report with your name and time - one click, no comment needed (the arrow beside it: **Accept with comment...**). If you changed the sample, Report² makes the report again from the saved project first and checks for new findings; the updated report is delivered after acceptance. The next report needing control is selected. |
+| **Reject** | Rejects it: choose a reason, or **Other...** for a comment of your own (optional). **View > Reject reasons...** changes the list. A rejected report can still be accepted. |
 | **Open report** | Opens the Word, Excel or PDF file. |
-| **Open in GC Workspace** | Opens the sample exactly as it was processed - runs, integration, names, internal standards, blanks - to check or correct it. Right-click an A/B pair for **Open in Replicates / results**. |
-| **Accept...** | Accepts the report with your name and time; a comment is optional. If you changed the sample, Report² regenerates the report from the saved project first and checks for new findings. The updated report is delivered after acceptance. |
-| **Reject...** | Rejects it with a comment. |
-| **More > Report again from the (edited) project** | After you corrected the sample and saved the project: makes the report again from it. |
-| **More > Process again from the raw data** | Starts over from the raw data. |
-| **More > Process without a blank...** | Processes a sample that has no blank in its batch. |
-| **More > Remove from the queue...** | As **Remove from queue** in the Automation panel. |
-| **More > Open the job folder** | The folder with everything the job wrote. |
-| **More > Deliver to the target folders now** | Delivers the files again. |
+| **Open in GC Workspace** | Opens the sample exactly as it was processed - runs, integration, names, internal standards, blanks - to check or correct it. |
+| **Undo** | For a few seconds after an accept, a reject or a delete, under the list. An accepted report is delivered only after that time. |
 | **Rules...** | The rules, see below. |
+| **View** | **Show deleted reports** lists what was deleted (greyed); **Reject reasons...** edits the reasons. |
+
+**Right-click a sample** (or several):
+
+| Item | What it does |
+|---|---|
+| **Open report** | One of its files. |
+| **Open in GC Workspace**, **Open in Replicates / results** | The sample as processed; an A/B pair in its double determination. |
+| **Accept**, **Accept with comment...**, **Reject** | As the buttons. |
+| **Process again > Report again from the (edited) project** | After you corrected the sample and saved the project: makes the report again from it. |
+| **Process again > Process again from the raw data** | Starts over from the raw data. |
+| **Process again > Process without a blank...** | Processes a sample that has no blank in its batch. |
+| **Remove from the queue...** | As **Remove from queue** in the Automation panel. |
+| **Deliver to the target folders now** | Delivers the files again. |
+| **Show history...** | What happened to the report - processed, accepted, rejected, delivered, by whom and when - and its files with where they were delivered. |
+| **Open the job folder** | The folder with everything the job wrote. |
+| **Copy sample name** | The names of the selected samples. |
+| **Delete...** | Hides the report in Report². Nothing on disk is deleted - reports, project and delivered files stay - and a sample still in the queue is removed from it. **Restore** (with **Show deleted reports**) brings it back. |
+
+**Right-click a batch**: **Open batch report**, **Open batch folder**, **Accept all "control needed"...**,
+**Reject batch** (with a reason), **Process batch again...**, **Reopen** (in the archive), **Delete batch...**
+(hides the batch with all its reports; the watcher no longer looks at the folder) and **Restore batch**.
+
+Keys in the list: `A` accept, `R` reject, `Enter` open the report, `Ctrl+O` open in GC Workspace, `H` history,
+`Del` delete, `Ctrl+Z` undo.
 
 The usual way through a report that needs control: open its double determination, correct what the finding names,
-then **Accept...**. Switching to another pair with **Load from Report²…** beside **Compare** saves changes to the
+then **Accept**. Switching to another pair with **Load from Report²…** beside **Compare** saves changes to the
 current project. If the watcher is stopped, a requested report update waits in **Control needed** until it starts.
 An edited report with new findings stays in **Control needed** for another review.
 

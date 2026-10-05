@@ -269,6 +269,16 @@ pattern). See [Unattended processing](wf-automation.md#the-rules).
 
 ## Accept or reject a report
 
-**Accept...** and **Reject...** in the **Report²** panel: a **Comment** is optional when accepting and required
-when rejecting.
-It is required when the report has findings. Your name and the time are recorded with it.
+**Accept with comment...** (the arrow beside **Accept**) and **Reject > Other...** in the **Report²** panel. The
+**Comment** is optional; **Accept** and the reject reasons need no dialog at all. Your name and the time are
+recorded with it.
+
+## Report² - reject reasons
+
+**View > Reject reasons...** in the **Report²** panel: the reasons offered under **Reject**, one per line.
+**Defaults** puts back the reasons GC Workspace comes with.
+
+## Report² - history
+
+**Show history...** (right-click a report, or `H`): what happened to the report, by whom and when, and its files
+with where they were delivered (double-click a file to open it). The window does not block the panel.

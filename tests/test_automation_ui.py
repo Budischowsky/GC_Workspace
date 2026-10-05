@@ -168,7 +168,7 @@ def test_queue_remove_and_process_again(qtbot, data, monkeypatch):
     dock.queue.selectRow(0)
     first = dock.queue.item(0, 0).data(0x0100)
     assert dock.process_again() == [first] and jr.job(first).state == J.QUEUED
-    # Report²: remove from its "More" menu
+    # Report²: remove from its right-click menu
     r2 = Report2Dock(journal=jr, poll_ms=60000)
     qtbot.addWidget(r2)
     r2.select(first)

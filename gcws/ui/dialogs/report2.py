@@ -1,10 +1,11 @@
-"""Report² dialogs: the rules that decide "Control needed", and accepting / rejecting a report."""
+"""Report² dialogs: the rules that decide "Control needed", a comment to an accept / reject, the reasons
+offered when a report is rejected, and the history of a report."""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout,
-                               QGroupBox, QLabel, QLineEdit, QPlainTextEdit, QScrollArea, QSpinBox, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
+                               QFormLayout, QGroupBox, QHeaderView, QLabel, QLineEdit, QPlainTextEdit, QScrollArea,
+                               QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from gcws.automation import rules as RU
 from gcws.ui import theme
@@ -123,7 +124,7 @@ class RulesDialog(QDialog):
 
 
 class ReviewDialog(QDialog):
-    """Accept or reject a report: the analyst's name is taken from Windows, a comment is asked for."""
+    """Accept or reject a report with a comment (optional): the analyst's name is taken from Windows."""
 
     def __init__(self, accept: bool, sample: str, findings: int, parent=None):
         super().__init__(parent)
@@ -134,12 +135,10 @@ class ReviewDialog(QDialog):
         lay.addWidget(QLabel(f"<b>{verb}</b> the report of <b>{sample}</b>" +
                              (f" with {findings} finding(s)" if findings else "") + f" as <b>{current_user()}</b>."))
         self.comment = QPlainTextEdit()
-        self.comment.setPlaceholderText("Comment (what was checked, why it is rejected)")
+        self.comment.setPlaceholderText("Comment (optional: what was checked, why it is rejected)")
         self.comment.setFixedHeight(90)
         lay.addWidget(self.comment)
-        self.required = not accept
-        self.note = theme.hint("A comment is required." if self.required else "")
-        lay.addWidget(self.note)
+        self.required = False
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.button(QDialogButtonBox.Ok).setText(verb)
         bb.accepted.connect(self._ok)
@@ -150,8 +149,62 @@ class ReviewDialog(QDialog):
         return self.comment.toPlainText().strip()
 
     def _ok(self):
-        if self.required and not self.text():
-            self.note.setText("Please enter a comment.")
-            theme.set_chip(self.note, "Please enter a comment.", "bad")
-            return
         self.accept()
+
+
+class ReasonsDialog(QDialog):
+    """The reasons Report² offers when a report is rejected, one per line."""
+
+    def __init__(self, reasons: list, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Report² - reject reasons")
+        self.setMinimumSize(380, 300)
+        lay = QVBoxLayout(self)
+        lay.addWidget(theme.hint("One reason per line. They are offered under Reject; 'Other...' asks for a "
+                                 "comment instead."))
+        self.edit = QPlainTextEdit("\n".join(reasons))
+        lay.addWidget(self.edit, 1)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel | QDialogButtonBox.RestoreDefaults)
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        bb.button(QDialogButtonBox.RestoreDefaults).setText("Defaults")
+        bb.button(QDialogButtonBox.RestoreDefaults).clicked.connect(
+            lambda: self.edit.setPlainText("\n".join(RU.DEFAULT_REJECT_REASONS)))
+        lay.addWidget(bb)
+
+    def reasons(self) -> list:
+        return [r.strip() for r in self.edit.toPlainText().splitlines() if r.strip()]
+
+
+def _table(headers: list, rows: list) -> QTableWidget:
+    t = QTableWidget(len(rows), len(headers))
+    t.setHorizontalHeaderLabels(headers)
+    t.horizontalHeader().setSectionResizeMode(len(headers) - 1, QHeaderView.Stretch)
+    t.verticalHeader().setVisible(False)
+    t.setEditTriggers(QAbstractItemView.NoEditTriggers)
+    t.setWordWrap(True)
+    for r, row in enumerate(rows):
+        for c, v in enumerate(row):
+            t.setItem(r, c, QTableWidgetItem(str(v)))
+    t.resizeColumnsToContents()
+    return t
+
+
+class HistoryDialog(QDialog):
+    """What happened to one report (who processed, accepted, rejected or delivered it, and when) and its
+    files with where they were delivered. Not modal: Report² stays usable."""
+
+    def __init__(self, title: str, events: list, files: list, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Report² - history of {title}")
+        self.setMinimumSize(640, 420)
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel("<b>History</b>"))
+        self.history = _table(["When", "Who", "What"], events)
+        lay.addWidget(self.history, 2)
+        lay.addWidget(QLabel("<b>Files</b>"))
+        self.files = _table(["File", "Where", "Delivered to"], files)
+        lay.addWidget(self.files, 1)
+        bb = QDialogButtonBox(QDialogButtonBox.Close)
+        bb.rejected.connect(self.close)
+        lay.addWidget(bb)

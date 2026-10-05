@@ -346,12 +346,14 @@ QProgressBar::chunk {{ background: {ACCENT}; border-radius: 4px; }}
 QLabel#hint {{ color: {MUTED}; }}
 QLabel#title {{ color: {TEXT}; font-weight: 600; }}
 QLabel#warning {{ color: {BAD}; }}
-QLabel#chip {{ border-radius: 7px; padding: 2px 8px; font-weight: 600; background: {NEUTRAL_SOFT}; color: {NEUTRAL}; }}
+QLabel#chip {{ border-radius: 7px; padding: 2px 8px; font-weight: 600; background: {NEUTRAL_SOFT}; color: {NEUTRAL};
+    border: 1px solid transparent; }}
 QLabel#chip[level="ok"] {{ background: {OK_SOFT}; color: {OK}; }}
 QLabel#chip[level="warn"] {{ background: {WARN_SOFT}; color: {WARN}; }}
 QLabel#chip[level="bad"] {{ background: {BAD_SOFT}; color: {BAD}; }}
 QLabel#chip[level="info"] {{ background: {INFO_SOFT}; color: {INFO}; }}
 QLabel#chip[level="accent"] {{ background: {ACCENT_SOFT}; color: {ACCENT_TEXT}; }}
+QLabel#chip[selected="true"] {{ border: 1px solid {ACCENT}; }}
 QFrame#card {{ background: {SURFACE}; border: 1px solid {BORDER}; border-radius: 8px; }}
 QFrame#card[level="ok"] {{ border-left: 4px solid {OK}; }}
 QFrame#card[level="warn"] {{ border-left: 4px solid {WARN}; }}

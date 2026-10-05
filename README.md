@@ -439,12 +439,12 @@ coming, e.g. `07 A` waits for `11 B` and then for the blank `13_EtOH` after it. 
 must be quiet for the quiet time. A run counts as finished when it did not change over the checks, is old
 enough and the instrument moved on (`checksum.xml` written, next run started, sequence completed). A sample
 without the required blank in its batch folder is **not processed** (Report² lists it under *Not processed*;
-*More > Process without a blank* overrides it, marked as a finding).
+*Process again > Process without a blank* (right-click) overrides it, marked as a finding).
 
 **The queue** (Automation panel): the samples that are waiting, queued, being processed, failed or not
 processed, with the reason. A sample that cannot be processed (e.g. its B run is never measured) would hold
-up the batch report: select it and **Remove from queue** (several at once; also *More > Remove from the
-queue...* in Report²). A removed sample is skipped by the watcher, not added again by later checks and not
+up the batch report: select it and **Remove from queue** (several at once; also right-click > *Remove from
+the queue...* in Report²). A removed sample is skipped by the watcher, not added again by later checks and not
 waited for by the batch report; *Show removed* lists it and **Process again** brings it back.
 
 **The watcher** (*Automation > Start the watcher*, or the panel's *Start*) is a separate background process
@@ -456,14 +456,19 @@ control. *Start with Windows* (panel or tray menu) puts a shortcut into your Sta
 
 **Report²** (*Automation > Report²*): how many samples were processed, accepted (automatically / by the
 analyst), need control, were not processed, are waiting or failed - per workflow, period and search text.
-- Two areas, **Control needed** and **Accepted**, grouped by batch folder; further tabs for waiting and
-  not processed / failed / rejected samples.
-- Selecting a report shows its **findings** (rule, determination, substance, RT, what was found), its files
-  (with where they were delivered) and its history.
-- **Accept...** / **Reject...** record your name, the time and a comment (required with findings); an accepted
-  report is delivered along the arrows. *Open report* opens Word / Excel / PDF; **Open in GC Workspace** opens
-  the sample as processed (runs, integration, names, ISTDs, blanks) to check or correct it: save the project,
-  then *More > Report again from the (edited) project*. *Process again from the raw data* starts over.
+- One list grouped by batch folder; the status chips (control needed, accepted, waiting, ...) count and
+  filter it. **To do** holds the open batches; a batch whose reports are all accepted and delivered moves to
+  the **Archive** by itself (searchable by batch or sample; *Reopen* brings it back).
+- Selecting a report shows its findings as labels; a sample expands to every finding (rule, determination,
+  substance, RT). *Show history...* (right-click, `H`) lists what happened and where the files went.
+- **Accept** is one click, **Reject** takes a reason from a list you can edit (*Other...* for a comment); both
+  record your name and the time, act on all selected reports and can be undone for a few seconds - an
+  accepted report is delivered along the arrows only after that. *Open report* opens Word / Excel / PDF;
+  **Open in GC Workspace** opens the sample as processed (runs, integration, names, ISTDs, blanks) to check or
+  correct it: save the project, then right-click > *Process again > Report again from the (edited) project*.
+- Right-click a sample or a batch for everything else (process again, remove from the queue, deliver, delete,
+  accept or reject a whole batch). **Delete** only hides: *View > Show deleted reports* brings it back.
+- Keys: `A` accept, `R` reject, `Enter` open, `Ctrl+O` GC Workspace, `H` history, `Del` delete, `Ctrl+Z` undo.
 - **Rules...**: what sends a report to *Control needed*. Default: substances to check manually (uncertain or
   unknown identification, identification conflict, relative difference of the determinations above the
   limit, artefacts - the NIAS *Manuell_pruefen* criteria, at or above the reporting limit), SML exceeded, ISTD

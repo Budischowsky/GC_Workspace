@@ -1,32 +1,148 @@
 """Report²: the report of the reports.
 
 How many samples the automation processed, which reports were accepted automatically or by the
-analyst, and which need control - grouped by batch folder. Selecting a report shows why it needs
-control (the findings of the Report² rules), its files and its history; the analyst opens it
-(Word, Excel, PDF, or the project in GC Workspace), accepts or rejects it, or has it processed
-again. Everything is read from the automation journal every few seconds (the watcher writes it).
+analyst and which need control, grouped by batch folder. "To do" holds the open batches; a batch
+whose reports are all accepted and delivered moves to the "Archive" by itself ("Reopen" brings it
+back). The chips above the list filter it. Selecting a report shows why it needs control; accept is
+one click, reject takes a reason, and both can be undone for a few seconds. Right-click a sample
+or a batch for everything else; "Delete" only hides (View > Show deleted reports brings it back).
+Everything is read from the automation journal every few seconds (the watcher writes it).
 """
 from __future__ import annotations
 
 import os
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import (QComboBox, QFrame, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMenu,
-                               QMessageBox, QPushButton, QSplitter, QTabWidget, QTableWidget, QTableWidgetItem,
-                               QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
+from PySide6.QtCore import QEvent, QItemSelectionModel, QRect, Qt, QTimer, Signal
+from PySide6.QtGui import QAction, QIcon, QKeySequence, QPainter, QPalette, QPixmap
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QComboBox, QFrame, QHBoxLayout,
+                               QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton, QSplitter,
+                               QStackedWidget, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolButton,
+                               QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from gcws.automation import journal as J
 from gcws.ui import theme
 
-PERIODS = {"all": ("All", None), "today": ("Today", 1), "week": ("7 days", 7), "month": ("30 days", 30)}
+PERIODS = {"all": ("All", None), "today": ("Today", 1), "week": ("7 days", 7), "month": ("30 days", 30),
+           "year": ("12 months", 365)}
 LEVEL = {J.ACCEPTED_AUTO: "ok", J.ACCEPTED_MANUAL: "ok", J.CONTROL: "warn", J.REJECTED: "bad",
          J.FAILED: "bad", J.NOT_PROCESSED: "bad", J.WAITING: "neutral", J.QUEUED: "info", J.PROCESSING: "info",
          J.REMOVED: "neutral"}
 FILE_LABELS = {"docx": "Word", "xlsx": "Excel", "pdf": "PDF", "dd": "Double determination",
                "batch_docx": "Batch Word", "batch_pdf": "Batch PDF", "batch_xlsx": "Batch summary"}
+WAITING_STATES = (J.WAITING, J.QUEUED, J.PROCESSING)
+#: the filter chips: key -> (label, level)
+FILTERS = {"all": ("All", "info"), "control": ("Control needed", "warn"), "accepted": ("Accepted", "ok"),
+           "waiting": ("Waiting", "neutral"), "not_processed": ("Not processed", "bad"),
+           "failed": ("Failed", "bad"), "rejected": ("Rejected", "bad"), "removed": ("Removed", "neutral")}
+BUCKET_LEVEL = {"control": "warn", "accepted": "ok", "waiting": "info", "not_processed": "bad", "failed": "bad",
+                "rejected": "bad", "removed": "neutral"}
+WORST = ("bad", "warn", "info", "ok", "neutral")
+ROLE_KIND = Qt.UserRole + 1                     # "batch", "job" or "finding"
+ROLE_BAR = Qt.UserRole + 2                      # a batch's progress: [(level, count), ...]
+COLUMNS = ["Sample", "Status", "Findings", "Delivered", "Processed"]
+
+
+def bucket(job: J.Job) -> str:
+    """The filter chip a report counts for."""
+    if job.review_pending or job.state == J.CONTROL:
+        return "control"
+    if job.state in J.ACCEPTED:
+        return "accepted"
+    return {J.NOT_PROCESSED: "not_processed", J.FAILED: "failed", J.REJECTED: "rejected",
+            J.REMOVED: "removed"}.get(job.state, "waiting")
+
+
+def can_accept(job: J.Job) -> bool:
+    return not job.deleted and not job.review_pending and job.state in (J.CONTROL, J.REJECTED)
+
+
+def can_reject(job: J.Job) -> bool:
+    return not job.deleted and not job.review_pending and job.state in (J.CONTROL, *J.ACCEPTED)
+
+
+def can_reprocess(job: J.Job) -> bool:
+    return not job.deleted and not job.review_pending and job.state not in (J.QUEUED, J.PROCESSING)
+
+
+def delivered(job: J.Job) -> tuple[str, str]:
+    """The Delivered column of a report: (text, level)."""
+    if job.state not in (J.CONTROL, *J.ACCEPTED):
+        return "", "neutral"
+    if job.export_pending:
+        return "pending", "info"
+    return {"done": ("✓", "ok"), "partial": ("partly", "warn"), "error": ("failed", "bad")}.get(
+        job.export_state or "", ("", "neutral"))
+
+
+def activity(job: J.Job) -> float:
+    return max(float(job.reviewed_at or 0), float(job.finished or 0), float(job.created or 0))
+
+
+_DOTS: dict = {}
+
+
+def _dot(level: str) -> QIcon:
+    color = theme.status_color(level)
+    if color.name() not in _DOTS:
+        pm = QPixmap(12, 12)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen)
+        p.setBrush(color)
+        p.drawEllipse(2, 2, 8, 8)
+        p.end()
+        _DOTS[color.name()] = QIcon(pm)
+    return _DOTS[color.name()]
+
+
+class _BatchBar(QStyledItemDelegate):
+    """The status of a batch row: one bar coloured by how many of its reports are in which state."""
+
+    def paint(self, painter, option, index):
+        parts = index.data(ROLE_BAR)
+        if not parts:
+            super().paint(painter, option, index)
+            return
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        text, opt.text = opt.text, ""
+        style = opt.widget.style() if opt.widget is not None else QApplication.style()
+        style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+        r = opt.rect.adjusted(4, 0, -4, 0)
+        total = sum(n for _, n in parts) or 1
+        width = min(64, max(24, r.width() // 3))
+        bar = QRect(r.left(), r.center().y() - 3, width, 7)
+        painter.save()
+        x = bar.left()
+        for i, (level, n) in enumerate(parts):
+            seg = round(width * n / total) if i < len(parts) - 1 else bar.right() + 1 - x
+            painter.fillRect(QRect(x, bar.top(), seg, bar.height()), theme.status_color(level))
+            x += seg
+        selected = bool(opt.state & QStyle.State_Selected)
+        painter.setPen(opt.palette.color(QPalette.HighlightedText if selected else QPalette.Text))
+        tr = QRect(bar.right() + 6, r.top(), max(0, r.right() - bar.right() - 6), r.height())
+        painter.drawText(tr, Qt.AlignVCenter | Qt.AlignLeft, opt.fontMetrics.elidedText(text, Qt.ElideRight,
+                                                                                         tr.width()))
+        painter.restore()
+
+
+class _Chip(QLabel):
+    """A status chip that filters the list when clicked."""
+    clicked = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("chip")
+        self.setCursor(Qt.PointingHandCursor)
+
+    def mousePressEvent(self, ev):
+        if ev.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(ev)
 
 
 class Report2Dock(QWidget):
@@ -36,25 +152,36 @@ class Report2Dock(QWidget):
     def __init__(self, parent=None, journal: Optional[J.Journal] = None, poll_ms: int = 3000):
         super().__init__(parent)
         self._journal = journal
-        self.jobs: dict[str, J.Job] = {}
+        self.jobs: dict[str, J.Job] = {}         # the reports of the current view (before the chip filter)
+        self._batches: dict = {}
+        self._by_batch: dict = {}
+        self._items: dict[str, QTreeWidgetItem] = {}
+        self._expanded: dict[str, bool] = {}
         self.current: Optional[str] = None
         self.prepare_review = None               # optional main-window callback: save current job first
+        self.mode = "todo"
+        self.filter = "all"
+        self._undo_fn: Optional[Callable[[], str]] = None
+        self._deliver: set = set()               # accepted here without a watcher: delivered after the undo time
+        self._building = False
+        self._stamp = None
+        self._refreshed = 0.0
         lay = QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
-        # watcher banner
-        self.banner = QFrame()
-        self.banner.setObjectName("card")
-        self.banner.setProperty("level", "warn")
-        bl = QHBoxLayout(self.banner)
-        bl.setContentsMargins(8, 4, 8, 4)
-        self.banner_text = QLabel("The watcher is not running: new data is not processed.")
-        bl.addWidget(self.banner_text, 1)
-        self.start_btn = QPushButton("Start watcher")
-        self.start_btn.clicked.connect(self._start_watcher)
-        bl.addWidget(self.start_btn)
-        lay.addWidget(self.banner)
-        # filters
+        # To do / Archive and the filters
         f = QHBoxLayout()
+        self.b_todo = QToolButton()
+        self.b_archive = QToolButton()
+        modes = QButtonGroup(self)
+        for b, mode in ((self.b_todo, "todo"), (self.b_archive, "archive")):
+            b.setCheckable(True)
+            theme.set_primary(b)
+            modes.addButton(b)
+            b.clicked.connect(lambda _=False, m=mode: self.set_mode(m))
+            f.addWidget(b)
+        self.b_todo.setChecked(True)
+        self.b_todo.setToolTip("Batches with reports still waiting, needing control or not delivered")
+        self.b_archive.setToolTip("Batches whose reports are all accepted and delivered")
         self.workflow = QComboBox()
         self.workflow.addItem("All workflows", "")
         self.workflow.activated.connect(lambda *_: self.refresh())
@@ -69,112 +196,172 @@ class Report2Dock(QWidget):
         f.addWidget(self.workflow)
         f.addWidget(self.period)
         f.addWidget(self.search, 1)
+        lay.addLayout(f)
+        # chips (filters), the watcher, rules
+        c = QHBoxLayout()
+        self.chips: dict[str, _Chip] = {}
+        for key in FILTERS:
+            chip = _Chip()
+            chip.clicked.connect(lambda k=key: self.set_filter(k))
+            self.chips[key] = chip
+            c.addWidget(chip)
+        c.addStretch(1)
+        self.watcher = theme.chip("", "neutral")
+        self.watcher.setToolTip("The background watcher processes new data")
+        c.addWidget(self.watcher)
+        self.start_btn = QPushButton("Start watcher")
+        self.start_btn.clicked.connect(self._start_watcher)
+        c.addWidget(self.start_btn)
         rules = QPushButton("Rules...")
         rules.setToolTip("The rules that decide 'Control needed' (default rules and per workflow)")
         rules.clicked.connect(self.edit_rules)
-        f.addWidget(rules)
-        lay.addLayout(f)
-        # counters
-        c = QHBoxLayout()
-        self.chips: dict[str, QLabel] = {}
-        for key, level in (("processed", "info"), ("accepted", "ok"), ("control", "warn"),
-                           ("not_processed", "bad"), ("waiting", "neutral"), ("failed", "bad"),
-                           ("rejected", "bad")):
-            self.chips[key] = theme.chip("", level)
-            c.addWidget(self.chips[key])
-        c.addStretch(1)
+        c.addWidget(rules)
+        self.b_view = QToolButton()
+        self.b_view.setText("View")
+        self.b_view.setPopupMode(QToolButton.InstantPopup)
+        vm = QMenu(self.b_view)
+        self.a_show_deleted = vm.addAction("Show deleted reports")
+        self.a_show_deleted.setCheckable(True)
+        self.a_show_deleted.toggled.connect(lambda *_: self.refresh())
+        vm.addAction("Reject reasons...", self.edit_reasons)
+        self.b_view.setMenu(vm)
+        c.addWidget(self.b_view)
         lay.addLayout(c)
-        # the two areas
-        areas = QSplitter(Qt.Horizontal)
-        self.control = self._tree()
-        self.accepted = self._tree()
-        box_c = QGroupBox("Control needed")
-        QVBoxLayout(box_c).addWidget(self.control)
-        box_a = QGroupBox("Accepted")
-        QVBoxLayout(box_a).addWidget(self.accepted)
-        areas.addWidget(box_c)
-        areas.addWidget(box_a)
-        self.others = QTabWidget()
-        self.pending = self._tree()
-        self.problems = self._tree()
-        self.others.addTab(self.pending, "Waiting / processing")
-        self.others.addTab(self.problems, "Not processed / failed / rejected")
-        top = QSplitter(Qt.Vertical)
-        top.addWidget(areas)
-        top.addWidget(self.others)
-        top.setStretchFactor(0, 3)
-        # details
+        # the list
+        self.tree = QTreeWidget()
+        self.tree.setColumnCount(len(COLUMNS))
+        self.tree.setHeaderLabels(COLUMNS)
+        h = self.tree.header()
+        h.setSectionResizeMode(0, QHeaderView.Stretch)
+        h.setSectionResizeMode(1, QHeaderView.Interactive)
+        for col in (2, 3, 4):
+            h.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        h.setStretchLastSection(False)
+        self.tree.setColumnWidth(1, 175)
+        self.tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.tree.setExpandsOnDoubleClick(False)
+        self.tree.setTextElideMode(Qt.ElideMiddle)             # batch names differ at the end
+        self.tree.setItemDelegateForColumn(1, _BatchBar(self.tree))
+        self.tree.itemSelectionChanged.connect(self._picked)
+        self.tree.itemDoubleClicked.connect(self._double_clicked)
+        self.tree.itemExpanded.connect(lambda it: self._remember(it, True))
+        self.tree.itemCollapsed.connect(lambda it: self._remember(it, False))
+        self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self._tree_menu)
+        self.tree.installEventFilter(self)
+        self.empty = theme.hint("")
+        self.empty.setAlignment(Qt.AlignCenter)
+        self.list_stack = QStackedWidget()
+        self.list_stack.addWidget(self.tree)
+        self.list_stack.addWidget(self.empty)
+        # the details of the selected report
         self.detail = QWidget()
         dl = QVBoxLayout(self.detail)
-        dl.setContentsMargins(0, 0, 0, 0)
+        dl.setContentsMargins(6, 0, 0, 0)
         self.title = QLabel()
         self.title.setWordWrap(True)
+        self.title.setTextInteractionFlags(Qt.TextSelectableByMouse)
         dl.addWidget(self.title)
+        self.reasons = QLabel()
+        self.reasons.setWordWrap(True)
+        dl.addWidget(self.reasons)
         acts = QHBoxLayout()
-        self.b_accept = QPushButton("Accept...")
+        self._build_actions()
+        self.b_accept = QToolButton()
+        self.b_accept.setDefaultAction(self.a_accept)
+        self.b_accept.setPopupMode(QToolButton.MenuButtonPopup)
+        am = QMenu(self.b_accept)
+        am.addAction(self.a_accept_comment)
+        self.b_accept.setMenu(am)
         theme.set_primary(self.b_accept)
-        self.b_accept.clicked.connect(lambda: self.review(True))
-        self.b_reject = QPushButton("Reject...")
-        self.b_reject.clicked.connect(lambda: self.review(False))
+        self.b_accept.setMinimumWidth(self.b_accept.sizeHint().width() + 16)   # room for the menu arrow
+        self.b_reject = QToolButton()
+        self.b_reject.setText("Reject")
+        self.b_reject.setToolTip("Reject the selected reports with a reason (R)")
+        self.b_reject.setPopupMode(QToolButton.InstantPopup)
+        self.reject_menu = QMenu("Reject", self.b_reject)
+        self.reject_menu.aboutToShow.connect(lambda: self._fill_reject_menu(self.reject_menu, self.reject))
+        self.b_reject.setMenu(self.reject_menu)
         self.b_open = QToolButton()
         self.b_open.setText("Open report")
         self.b_open.setPopupMode(QToolButton.InstantPopup)
         self.b_project = QPushButton("Open in GC Workspace")
         self.b_project.setToolTip("Open the sample as processed (runs, integration, identifications, ISTDs) to "
-                                  "check or correct it; then 'Report again'")
+                                  "check or correct it; then 'Report again' (Ctrl+O)")
         self.b_project.clicked.connect(self.open_project)
-        self.b_more = QToolButton()
-        self.b_more.setText("More")
-        self.b_more.setPopupMode(QToolButton.InstantPopup)
-        more = QMenu(self.b_more)
-        self.a_rereport = more.addAction("Report again from the (edited) project", lambda: self.reprocess("rereport"))
-        self.a_reprocess = more.addAction("Process again from the raw data", lambda: self.reprocess("full"))
-        self.a_noblank = more.addAction("Process without a blank...", self.process_without_blank)
-        self.a_remove = more.addAction("Remove from the queue...", self.remove_from_queue)
-        self.a_remove.setToolTip("The sample cannot be processed: the watcher skips it and the batch report no "
-                                 "longer waits for it ('Process again' brings it back)")
-        more.addSeparator()
-        self.a_folder = more.addAction("Open the job folder", self.open_folder)
-        self.a_export = more.addAction("Deliver to the target folders now", self.export_now)
-        self.b_more.setMenu(more)
-        for b in (self.b_accept, self.b_reject, self.b_open, self.b_project, self.b_more):
+        for b in (self.b_accept, self.b_reject, self.b_open, self.b_project):
             acts.addWidget(b)
         acts.addStretch(1)
         dl.addLayout(acts)
-        self.tabs = QTabWidget()
-        self.findings = QTableWidget(0, 5)
-        self.findings.setHorizontalHeaderLabels(["Rule", "Determination", "Substance", "RT", "Finding"])
-        self.findings.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
-        self.findings.verticalHeader().setVisible(False)
-        self.findings.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.files = QTableWidget(0, 3)
-        self.files.setHorizontalHeaderLabels(["File", "Where", "Delivered to"])
-        self.files.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.files.verticalHeader().setVisible(False)
-        self.files.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.files.cellDoubleClicked.connect(self._open_file_row)
-        self.history = QTableWidget(0, 3)
-        self.history.setHorizontalHeaderLabels(["When", "Who", "What"])
-        self.history.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-        self.history.verticalHeader().setVisible(False)
-        self.history.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.tabs.addTab(self.findings, "Findings")
-        self.tabs.addTab(self.files, "Files")
-        self.tabs.addTab(self.history, "History")
-        dl.addWidget(self.tabs, 1)
-        main = QSplitter(Qt.Vertical)
-        main.addWidget(top)
-        main.addWidget(self.detail)
-        main.setStretchFactor(0, 3)
-        main.setStretchFactor(1, 2)
-        lay.addWidget(main, 1)
+        self.preview_area = QWidget()
+        dl.addWidget(self.preview_area, 1)
+        body = QSplitter(Qt.Horizontal)
+        body.addWidget(self.list_stack)
+        body.addWidget(self.detail)
+        body.setStretchFactor(0, 3)
+        body.setStretchFactor(1, 2)
+        lay.addWidget(body, 1)
+        # the message bar ("Accepted S12 - Undo")
+        self.bar = QFrame()
+        self.bar.setObjectName("card")
+        self.bar.setProperty("level", "info")
+        bl = QHBoxLayout(self.bar)
+        bl.setContentsMargins(8, 3, 4, 3)
+        self.bar_text = QLabel()
+        bl.addWidget(self.bar_text, 1)
+        self.b_undo = QPushButton("Undo")
+        self.b_undo.clicked.connect(self.undo)
+        bl.addWidget(self.b_undo)
+        close = QToolButton()
+        close.setText("✕")
+        close.setAutoRaise(True)
+        close.clicked.connect(self.dismiss_message)
+        bl.addWidget(close)
+        self.bar.hide()
+        lay.addWidget(self.bar)
+        self._bar_timer = QTimer(self)
+        self._bar_timer.setSingleShot(True)
+        self._bar_timer.setInterval(int(J.UNDO_GRACE * 1000))
+        self._bar_timer.timeout.connect(self.dismiss_message)
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self.deliver_due)
         self.timer = QTimer(self)
         self.timer.setInterval(poll_ms)
         self.timer.timeout.connect(self._poll)
         self.timer.start()
-        self._stamp = None
         self._show_detail(None)
         self.refresh()
+        self._update_watcher()
+
+    def _build_actions(self):
+        """The actions on the selected reports (buttons, right-click menu and keys)."""
+        def act(text, slot, tip="", key=""):
+            a = QAction(text, self)
+            a.triggered.connect(lambda *_: slot())
+            if tip:
+                a.setToolTip(tip)
+            if key:                                        # shown in the menus; the list handles the key itself
+                a.setShortcut(QKeySequence(key))
+                a.setShortcutContext(Qt.WidgetShortcut)
+            return a
+        self.a_accept = act("Accept", lambda: self.review(True), "Accept the selected reports (A)", "A")
+        self.a_accept_comment = act("Accept with comment...", self.accept_with_comment)
+        self.a_replicates = act("Open in Replicates / results", lambda: self.open_determination(self.current))
+        self.a_project = act("Open in GC Workspace", self.open_project, key="Ctrl+O")
+        self.a_rereport = act("Report again from the (edited) project", lambda: self.reprocess("rereport"))
+        self.a_reprocess = act("Process again from the raw data", lambda: self.reprocess("full"))
+        self.a_noblank = act("Process without a blank...", self.process_without_blank)
+        self.a_remove = act("Remove from the queue...", self.remove_from_queue,
+                            "The sample cannot be processed: the watcher skips it and the batch report no "
+                            "longer waits for it ('Process again' brings it back)")
+        self.a_export = act("Deliver to the target folders now", self.export_now)
+        self.a_history = act("Show history...", self.show_history, key="H")
+        self.a_folder = act("Open the job folder", self.open_folder)
+        self.a_copy = act("Copy sample name", self.copy_names)
+        self.a_delete = act("Delete...", self.delete_selected,
+                            "Hide in Report² (nothing on disk is deleted; View > Show deleted reports)", "Del")
+        self.a_restore = act("Restore", self.restore_selected)
 
     # -- data --------------------------------------------------------------------------------------
 
@@ -184,17 +371,9 @@ class Report2Dock(QWidget):
             self._journal = J.Journal()
         return self._journal
 
-    def _tree(self) -> QTreeWidget:
-        t = QTreeWidget()
-        t.setColumnCount(4)
-        t.setHeaderLabels(["Sample", "Status", "Findings", "Processed"])
-        t.header().setSectionResizeMode(0, QHeaderView.Stretch)
-        t.setRootIsDecorated(True)
-        t.itemSelectionChanged.connect(lambda t=t: self._picked(t))
-        t.itemDoubleClicked.connect(lambda *_: self.open_default())
-        t.setContextMenuPolicy(Qt.CustomContextMenu)
-        t.customContextMenuRequested.connect(lambda pos, t=t: self._tree_menu(t, pos))
-        return t
+    @property
+    def show_deleted(self) -> bool:
+        return self.a_show_deleted.isChecked()
 
     @staticmethod
     def _is_pair(job: J.Job) -> bool:
@@ -204,282 +383,686 @@ class Report2Dock(QWidget):
     def visible_pairs(self) -> list[J.Job]:
         """Processed A/B jobs under the current Report² filters, in batch and sample order."""
         return sorted((j for j in self.jobs.values() if self._is_pair(j) and not j.review_pending and
-                       j.state in (J.CONTROL, *J.ACCEPTED)),
+                       not j.deleted and j.state in (J.CONTROL, *J.ACCEPTED)),
                       key=lambda j: (self._batches.get(j.batch_id, {}).get("name", "").casefold(),
                                      j.group_name.casefold()))
 
-    def _tree_menu(self, tree: QTreeWidget, pos):
-        menu = self._tree_context_menu(tree, pos)
-        if menu is not None:
-            menu.exec(tree.viewport().mapToGlobal(pos))
-
-    def _tree_context_menu(self, tree: QTreeWidget, pos):
-        item = tree.itemAt(pos)
-        job = self.jobs.get(item.data(0, Qt.UserRole)) if item is not None else None
-        if job is None or not self._is_pair(job) or job.review_pending:
-            return None
-        menu = QMenu(tree)
-        menu.addAction("Open in Replicates / results", lambda jid=job.id: self.open_determination(jid))
-        return menu
-
-    def open_determination(self, job_id: str):
-        job = self.jobs.get(job_id)
-        if job is not None and self._is_pair(job) and not job.review_pending:
-            self.select(job_id)
-            self.openDetermination.emit(job_id)
+    def _stamp_now(self):
+        con = self.journal.con
+        a = con.execute("SELECT COUNT(*), MAX(COALESCE(finished,0)), MAX(COALESCE(reviewed_at,0)), "
+                        "MAX(COALESCE(created,0)), SUM(LENGTH(state)), SUM(deleted), SUM(export_pending), "
+                        "SUM(LENGTH(COALESCE(export_state,'')))  FROM jobs").fetchone()
+        b = con.execute("SELECT COUNT(*), SUM(deleted), MAX(COALESCE(reopened,0)), "
+                        "SUM(LENGTH(COALESCE(plan_json,''))) FROM batches").fetchone()
+        return tuple(a) + tuple(b) + (con.execute("SELECT MAX(id) FROM events").fetchone()[0],)
 
     def _poll(self):
         if not self.isVisible():
             return
         try:
-            n = self.journal.con.execute("SELECT COUNT(*), MAX(COALESCE(finished,0)), MAX(COALESCE(reviewed_at,0)), "
-                                         "MAX(COALESCE(created,0)), SUM(LENGTH(state)) FROM jobs").fetchone()
-            stamp = tuple(n) + (self.journal.con.execute("SELECT MAX(id) FROM events").fetchone()[0],)
+            stamp = self._stamp_now()
         except Exception:  # noqa: BLE001 - the watcher may be writing
             return
-        if stamp != self._stamp:
+        if stamp != self._stamp or time.time() - self._refreshed > 60:      # "5 min ago" moves on
             self.refresh()
-        self._update_banner()
+        self._update_watcher()
 
-    def _update_banner(self):
+    def _update_watcher(self):
         from gcws.automation.control import WatcherControl
         try:
             st = WatcherControl().status(self.journal)
         except Exception:  # noqa: BLE001
             st = {"state": "stopped"}
         state = st.get("state", "stopped")
-        self.banner.setVisible(state in ("stopped", "not responding"))
-        self.banner_text.setText("The watcher is not running: new data is not processed." if state == "stopped"
-                                 else "The watcher does not answer.")
+        level = {"running": "ok", "processing": "ok", "paused": "warn"}.get(state, "bad")
+        theme.set_chip(self.watcher, f"● Watcher {state}", level)
+        self.watcher.setToolTip("New data is not processed while the watcher is not running" if level == "bad"
+                                else "The background watcher processes new data")
+        self.start_btn.setVisible(state in ("stopped", "not responding"))
 
-    def _filtered(self) -> list[J.Job]:
-        wid = self.workflow.currentData() or None
-        days = PERIODS[self.period.currentData() or "all"][1]
-        since = time.time() - days * 86400 if days else 0
-        text = self.search.text().strip().casefold()
-        batches = {b["id"]: b for b in self.journal.batches()}
-        out = []
-        for j in self.journal.jobs(workflow_id=wid):
-            if since and float(j.created or 0) < since:
-                continue
-            b = batches.get(j.batch_id, {})
-            if text and text not in (j.group_name or "").casefold() and text not in (b.get("name") or "").casefold():
-                continue
-            out.append(j)
-        self._batches = batches
-        return out
+    def set_mode(self, mode: str):
+        """"todo" (open batches) or "archive" (batches accepted and delivered)."""
+        self.mode = mode
+        (self.b_todo if mode == "todo" else self.b_archive).setChecked(True)
+        self.refresh()
+
+    def set_filter(self, key: str):
+        """Show only the reports of one chip; the chip clicked again shows all."""
+        self.filter = "all" if key == self.filter else key
+        self.refresh()
 
     def refresh(self):
         from gcws.automation import workflow as W
         cur_wf = self.workflow.currentData()
-        wfs = W.list_workflows()
         self.workflow.blockSignals(True)
         self.workflow.clear()
         self.workflow.addItem("All workflows", "")
-        for w in wfs:
+        for w in W.list_workflows():
             self.workflow.addItem(w.name, w.id)
         self.workflow.setCurrentIndex(max(0, self.workflow.findData(cur_wf)))
         self.workflow.blockSignals(False)
-        jobs = self._filtered()
-        self.jobs = {j.id: j for j in jobs}
-        samples = [j for j in jobs if not j.is_batch]
-        count = lambda *states: sum(1 for j in samples if j.state in states)
-        processed = count(*J.DONE)
-        auto, manual = count(J.ACCEPTED_AUTO), count(J.ACCEPTED_MANUAL)
-        theme.set_chip(self.chips["processed"], f"Processed {processed}", "info")
-        theme.set_chip(self.chips["accepted"], f"Accepted {auto + manual} ({auto} automatic, {manual} analyst)", "ok")
-        control_count = sum(j.state == J.CONTROL or bool(j.review_pending) for j in samples)
-        theme.set_chip(self.chips["control"], f"Control needed {control_count}", "warn" if control_count
-                       else "neutral")
-        for key, states, label in (("not_processed", (J.NOT_PROCESSED,), "Not processed"),
-                                   ("waiting", (J.WAITING, J.QUEUED, J.PROCESSING), "Waiting"),
-                                   ("failed", (J.FAILED,), "Failed"), ("rejected", (J.REJECTED,), "Rejected")):
-            n = sum(j.state in states and not j.review_pending for j in samples)
-            theme.set_chip(self.chips[key], f"{label} {n}" if n else "", "bad" if key != "waiting" else "neutral")
-        self._fill(self.control, [j for j in jobs if j.state == J.CONTROL or j.review_pending])
-        self._fill(self.accepted, [j for j in jobs if j.state in J.ACCEPTED])
-        self._fill(self.pending, [j for j in jobs if j.state in (J.WAITING, J.QUEUED, J.PROCESSING)
-                                  and not j.review_pending])
-        self._fill(self.problems, [j for j in jobs if j.state in (J.NOT_PROCESSED, J.FAILED, J.REJECTED, J.REMOVED)])
-        self.others.setTabText(1, f"Not processed / failed / rejected / removed "
-                                  f"({count(J.NOT_PROCESSED, J.FAILED, J.REJECTED, J.REMOVED)})")
-        waiting = sum(j.state in (J.WAITING, J.QUEUED, J.PROCESSING) and not j.review_pending for j in samples)
-        self.others.setTabText(0, f"Waiting / processing ({waiting})")
-        try:
-            self._stamp = None
-            n = self.journal.con.execute("SELECT COUNT(*), MAX(COALESCE(finished,0)), MAX(COALESCE(reviewed_at,0)), "
-                                         "MAX(COALESCE(created,0)), SUM(LENGTH(state)) FROM jobs").fetchone()
-            self._stamp = tuple(n) + (self.journal.con.execute("SELECT MAX(id) FROM events").fetchone()[0],)
-        except Exception:  # noqa: BLE001
-            pass
-        self._show_detail(self.jobs.get(self.current))
-
-    def _fill(self, tree: QTreeWidget, jobs: list):
-        keep = self.current
-        tree.blockSignals(True)
-        tree.clear()
+        days = PERIODS[self.period.currentData() or "all"][1]
+        since = time.time() - days * 86400 if days else 0
+        text = self.search.text().strip().casefold()
+        self._batches = {b["id"]: b for b in self.journal.batches()}
         by_batch: dict = {}
-        for j in jobs:
+        for j in self.journal.jobs(workflow_id=self.workflow.currentData() or None):
             by_batch.setdefault(j.batch_id, []).append(j)
-        for bid, items in sorted(by_batch.items(), key=lambda kv: -max(float(j.created or 0) for j in kv[1])):
+        self._by_batch = by_batch
+        view, n_batches = [], {"todo": 0, "archive": 0}
+        for bid, jobs in by_batch.items():
             b = self._batches.get(bid, {})
-            top = QTreeWidgetItem([b.get("name", "?"), "", "", ""])
-            top.setToolTip(0, b.get("folder", ""))
-            f = top.font(0)
-            f.setBold(True)
-            top.setFont(0, f)
-            top.setData(0, Qt.UserRole, "")
-            tree.addTopLevelItem(top)
-            for j in sorted(items, key=lambda j: (j.is_batch, float(j.created or 0))):
-                n = len(j.findings or [])
-                label = j.group_name
-                if self._is_pair(j):
-                    label += " — " + " / ".join(Path(m).stem for m in j.members)
-                status = "Updating report" if j.review_pending else J.STATE_LABELS.get(j.state, j.state)
-                it = QTreeWidgetItem([label, status,
-                                      str(n) if n else "", J.when(j.finished or j.created)])
-                it.setData(0, Qt.UserRole, j.id)
-                it.setBackground(1, theme.status_brush(LEVEL.get(j.state, "neutral")))
-                if j.state == J.REMOVED:
-                    for c in range(4):
-                        it.setForeground(c, theme.status_color("neutral"))
-                if j.reason:
-                    it.setToolTip(1, j.reason)
-                top.addChild(it)
-                if j.id == keep:
-                    it.setSelected(True)
-            top.setExpanded(True)
-        tree.blockSignals(False)
+            if b.get("deleted") and not self.show_deleted:
+                continue
+            mode = "archive" if J.batch_closed(b, jobs) else "todo"
+            n_batches[mode] += 1
+            if mode != self.mode:
+                continue
+            if mode == "archive" and since and max(activity(j) for j in jobs) < since:
+                continue
+            name_hit = text in (b.get("name") or "").casefold()
+            for j in jobs:
+                if j.deleted and not self.show_deleted:
+                    continue
+                if mode == "todo" and since and float(j.created or 0) < since:
+                    continue
+                if text and not name_hit and text not in (j.group_name or "").casefold():
+                    continue
+                view.append(j)
+        self.jobs = {j.id: j for j in view}
+        self.b_todo.setText(f"To do ({n_batches['todo']})")
+        self.b_archive.setText(f"Archive ({n_batches['archive']})")
+        # the chips count the samples of the view (a batch report is not a sample)
+        counts = {k: 0 for k in FILTERS}
+        auto = manual = 0
+        for j in view:
+            if j.is_batch or j.deleted:
+                continue
+            counts["all"] += 1
+            counts[bucket(j)] += 1
+            auto += j.state == J.ACCEPTED_AUTO
+            manual += j.state == J.ACCEPTED_MANUAL
+        for key, (label, level) in FILTERS.items():
+            n = counts[key]
+            shown = n or key in ("all", "control", "accepted") or key == self.filter
+            lvl = level if n or key == "all" else "neutral"
+            theme.set_chip(self.chips[key], f"{label} {n}" if shown else "", lvl)
+            self.chips[key].setProperty("selected", key == self.filter)
+            self.chips[key].style().unpolish(self.chips[key])
+            self.chips[key].style().polish(self.chips[key])
+        self.chips["accepted"].setToolTip(f"{auto} automatic, {manual} by the analyst")
+        shown = [j for j in view if self.filter == "all" or bucket(j) == self.filter]
+        self._fill(shown)
+        if not shown:
+            self.empty.setText(self._empty_text(bool(text) or bool(since)))
+        self.list_stack.setCurrentIndex(0 if shown else 1)
+        try:
+            self._stamp = self._stamp_now()
+        except Exception:  # noqa: BLE001
+            self._stamp = None
+        self._refreshed = time.time()
+        self._show_detail(self.journal.job(self.current) if self.current else None)
+
+    def _empty_text(self, narrowed: bool) -> str:
+        if self.mode == "archive":
+            return "No archived batches match." if narrowed else \
+                "No batch is archived yet: a batch moves here when all its reports are accepted and delivered."
+        if self.filter == "control":
+            return "Nothing needs control."
+        if self.filter != "all" or narrowed:
+            return "No reports match the filters."
+        return "Nothing to do: every batch is accepted and delivered.\nOlder batches are in the Archive."
+
+    # -- the list ------------------------------------------------------------------------------------
+
+    def _fill(self, jobs: list):
+        self._building = True
+        selected = {self._key(it) for it in self.tree.selectedItems()}
+        current = self._key(self.tree.currentItem()) if self.tree.currentItem() is not None else None
+        scroll = self.tree.verticalScrollBar().value()
+        self.tree.clear()
+        self._items = {}
+        groups: dict = {}
+        for j in jobs:
+            groups.setdefault(j.batch_id, []).append(j)
+        # newest batch first; the order does not jump when a report is decided
+        order = sorted(groups, key=lambda bid: -float(self._batches.get(bid, {}).get("first_seen") or
+                                                      min(float(j.created or 0) for j in groups[bid])))
+        for bid in order:
+            top = self._batch_item(bid)
+            self.tree.addTopLevelItem(top)
+            for j in sorted(groups[bid], key=lambda j: (j.is_batch, float(j.created or 0))):
+                top.addChild(self._job_item(j))
+        for key, it in self._items.items():
+            default = key.startswith("b:") and (self.mode == "todo" or bool(self.search.text().strip()))
+            it.setExpanded(self._expanded.get(key, default))
+            if key in selected:
+                it.setSelected(True)
+        if self.current and f"j:{self.current}" in self._items and not selected:
+            self._items[f"j:{self.current}"].setSelected(True)
+        if current in self._items:
+            self.tree.setCurrentItem(self._items[current], 0, QItemSelectionModel.NoUpdate)
+        self.tree.verticalScrollBar().setValue(scroll)
+        self._building = False
+
+    @staticmethod
+    def _key(item: Optional[QTreeWidgetItem]) -> Optional[str]:
+        if item is None:
+            return None
+        kind = item.data(0, ROLE_KIND)
+        return f"b:{item.data(0, Qt.UserRole)}" if kind == "batch" else \
+            f"j:{item.data(0, Qt.UserRole)}" if kind == "job" else None
+
+    def _remember(self, item, expanded: bool):
+        key = self._key(item)
+        if key and not self._building:
+            self._expanded[key] = expanded
+
+    def _batch_item(self, bid) -> QTreeWidgetItem:
+        b = self._batches.get(bid, {})
+        live = [j for j in self._by_batch.get(bid, []) if not j.deleted and j.state != J.REMOVED]
+        samples = [j for j in live if not j.is_batch]
+        n = {k: 0 for k in BUCKET_LEVEL}
+        for j in samples:
+            n[bucket(j)] += 1
+        parts = [(BUCKET_LEVEL[k], v) for k, v in n.items() if v]
+        bad = n["failed"] + n["not_processed"] + n["rejected"]
+        text = f"{n['accepted']}/{len(samples)} accepted"
+        text += f" · {n['control']} control" if n["control"] else ""
+        text += f" · {bad} failed/rejected" if bad else ""
+        text += f" · {n['waiting']} waiting" if n["waiting"] else ""
+        accepted = [j for j in live if j.state in J.ACCEPTED]
+        sent = sum(delivered(j)[0] == "✓" for j in accepted)
+        last = max((activity(j) for j in self._by_batch.get(bid, [])), default=0)
+        findings = sum(len(j.findings or []) for j in samples)
+        deleted = bool(b.get("deleted"))
+        it = QTreeWidgetItem([b.get("name", "?"), "Deleted" if deleted else text, str(findings) if findings else "",
+                              f"{sent}/{len(accepted)}" if accepted else "", J.ago(last)])
+        it.setData(0, ROLE_KIND, "batch")
+        it.setData(0, Qt.UserRole, bid)
+        if not deleted:
+            it.setData(1, ROLE_BAR, parts or [("neutral", 1)])
+        worst = next((lv for lv in WORST if any(p[0] == lv for p in parts)), "neutral")
+        it.setIcon(0, _dot("neutral" if deleted else worst))
+        it.setToolTip(0, b.get("folder", ""))
+        it.setToolTip(1, text)
+        it.setToolTip(4, J.when(last))
+        f = it.font(0)
+        f.setBold(True)
+        f.setItalic(deleted)
+        it.setFont(0, f)
+        self._items[f"b:{bid}"] = it
+        return it
+
+    def _job_item(self, j: J.Job) -> QTreeWidgetItem:
+        from gcws.automation.rules import RULES
+        label = j.group_name
+        if self._is_pair(j):
+            label += " — " + " / ".join(Path(m).stem for m in j.members)
+        status = "Updating report" if j.review_pending else J.STATE_LABELS.get(j.state, j.state)
+        if j.deleted:
+            status = f"Deleted ({status.lower()})"
+        sent, sent_level = delivered(j)
+        n = len(j.findings or [])
+        it = QTreeWidgetItem([label, status, str(n) if n else "", sent, J.ago(j.finished or j.created)])
+        it.setData(0, ROLE_KIND, "job")
+        it.setData(0, Qt.UserRole, j.id)
+        it.setToolTip(4, J.when(j.finished or j.created))
+        if j.deleted or j.state == J.REMOVED:
+            for c in range(len(COLUMNS)):
+                it.setForeground(c, theme.status_color("neutral"))
+            if j.deleted:
+                f = it.font(0)
+                f.setItalic(True)
+                it.setFont(0, f)
+        else:
+            it.setBackground(1, theme.status_brush(LEVEL.get(j.state, "neutral")))
+            if sent:
+                it.setForeground(3, theme.status_color(sent_level))
+        if j.reason:
+            it.setToolTip(1, j.reason)
+        if n:
+            it.setToolTip(2, "\n".join(f.get("text") or "" for f in j.findings))
+        for f in j.findings or []:
+            what = " · ".join(x for x in (RULES.get(f.get("rule"), (f.get("rule", ""),))[0], f.get("substance") or "",
+                                          f"RT {f['rt']:.3f}" if f.get("rt") is not None else "",
+                                          f.get("member") or "") if x)
+            child = QTreeWidgetItem([what, f.get("text") or ""])
+            child.setData(0, ROLE_KIND, "finding")
+            child.setFlags(Qt.ItemIsEnabled)
+            child.setToolTip(0, what)
+            child.setToolTip(1, f.get("text") or "")
+            child.setFirstColumnSpanned(False)
+            child.setBackground(1, theme.status_brush("warn" if f.get("level", "control") == "control"
+                                                      else "neutral"))
+            it.addChild(child)
+        self._items[f"j:{j.id}"] = it
+        return it
+
+    def _rows(self) -> list[str]:
+        """The job ids of the list, top to bottom."""
+        out = []
+        for i in range(self.tree.topLevelItemCount()):
+            top = self.tree.topLevelItem(i)
+            out += [top.child(k).data(0, Qt.UserRole) for k in range(top.childCount())]
+        return out
+
+    def _next_control(self, after: str) -> Optional[str]:
+        """The next report needing control below ``after`` (from the top again at the end)."""
+        rows = self._rows()
+        if after not in rows:
+            return None
+        i = rows.index(after)
+        for jid in rows[i + 1:] + rows[:i]:
+            j = self.jobs.get(jid)
+            if j is not None and j.state == J.CONTROL and not j.review_pending and not j.deleted:
+                return jid
+        return None
 
     # -- selection and details ----------------------------------------------------------------------
 
-    def _picked(self, tree):
-        items = tree.selectedItems()
-        jid = items[0].data(0, Qt.UserRole) if items else ""
-        if not jid:
+    def selected_jobs(self) -> list[J.Job]:
+        """The selected reports (rows of samples and batch reports), top to bottom."""
+        ids = [it.data(0, Qt.UserRole) for it in self.tree.selectedItems() if it.data(0, ROLE_KIND) == "job"]
+        rows = self._rows()
+        ids.sort(key=lambda i: rows.index(i) if i in rows else len(rows))
+        if not ids and self.current:
+            ids = [self.current]
+        return [j for j in (self.journal.job(i) for i in ids) if j is not None]
+
+    def selected_batch(self) -> Optional[int]:
+        items = [it for it in self.tree.selectedItems() if it.data(0, ROLE_KIND) == "batch"]
+        return items[0].data(0, Qt.UserRole) if len(items) == 1 else None
+
+    def _picked(self):
+        if self._building:
             return
-        for t in (self.control, self.accepted, self.pending, self.problems):
-            if t is not tree:
-                t.blockSignals(True)
-                t.clearSelection()
-                t.blockSignals(False)
-        self.select(jid)
+        jobs = [it for it in self.tree.selectedItems() if it.data(0, ROLE_KIND) == "job"]
+        cur = self.tree.currentItem()
+        it = cur if cur in jobs else (jobs[-1] if jobs else None)
+        self.current = it.data(0, Qt.UserRole) if it is not None else None
+        self._show_detail(self.journal.job(self.current) if self.current else None)
 
     def select(self, job_id: str):
         self.current = job_id
+        it = self._items.get(f"j:{job_id}")
+        self._building = True
+        self.tree.clearSelection()
+        self._building = False
+        if it is not None:
+            self._building = True
+            it.setSelected(True)
+            self.tree.setCurrentItem(it, 0, QItemSelectionModel.NoUpdate)
+            self.tree.scrollToItem(it)
+            self._building = False
         self._show_detail(self.journal.job(job_id))
 
     def _show_detail(self, job: Optional[J.Job]):
+        from gcws.automation.rules import RULES
         self.current = job.id if job is not None else None
-        self.detail.setEnabled(job is not None)
-        self.findings.setRowCount(0)
-        self.files.setRowCount(0)
-        self.history.setRowCount(0)
-        if job is None:
-            self.title.setText("Select a report to see why it needs control, its files and its history.")
-            return
-        b = self._batches.get(job.batch_id, {}) if hasattr(self, "_batches") else {}
-        text = f"<b>{job.group_name}</b> &nbsp; {theme.chip_html(job.label, LEVEL.get(job.state, 'neutral'))}"
-        text += f"<br>batch folder {b.get('folder', '')} · revision {job.revision}"
-        if job.reviewer:
-            text += f"<br>{job.label.lower()} by {job.reviewer}, {J.when(job.reviewed_at)}" + \
-                    (f": {job.comment}" if job.comment else "")
-        if job.reason:
-            text += f"<br>{job.reason}"
-        self.title.setText(text)
-        for f in job.findings or []:
-            r = self.findings.rowCount()
-            self.findings.insertRow(r)
-            from gcws.automation.rules import RULES
-            vals = [RULES.get(f.get("rule"), (f.get("rule", ""),))[0], f.get("member") or "", f.get("substance") or "",
-                    f"{f['rt']:.3f}" if f.get("rt") is not None else "", f.get("text") or ""]
-            for c, v in enumerate(vals):
-                it = QTableWidgetItem(v)
-                if c == 4:
-                    it.setBackground(theme.status_brush("warn" if f.get("level") == "control" else "neutral"))
-                self.findings.setItem(r, c, it)
-        delivered = {}
-        for e in self.journal.exports(job.id):
-            if e.get("state") == "done" and e.get("fmt") != "register":
-                delivered.setdefault((e.get("report_node"), e.get("fmt")), []).append(e.get("dst"))
+        jobs = self.selected_jobs() if job is not None else []
+        if job is not None and len(jobs) <= 1:
+            jobs = [job]
+        self._update_actions(jobs)
         menu = QMenu(self.b_open)
+        self.b_open.setMenu(menu)
+        if job is None:
+            bid = self.selected_batch()
+            if bid is not None:
+                b = self._batches.get(bid, {})
+                it = self._items.get(f"b:{bid}")
+                self.title.setText(f"<b>{b.get('name', '')}</b><br>{it.text(1) if it else ''}<br>"
+                                   f"batch folder {b.get('folder', '')}")
+                self.reasons.setText("Right-click the batch for its actions.")
+            else:
+                self.title.setText("Select a report to see why it needs control.")
+                self.reasons.setText("")
+            self.b_open.setEnabled(False)
+            self._update_preview(None)
+            return
+        if len(jobs) > 1:
+            self.title.setText(f"<b>{len(jobs)} reports selected</b><br>" +
+                               ", ".join(j.group_name for j in jobs[:6]) + (" ..." if len(jobs) > 6 else ""))
+            self.reasons.setText("Accept, Reject and the right-click menu act on all of them.")
+        else:
+            b = self._batches.get(job.batch_id, {})
+            text = f"<b>{job.group_name}</b> &nbsp; {theme.chip_html(job.label, LEVEL.get(job.state, 'neutral'))}"
+            if job.deleted:
+                text += " " + theme.chip_html("Deleted", "neutral")
+            text += f"<br>batch folder {b.get('folder', '')} · revision {job.revision}"
+            if job.reviewer:
+                text += f"<br>{job.label.lower()} by {job.reviewer}, {J.when(job.reviewed_at)}" + \
+                        (f": {job.comment}" if job.comment else "")
+            if job.reason:
+                text += f"<br>{job.reason}"
+            self.title.setText(text)
+            findings = job.findings or []
+            chips = []
+            for f in findings[:6]:
+                what = RULES.get(f.get("rule"), (f.get("rule", ""),))[0]
+                if f.get("substance"):
+                    what += f": {f['substance']}"
+                chips.append(theme.chip_html(what, "warn" if f.get("level", "control") == "control" else "neutral"))
+            more = f" +{len(findings) - 6} more (expand the sample)" if len(findings) > 6 else ""
+            self.reasons.setText(" ".join(chips) + more if findings else "")
+            self.reasons.setToolTip("\n".join(f.get("text") or "" for f in findings))
         for node, files in (job.files or {}).items():
             for fmt, path in files.items():
-                r = self.files.rowCount()
-                self.files.insertRow(r)
-                self.files.setItem(r, 0, QTableWidgetItem(f"{FILE_LABELS.get(fmt, fmt)}: {Path(path).name}"))
-                self.files.setItem(r, 1, QTableWidgetItem(str(Path(path).parent)))
-                self.files.setItem(r, 2, QTableWidgetItem("; ".join(delivered.get((node, fmt), []))))
-                self.files.item(r, 0).setData(Qt.UserRole, path)
-                menu.addAction(FILE_LABELS.get(fmt, fmt), lambda p=path: self.open_path(p))
-        self.b_open.setMenu(menu)
-        self.b_open.setEnabled(not menu.isEmpty())
-        for e in self.journal.events(job_id=job.id):
-            r = self.history.rowCount()
-            self.history.insertRow(r)
-            for c, v in enumerate((J.when(e["ts"]), e.get("user") or "", e.get("text") or "")):
-                self.history.setItem(r, c, QTableWidgetItem(v))
-        done = job.state in J.DONE
-        self.b_accept.setEnabled(not job.review_pending and
-                                 (job.state in (J.CONTROL, J.REJECTED) or (job.is_batch and done)))
-        self.b_reject.setEnabled(not job.review_pending and done and job.state != J.REJECTED)
-        self.b_project.setEnabled(bool(job.project_path) and Path(job.project_path).exists())
-        self.a_rereport.setEnabled(bool(job.project_path) and not job.is_batch and not job.review_pending)
-        self.a_reprocess.setEnabled(job.state not in (J.QUEUED, J.PROCESSING) and not job.review_pending)
-        self.a_noblank.setEnabled(job.state == J.NOT_PROCESSED)
-        self.a_remove.setEnabled(job.state in J.REMOVABLE)
-        self.a_export.setEnabled(job.state in (J.CONTROL, J.ACCEPTED_AUTO, J.ACCEPTED_MANUAL))
-        self.a_folder.setEnabled(bool(job.job_dir))
+                menu.addAction(FILE_LABELS.get(fmt, fmt), lambda p=path: self.open_path(p)).setToolTip(str(path))
+        self.b_open.setEnabled(not menu.isEmpty() and len(jobs) == 1)
+        self._update_preview(job if len(jobs) == 1 else None)
+
+    def _update_preview(self, job: Optional[J.Job]):
+        """The report preview (a later phase)."""
+
+    def _update_actions(self, jobs: list):
+        one = jobs[0] if len(jobs) == 1 else None
+        live = [j for j in jobs if not j.deleted]
+        self.a_accept.setEnabled(any(can_accept(j) for j in jobs))
+        self.a_accept_comment.setEnabled(self.a_accept.isEnabled())
+        self.b_reject.setEnabled(any(can_reject(j) for j in jobs))
+        self.b_project.setEnabled(one is not None and bool(one.project_path) and Path(one.project_path).exists())
+        self.a_project.setEnabled(self.b_project.isEnabled())
+        self.a_replicates.setEnabled(one is not None and self._is_pair(one) and not one.review_pending)
+        self.a_rereport.setEnabled(any(bool(j.project_path) and not j.is_batch and can_reprocess(j) for j in jobs))
+        self.a_reprocess.setEnabled(any(can_reprocess(j) for j in jobs))
+        self.a_noblank.setEnabled(one is not None and one.state == J.NOT_PROCESSED and not one.deleted)
+        self.a_remove.setEnabled(any(j.state in J.REMOVABLE for j in live))
+        self.a_export.setEnabled(one is not None and not one.deleted and
+                                 one.state in (J.CONTROL, J.ACCEPTED_AUTO, J.ACCEPTED_MANUAL))
+        self.a_history.setEnabled(one is not None)
+        self.a_folder.setEnabled(one is not None and bool(one.job_dir))
+        self.a_copy.setEnabled(bool(jobs))
+        self.a_delete.setEnabled(bool(live))
+        self.a_restore.setEnabled(any(j.deleted for j in jobs))
+
+    # -- right-click menus and keys -----------------------------------------------------------------
+
+    def _tree_menu(self, pos):
+        menu = self._tree_context_menu(pos)
+        if menu is not None:
+            menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _tree_context_menu(self, pos) -> Optional[QMenu]:
+        item = self.tree.itemAt(pos)
+        if item is None:
+            return None
+        if item.data(0, ROLE_KIND) == "finding":
+            item = item.parent()
+        if not item.isSelected():
+            self.tree.clearSelection()
+            item.setSelected(True)
+            self.tree.setCurrentItem(item, 0, QItemSelectionModel.NoUpdate)
+            self._picked()
+        if item.data(0, ROLE_KIND) == "batch":
+            return self._batch_menu(item.data(0, Qt.UserRole))
+        return self._sample_menu()
+
+    def _sample_menu(self) -> QMenu:
+        jobs = self.selected_jobs()
+        menu = QMenu(self.tree)
+        if len(jobs) == 1:
+            files = QMenu("Open report", menu)
+            for node, fs in (jobs[0].files or {}).items():
+                for fmt, path in fs.items():
+                    files.addAction(FILE_LABELS.get(fmt, fmt), lambda p=path: self.open_path(p))
+            files.setEnabled(not files.isEmpty())
+            menu.addMenu(files)
+            menu.addAction(self.a_project)
+            if self.a_replicates.isEnabled():
+                menu.addAction(self.a_replicates)
+            menu.addSeparator()
+        menu.addAction(self.a_accept)
+        menu.addAction(self.a_accept_comment)
+        rm = menu.addMenu("Reject")
+        rm.aboutToShow.connect(lambda: self._fill_reject_menu(rm, self.reject))
+        rm.setEnabled(any(can_reject(j) for j in jobs))
+        menu.addSeparator()
+        again = menu.addMenu("Process again")
+        for a in (self.a_rereport, self.a_reprocess, self.a_noblank):
+            again.addAction(a)
+        again.setEnabled(any(a.isEnabled() for a in again.actions()))
+        menu.addAction(self.a_remove)
+        menu.addAction(self.a_export)
+        menu.addSeparator()
+        menu.addAction(self.a_history)
+        menu.addAction(self.a_folder)
+        menu.addAction(self.a_copy)
+        menu.addSeparator()
+        menu.addAction(self.a_restore if all(j.deleted for j in jobs) else self.a_delete)
+        return menu
+
+    def _batch_menu(self, bid) -> QMenu:
+        b = self._batches.get(bid, {})
+        jobs = [j for j in self._by_batch.get(bid, []) if not j.deleted]
+        report = next((j for j in jobs if j.is_batch), None)
+        menu = QMenu(self.tree)
+        files = QMenu("Open batch report", menu)
+        for node, fs in ((report.files or {}) if report else {}).items():
+            for fmt, path in fs.items():
+                files.addAction(FILE_LABELS.get(fmt, fmt), lambda p=path: self.open_path(p))
+        files.setEnabled(not files.isEmpty())
+        menu.addMenu(files)
+        menu.addAction("Open batch folder", lambda: self.open_batch_folder(bid)).setEnabled(bool(b.get("folder")))
+        menu.addSeparator()
+        n = sum(j.state == J.CONTROL and can_accept(j) for j in jobs)
+        menu.addAction(f'Accept all "control needed" ({n})...',
+                       lambda: self.accept_batch(bid)).setEnabled(bool(n) and not b.get("deleted"))
+        rm = menu.addMenu("Reject batch")
+        rm.aboutToShow.connect(lambda: self._fill_reject_menu(rm, lambda reason: self.reject_batch(bid, reason)))
+        rm.setEnabled(any(can_reject(j) for j in jobs) and not b.get("deleted"))
+        menu.addAction("Process batch again...", lambda: self.reprocess_batch(bid)).setEnabled(
+            any(can_reprocess(j) and not j.is_batch for j in jobs) and not b.get("deleted"))
+        menu.addSeparator()
+        if self.mode == "archive":
+            menu.addAction("Reopen", lambda: self.reopen_batch(bid))
+        if b.get("deleted"):
+            menu.addAction("Restore batch", lambda: self.restore_batch(bid))
+        else:
+            menu.addAction("Delete batch...", lambda: self.delete_batch(bid))
+        return menu
+
+    def _fill_reject_menu(self, menu: QMenu, slot):
+        from gcws.automation import rules as RU
+        menu.clear()
+        for reason in RU.load_reject_reasons():
+            menu.addAction(reason, lambda r=reason: slot(r))
+        menu.addSeparator()
+        menu.addAction("Other...", lambda: slot(None))
+
+    def eventFilter(self, obj, ev):
+        if obj is self.tree and ev.type() in (QEvent.ShortcutOverride, QEvent.KeyPress):
+            slot = self._key_slot(ev)
+            if slot is not None:
+                ev.accept()
+                if ev.type() == QEvent.KeyPress:
+                    slot()
+                return True
+        return super().eventFilter(obj, ev)
+
+    def _key_slot(self, ev) -> Optional[Callable]:
+        """A (accept), R (reject), Enter (open report), Ctrl+O (GC Workspace), H (history), Del (delete),
+        Ctrl+Z (undo the last accept / reject / delete)."""
+        key, mods = ev.key(), ev.modifiers() & ~Qt.KeypadModifier
+        if mods == Qt.NoModifier:
+            return {Qt.Key_A: (lambda: self.review(True)) if self.a_accept.isEnabled() else None,
+                    Qt.Key_R: self._popup_reject if self.b_reject.isEnabled() else None,
+                    Qt.Key_Return: self.open_default, Qt.Key_Enter: self.open_default,
+                    Qt.Key_H: self.show_history if self.a_history.isEnabled() else None,
+                    Qt.Key_Delete: self.delete_selected if self.a_delete.isEnabled() else None}.get(key)
+        if mods == Qt.ControlModifier:
+            if key == Qt.Key_O and self.b_project.isEnabled():
+                return self.open_project
+            if key == Qt.Key_Z and self._undo_fn is not None:
+                return self.undo
+        return None
+
+    def _popup_reject(self):
+        self.reject_menu.exec(self.b_reject.mapToGlobal(self.b_reject.rect().bottomLeft()))
+
+    def _double_clicked(self, item, _col):
+        kind = item.data(0, ROLE_KIND)
+        if kind == "batch":
+            report = next((j for j in self._by_batch.get(item.data(0, Qt.UserRole), []) if j.is_batch), None)
+            path = self._default_file(report) if report is not None else None
+            if path:
+                self.open_path(path)
+            else:
+                item.setExpanded(not item.isExpanded())
+        elif kind == "job":
+            self.open_default()
+
+    # -- messages and undo ---------------------------------------------------------------------------
+
+    def notify(self, text: str, undo: Optional[Callable[[], str]] = None, level: str = "info"):
+        """A message under the list for a few seconds, with "Undo" when ``undo`` is given."""
+        self._undo_fn = undo
+        self.bar_text.setText(text)
+        self.bar.setProperty("level", level)
+        self.bar.style().unpolish(self.bar)
+        self.bar.style().polish(self.bar)
+        self.b_undo.setVisible(undo is not None)
+        self.bar.show()
+        self._bar_timer.start()
+
+    def dismiss_message(self):
+        """The message ends: what it offered to undo is final now (and delivered)."""
+        self._bar_timer.stop()
+        self.bar.hide()
+        self._undo_fn = None
+        self.deliver_due()
+
+    def undo(self) -> bool:
+        fn, self._undo_fn = self._undo_fn, None
+        if fn is None:
+            return False
+        text = fn()
+        self.refresh()
+        self.notify(text or "Undone.")
+        return bool(text) and not text.startswith("Not undone")
+
+    def deliver_due(self):
+        """Deliver what was accepted here while no watcher runs (once it can no longer be undone)."""
+        from gcws.automation import export
+        from gcws.automation import workflow as W
+        ids, self._deliver = self._deliver, set()
+        for jid in ids:
+            job = self.journal.job(jid)
+            if job is None or not job.export_pending or job.state not in J.ACCEPTED:
+                continue
+            wf = W.find(job.workflow_id)
+            if wf is not None:
+                try:
+                    export.deliver(self.journal, wf, job)
+                except Exception as exc:  # noqa: BLE001
+                    self.journal.update_job(jid, export_state="error", export_pending=0)
+                    self.journal.event("error", f"{job.group_name}: delivery failed: {exc}", job_id=jid)
+        if ids:
+            self.refresh()
 
     # -- actions -------------------------------------------------------------------------------------
 
     def _job(self) -> Optional[J.Job]:
         return self.journal.job(self.current) if self.current else None
 
-    def review(self, accept: bool, comment: Optional[str] = None) -> bool:
+    @staticmethod
+    def _names(jobs: list) -> str:
+        return jobs[0].group_name + (f" and {len(jobs) - 1} more" if len(jobs) > 1 else "")
+
+    def review(self, accept: bool, comment: str = "", job_ids: Optional[list] = None) -> bool:
+        """Accept or reject the selected reports (or ``job_ids``): one click, the comment is optional.
+        Undo is offered for a few seconds; then the next report needing control is selected."""
+        ids = list(job_ids) if job_ids is not None else [j.id for j in self.selected_jobs()]
+        self.dismiss_message()                    # the previous decision is final now
+        allowed = can_accept if accept else can_reject
+        done, before, regenerated = [], [], 0
+        for jid in ids:
+            job = self.journal.job(jid)
+            if job is None or not allowed(job):
+                continue
+            if self.prepare_review is not None and not self.prepare_review(jid):
+                continue
+            job = self.journal.job(jid)
+            snap = {k: job.row.get(k) for k in J.Journal.REVIEW_FIELDS} | {"revision": job.revision}
+            if accept and job.edited:
+                ok = self.journal.accept_edited(jid, comment)
+                regenerated += ok
+            else:
+                ok = self.journal.review(jid, accept, comment, grace=J.UNDO_GRACE if accept else 0)
+                if ok:
+                    before.append((jid, snap))
+            if ok:
+                done.append(job)
+        if not done:
+            self.refresh()
+            self.notify("The report changed meanwhile (processed again?); look at it once more.", level="warn")
+            return False
+        if accept and not self._watcher_running():
+            self._deliver.update(jid for jid, _ in before)
+        nxt = self._next_control(ids[-1]) if len(ids) == 1 else None
+        self.refresh()
+        if nxt and nxt in self.jobs:
+            self.select(nxt)
+        verb = "Accepted" if accept else "Rejected"
+        text = f"{verb} {self._names(done)}" + (f" ({comment})" if comment and not accept else "")
+        if regenerated:
+            text += " - the edited report is made again"
+        self.notify(text + ".", self._undo_review(before) if before else None)
+        return True
+
+    def _undo_review(self, before: list) -> Callable[[], str]:
+        def undo() -> str:
+            ok = [jid for jid, snap in before if self.journal.undo_review(jid, snap)]
+            self._deliver.difference_update(ok)
+            if ok:
+                self.current = ok[0]
+                return f"Undone: {len(ok)} report(s) back as before."
+            return "Not undone: the report was delivered meanwhile; reject it instead."
+        return undo
+
+    def accept_with_comment(self) -> bool:
         from gcws.ui.dialogs.report2 import ReviewDialog
-        job = self._job()
-        if job is None:
+        jobs = [j for j in self.selected_jobs() if can_accept(j)]
+        if not jobs:
             return False
-        if self.prepare_review is not None and not self.prepare_review(job.id):
+        dlg = ReviewDialog(True, self._names(jobs), sum(len(j.findings or []) for j in jobs), self)
+        if not dlg.exec():
             return False
-        job = self._job()
-        if comment is None:
-            dlg = ReviewDialog(accept, job.group_name, len(job.findings or []), self)
+        return self.review(True, dlg.text(), [j.id for j in jobs])
+
+    def reject(self, reason: Optional[str] = None, job_ids: Optional[list] = None) -> bool:
+        """Reject with one of the reasons; ``None`` ("Other...") asks for a comment (optional)."""
+        if reason is None:
+            from gcws.ui.dialogs.report2 import ReviewDialog
+            jobs = [j for j in (self.selected_jobs() if job_ids is None else
+                                [self.journal.job(i) for i in job_ids]) if j is not None and can_reject(j)]
+            if not jobs:
+                return False
+            dlg = ReviewDialog(False, self._names(jobs), sum(len(j.findings or []) for j in jobs), self)
             if not dlg.exec():
                 return False
-            comment = dlg.text()
-        ok = self.journal.accept_edited(job.id, comment) if accept and job.edited else \
-            self.journal.review(job.id, accept, comment)
-        if not ok:
-            QMessageBox.information(self, "Report²", "The report changed meanwhile (processed again?); "
-                                    "look at it once more.")
-        elif accept and not job.edited and not self._watcher_running():
-            self.export_now()
-        self.refresh()
-        return ok
+            reason, job_ids = dlg.text(), [j.id for j in jobs]
+        return self.review(False, reason, job_ids)
 
     def reprocess(self, mode: str = "full", override: Optional[dict] = None) -> bool:
-        job = self._job()
-        if job is None:
-            return False
-        ok = self.journal.request(job.id, mode, override)
+        jobs = [j for j in self.selected_jobs() if can_reprocess(j) and (mode != "rereport" or j.project_path)]
+        ok = [j for j in jobs if self.journal.request(j.id, mode, override)]
         if not ok:
-            QMessageBox.information(self, "Report²", "This report is already being processed.")
+            self.notify("This report is already being processed.", level="warn")
         elif not self._watcher_running():
-            self.banner_text.setText("Queued - start the watcher to process it.")
+            self.notify(f"Queued {self._names(ok)} - start the watcher to process it.", level="warn")
         self.refresh()
-        return ok
+        return bool(ok)
 
     def remove_from_queue(self, confirm: bool = True) -> bool:
-        job = self._job()
-        if job is None or job.state not in J.REMOVABLE:
+        jobs = [j for j in self.selected_jobs() if j.state in J.REMOVABLE and not j.deleted]
+        if not jobs:
             return False
         if confirm and QMessageBox.question(
-                self, "Remove from the queue", f"Remove '{job.group_name}' from the queue? The watcher skips it "
-                "and the batch report no longer waits for it. 'Process again' brings it back.") != QMessageBox.Yes:
+                self, "Remove from the queue", f"Remove {self._names(jobs)} from the queue? The watcher skips "
+                "it and the batch report no longer waits for it. 'Process again' brings it back.") != QMessageBox.Yes:
             return False
-        ok = bool(self.journal.remove([job.id]))
+        ok = bool(self.journal.remove([j.id for j in jobs]))
         self.refresh()
         return ok
 
@@ -493,7 +1076,96 @@ class Report2Dock(QWidget):
                 f"{job.group_name} has no blank from its batch folder.\n\nProcess it anyway? The report will need "
                 "control ('Processed without a blank').") != QMessageBox.Yes:
             return False
-        return self.reprocess("full", {"allow_no_blank": True, "by": current_user()})
+        ok = self.journal.request(job.id, "full", {"allow_no_blank": True, "by": current_user()})
+        self.refresh()
+        return ok
+
+    def delete_selected(self, confirm: bool = True) -> list:
+        """Hide the selected reports (restorable: View > Show deleted reports, or Undo)."""
+        jobs = [j for j in self.selected_jobs() if not j.deleted]
+        if not jobs:
+            return []
+        if confirm and QMessageBox.question(
+                self, "Delete from Report²", f"Delete {self._names(jobs)} from Report²?\n\nNothing on disk is "
+                "deleted: the reports, the project and the delivered files stay. A sample still in the queue is "
+                "removed from it. View > Show deleted reports brings it back.") != QMessageBox.Yes:
+            return []
+        ids = self.journal.delete([j.id for j in jobs])
+        self.current = None
+        self.refresh()
+        self.notify(f"Deleted {self._names(jobs)}.", lambda: (self.journal.restore(ids), "Restored.")[1])
+        return ids
+
+    def restore_selected(self) -> list:
+        ids = self.journal.restore([j.id for j in self.selected_jobs() if j.deleted])
+        self.refresh()
+        return ids
+
+    def _batch_jobs(self, bid) -> list:
+        return [j for j in self.journal.jobs(batch_id=bid) if not j.deleted]
+
+    def accept_batch(self, bid, confirm: bool = True) -> bool:
+        jobs = [j for j in self._batch_jobs(bid) if j.state == J.CONTROL and can_accept(j)]
+        name = self._batches.get(bid, {}).get("name", "")
+        if not jobs:
+            return False
+        if confirm and QMessageBox.question(
+                self, "Accept the batch", f"Accept the {len(jobs)} report(s) of {name} that need control?") \
+                != QMessageBox.Yes:
+            return False
+        return self.review(True, "", [j.id for j in jobs])
+
+    def reject_batch(self, bid, reason: Optional[str], confirm: bool = True) -> bool:
+        jobs = [j for j in self._batch_jobs(bid) if can_reject(j)]
+        name = self._batches.get(bid, {}).get("name", "")
+        if not jobs:
+            return False
+        if confirm and QMessageBox.question(
+                self, "Reject the batch", f"Reject the {len(jobs)} report(s) of {name}" +
+                (f" ({reason})" if reason else "") + "?") != QMessageBox.Yes:
+            return False
+        return self.reject(reason, [j.id for j in jobs])
+
+    def reprocess_batch(self, bid, confirm: bool = True) -> bool:
+        jobs = [j for j in self._batch_jobs(bid) if can_reprocess(j) and not j.is_batch]
+        name = self._batches.get(bid, {}).get("name", "")
+        if not jobs:
+            return False
+        if confirm and QMessageBox.question(
+                self, "Process the batch again", f"Process the {len(jobs)} sample(s) of {name} again from the raw "
+                "data? Their reports need a new decision.") != QMessageBox.Yes:
+            return False
+        ok = [j for j in jobs if self.journal.request(j.id, "full")]
+        self.refresh()
+        if ok and not self._watcher_running():
+            self.notify(f"Queued {len(ok)} sample(s) - start the watcher to process them.", level="warn")
+        return bool(ok)
+
+    def delete_batch(self, bid, confirm: bool = True) -> bool:
+        name = self._batches.get(bid, {}).get("name", "")
+        if confirm and QMessageBox.question(
+                self, "Delete from Report²", f"Delete the batch {name} with all its reports from Report²?\n\n"
+                "Nothing on disk is deleted. The watcher no longer looks at this folder. View > Show deleted "
+                "reports brings it back.") != QMessageBox.Yes:
+            return False
+        ok = self.journal.delete_batch(bid)
+        self.refresh()
+        if ok:
+            self.notify(f"Deleted the batch {name}.", lambda: (self.journal.restore_batch(bid), "Restored.")[1])
+        return ok
+
+    def restore_batch(self, bid) -> bool:
+        ok = self.journal.restore_batch(bid)
+        self.refresh()
+        return ok
+
+    def reopen_batch(self, bid) -> bool:
+        ok = self.journal.reopen_batch(bid)
+        if ok:
+            self._expanded[f"b:{bid}"] = True
+            self.set_mode("todo")
+            self.notify(f"{self._batches.get(bid, {}).get('name', '')} is back in To do.")
+        return ok
 
     def export_now(self) -> list:
         from gcws.automation import export
@@ -504,9 +1176,16 @@ class Report2Dock(QWidget):
         wf = W.find(job.workflow_id)
         if wf is None:
             return []
+        self._deliver.discard(job.id)
         lines = export.deliver(self.journal, wf, job)
         self.refresh()
         return lines
+
+    def open_determination(self, job_id: Optional[str]):
+        job = self.jobs.get(job_id) or (self.journal.job(job_id) if job_id else None)
+        if job is not None and self._is_pair(job) and not job.review_pending:
+            self.select(job_id)
+            self.openDetermination.emit(job_id)
 
     def open_project(self):
         job = self._job()
@@ -519,25 +1198,53 @@ class Report2Dock(QWidget):
         except OSError as exc:
             QMessageBox.warning(self, "Report²", str(exc))
 
+    @staticmethod
+    def _default_file(job: J.Job) -> Optional[str]:
+        for files in (job.files or {}).values():
+            for fmt in ("docx", "batch_docx", "pdf", "batch_pdf", "xlsx", "batch_xlsx"):
+                if fmt in files:
+                    return files[fmt]
+        return None
+
     def open_default(self):
         job = self._job()
-        if job is None:
-            return
-        for files in (job.files or {}).values():
-            for fmt in ("docx", "batch_docx", "pdf", "xlsx"):
-                if fmt in files:
-                    self.open_path(files[fmt])
-                    return
-
-    def _open_file_row(self, row, _col):
-        it = self.files.item(row, 0)
-        if it is not None:
-            self.open_path(it.data(Qt.UserRole))
+        path = self._default_file(job) if job is not None else None
+        if path:
+            self.open_path(path)
 
     def open_folder(self):
         job = self._job()
         if job is not None and job.job_dir:
             self.open_path(job.job_dir)
+
+    def open_batch_folder(self, bid):
+        folder = self._batches.get(bid, {}).get("folder")
+        if folder:
+            self.open_path(folder)
+
+    def copy_names(self):
+        QApplication.clipboard().setText("\n".join(j.group_name for j in self.selected_jobs()))
+
+    def show_history(self):
+        """The history and the files of the selected report, in a window that does not block."""
+        from gcws.ui.dialogs.report2 import HistoryDialog
+        job = self._job()
+        if job is None:
+            return None
+        events = [(J.when(e["ts"]), e.get("user") or "", e.get("text") or "")
+                  for e in self.journal.events(job_id=job.id)]
+        sent = {}
+        for e in self.journal.exports(job.id):
+            if e.get("state") == "done" and e.get("fmt") != "register":
+                sent.setdefault((e.get("report_node"), e.get("fmt")), []).append(e.get("dst"))
+        files = [(f"{FILE_LABELS.get(fmt, fmt)}: {Path(path).name}", str(Path(path).parent),
+                  "; ".join(sent.get((node, fmt), [])))
+                 for node, fs in (job.files or {}).items() for fmt, path in fs.items()]
+        dlg = HistoryDialog(job.group_name, events, files, self)
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
+        dlg.files.cellDoubleClicked.connect(lambda r, _c: self.open_path(Path(files[r][1]) / files[r][0].split(": ", 1)[1]))
+        dlg.show()
+        return dlg
 
     def edit_rules(self):
         from gcws.automation import rules as RU
@@ -545,6 +1252,13 @@ class Report2Dock(QWidget):
         dlg = RulesDialog(RU.load_default_rules(), self, allow_default=False)
         if dlg.exec():
             RU.save_default_rules(dlg.rules())
+
+    def edit_reasons(self):
+        from gcws.automation import rules as RU
+        from gcws.ui.dialogs.report2 import ReasonsDialog
+        dlg = ReasonsDialog(RU.load_reject_reasons(), self)
+        if dlg.exec():
+            RU.save_reject_reasons(dlg.reasons())
 
     def _watcher_running(self) -> bool:
         from gcws.automation.control import WatcherControl
@@ -556,4 +1270,4 @@ class Report2Dock(QWidget):
     def _start_watcher(self):
         from gcws.automation.control import WatcherControl
         WatcherControl().start()
-        self.banner_text.setText("Starting the watcher ...")
+        theme.set_chip(self.watcher, "● Watcher starting ...", "info")

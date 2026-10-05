@@ -1,5 +1,6 @@
-"""P62: Report² (accepted / control needed, findings, review, reprocess, delivery) and the batch
-report of a folder from GC Workspace. Dialogs are never left open."""
+"""P62 / Report² rework: one list with filter chips, To do and Archive, one-click accept and reject
+with a reason (undo for a few seconds), right-click menus, delete (hide) and restore, keys, and the
+batch report of a folder from GC Workspace. Dialogs are never left open."""
 import json
 import time
 from pathlib import Path
@@ -65,7 +66,11 @@ def _seed(data, tmp_path):
     return wf, jr, ids, batch
 
 
-def _names(tree):
+def _names(dock, bucket=None):
+    """The samples in the list (of one chip filter)."""
+    if bucket is not None and dock.filter != bucket:
+        dock.set_filter(bucket)
+    tree = dock.tree
     out = []
     for i in range(tree.topLevelItemCount()):
         top = tree.topLevelItem(i)
@@ -73,33 +78,54 @@ def _names(tree):
     return out
 
 
-def test_report2_areas_counters_and_review(qtbot, data, tmp_path, monkeypatch):
-    from gcws.automation import journal as J
+def _dock(jr, monkeypatch, qtbot):
     from gcws.ui.docks.report2 import Report2Dock
-    wf, jr, ids, batch = _seed(data, tmp_path)
     monkeypatch.setattr("gcws.automation.control.WatcherControl", lambda *a, **k: NoWatcher())
-    dock = Report2Dock(journal=jr)
+    dock = Report2Dock(journal=jr, poll_ms=60000)
     qtbot.addWidget(dock)
-    assert _names(dock.control) == ["S-control"] and _names(dock.accepted) == ["S-auto"]
-    assert _names(dock.pending) == ["S-wait"] and set(_names(dock.problems)) == {"S-noblank", "S-failed"}
-    assert dock.chips["processed"].text() == "Processed 2"
+    return dock
+
+
+def test_report2_list_counters_and_review(qtbot, data, tmp_path, monkeypatch):
+    from gcws.automation import journal as J
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    dock = _dock(jr, monkeypatch, qtbot)
+    assert set(_names(dock)) == {"S-control", "S-auto", "S-wait", "S-noblank", "S-failed"}
+    assert _names(dock, "control") == ["S-control"] and _names(dock, "accepted") == ["S-auto"]
+    assert _names(dock, "waiting") == ["S-wait"]
+    assert _names(dock, "not_processed") == ["S-noblank"] and _names(dock, "failed") == ["S-failed"]
+    dock.set_filter("failed")                                  # clicked again: all
+    assert dock.filter == "all"
+    assert dock.chips["all"].text() == "All 5"
     assert dock.chips["control"].text() == "Control needed 1"
-    assert dock.chips["accepted"].text().startswith("Accepted 1 (1 automatic")
+    assert dock.chips["accepted"].text() == "Accepted 1" and "1 automatic" in dock.chips["accepted"].toolTip()
+    assert dock.chips["rejected"].text() == ""                 # none: hidden
+    assert dock.b_todo.text() == "To do (1)" and dock.b_archive.text() == "Archive (0)"
+    assert dock.watcher.text() == "● Watcher stopped" and not dock.start_btn.isHidden()
+    batch_row = dock.tree.topLevelItem(0)
+    assert batch_row.text(0) == batch.name and batch_row.text(1) == "1/5 accepted · 1 control · 2 failed/rejected · 1 waiting"
     dock.select(ids["S-control"])
-    assert dock.findings.rowCount() == 1 and dock.findings.item(0, 2).text() == "Bisphenol A"
-    assert dock.files.rowCount() == 2 and dock.b_accept.isEnabled() and dock.b_open.isEnabled()
-    # accept: recorded with the analyst; with no watcher running, delivered at once
-    assert dock.review(True, comment="SML checked, migration below the limit")
+    assert "Bisphenol A" in dock.reasons.text() and dock.b_accept.isEnabled() and dock.b_open.isEnabled()
+    row = dock._items[f"j:{ids['S-control']}"]
+    assert row.childCount() == 1 and "Bisphenol A" in row.child(0).text(0)   # the finding, under the sample
+    # accept: one click, no comment; delivered once the undo time is over (no watcher running)
+    assert dock.review(True)
     j = jr.job(ids["S-control"])
-    assert j.state == J.ACCEPTED_MANUAL and j.comment.startswith("SML checked") and j.reviewer
+    assert j.state == J.ACCEPTED_MANUAL and j.comment == "" and j.reviewer
+    assert dock.bar.isVisibleTo(dock) and dock.b_undo.isVisibleTo(dock)
+    assert not (tmp_path / "A" / batch.name / "S-control_NIAS_Report.xlsx").is_file()
+    dock.dismiss_message()
     assert (tmp_path / "A" / batch.name / "S-control_NIAS_Report.xlsx").is_file()
     assert (tmp_path / "B" / batch.name / "S-control_NIAS_Report.docx").is_file()
-    assert _names(dock.control) == [] and set(_names(dock.accepted)) == {"S-control", "S-auto"}
-    assert "accepted by" in " ".join(dock.history.item(r, 2).text() for r in range(dock.history.rowCount()))
-    # reject, process again, process without blank
+    assert _names(dock, "control") == [] and set(_names(dock, "accepted")) == {"S-control", "S-auto"}
+    assert dock._items[f"j:{ids['S-control']}"].text(3) == "✓"
+    # reject with a reason, process again, process without blank
+    dock.set_filter("all")
     dock.select(ids["S-auto"])
-    assert dock.review(False, comment="wrong sample") and jr.job(ids["S-auto"]).state == J.REJECTED
+    assert dock.reject("Wrong sample / mix-up") and jr.job(ids["S-auto"]).state == J.REJECTED
+    assert jr.job(ids["S-auto"]).comment == "Wrong sample / mix-up"
     assert dock.reprocess("full") and jr.job(ids["S-auto"]).state == J.QUEUED
+    assert "start the watcher" in dock.bar_text.text()
     dock.select(ids["S-noblank"])
     assert dock.a_noblank.isEnabled()
     assert dock.process_without_blank(confirm=False)
@@ -108,14 +134,11 @@ def test_report2_areas_counters_and_review(qtbot, data, tmp_path, monkeypatch):
 
 
 def test_open_in_gc_workspace(qtbot, data, tmp_path, monkeypatch):
-    from gcws.ui.docks.report2 import Report2Dock
     wf, jr, ids, batch = _seed(data, tmp_path)
     proj = tmp_path / "x.gcws"
     proj.write_text("{}")
     jr.update_job(ids["S-control"], project_path=str(proj))
-    monkeypatch.setattr("gcws.automation.control.WatcherControl", lambda *a, **k: NoWatcher())
-    dock = Report2Dock(journal=jr)
-    qtbot.addWidget(dock)
+    dock = _dock(jr, monkeypatch, qtbot)
     got = []
     dock.openProject.connect(got.append)
     dock.select(ids["S-control"])
@@ -124,37 +147,27 @@ def test_open_in_gc_workspace(qtbot, data, tmp_path, monkeypatch):
     assert got == [str(proj)]
 
 
-def test_accept_comment_is_optional_but_reject_comment_is_required(qtbot):
+def test_accept_and_reject_comments_are_optional(qtbot):
     from PySide6.QtWidgets import QDialog
     from gcws.ui.dialogs.report2 import ReviewDialog
 
-    accept = ReviewDialog(True, "S-control", 2)
-    qtbot.addWidget(accept)
-    assert not accept.required
-    accept._ok()
-    assert accept.result() == QDialog.Accepted
-
-    reject = ReviewDialog(False, "S-control", 0)
-    qtbot.addWidget(reject)
-    assert reject.required
-    reject._ok()
-    assert reject.result() != QDialog.Accepted
+    for accept in (True, False):
+        dlg = ReviewDialog(accept, "S-control", 2)
+        qtbot.addWidget(dlg)
+        assert not dlg.required
+        dlg._ok()
+        assert dlg.result() == QDialog.Accepted and dlg.text() == ""
 
 
 def test_processed_pairs_are_nested_and_available_to_switch(qtbot, data, tmp_path, monkeypatch):
-    from gcws.automation import journal as J
-    from gcws.ui.docks.report2 import Report2Dock
-
     wf, jr, ids, batch = _seed(data, tmp_path)
     project = tmp_path / "pair.gcws"
     project.write_text("{}")
     for name in ("S-control", "S-auto"):
         jr.update_job(ids[name], members=[f"{name}_A.D", f"{name}_B.D"], project_path=str(project))
-    monkeypatch.setattr("gcws.automation.control.WatcherControl", lambda *a, **k: NoWatcher())
-    dock = Report2Dock(journal=jr)
-    qtbot.addWidget(dock)
-    child = dock.control.topLevelItem(0).child(0)
-    assert batch.name == dock.control.topLevelItem(0).text(0)
+    dock = _dock(jr, monkeypatch, qtbot)
+    child = dock._items[f"j:{ids['S-control']}"]
+    assert batch.name == dock.tree.topLevelItem(0).text(0)
     assert "S-control_A" in child.text(0) and "S-control_B" in child.text(0)
     assert {j.id for j in dock.visible_pairs()} == {ids["S-control"], ids["S-auto"]}
     opened = []
@@ -162,9 +175,10 @@ def test_processed_pairs_are_nested_and_available_to_switch(qtbot, data, tmp_pat
     dock.open_determination(ids["S-control"])
     assert opened == [ids["S-control"]]
     opened.clear()
-    menu = dock._tree_context_menu(dock.control, dock.control.visualItemRect(child).center())
-    assert menu.actions()[0].text() == "Open in Replicates / results"
-    menu.actions()[0].trigger()
+    menu = dock._tree_context_menu(dock.tree.visualItemRect(child).center())
+    texts = [a.text() for a in menu.actions()]
+    assert "Open in Replicates / results" in texts
+    next(a for a in menu.actions() if a.text() == "Open in Replicates / results").trigger()
     assert opened == [ids["S-control"]]
     dock.search.setText("S-auto")
     assert [j.id for j in dock.visible_pairs()] == [ids["S-auto"]]
@@ -172,20 +186,198 @@ def test_processed_pairs_are_nested_and_available_to_switch(qtbot, data, tmp_pat
 
 def test_edited_accept_queues_regeneration(qtbot, data, tmp_path, monkeypatch):
     from gcws.automation import journal as J
-    from gcws.ui.docks.report2 import Report2Dock
-
     wf, jr, ids, batch = _seed(data, tmp_path)
     project = tmp_path / "pair.gcws"
     project.write_text("{}")
     jr.update_job(ids["S-control"], project_path=str(project), edited=1)
-    monkeypatch.setattr("gcws.automation.control.WatcherControl", lambda *a, **k: NoWatcher())
-    dock = Report2Dock(journal=jr)
-    qtbot.addWidget(dock)
+    dock = _dock(jr, monkeypatch, qtbot)
     dock.select(ids["S-control"])
-    assert dock.review(True, comment="")
+    assert dock.review(True)
     job = jr.job(ids["S-control"])
     assert job.state == J.QUEUED and job.review_pending
-    assert _names(dock.control) == ["S-control"] and "S-control" not in _names(dock.pending)
+    assert not dock.b_undo.isVisibleTo(dock)                   # regenerating: nothing to undo
+    assert _names(dock, "control") == ["S-control"] and "S-control" not in _names(dock, "waiting")
+
+
+def test_undo_and_next_report_needing_control(qtbot, data, tmp_path, monkeypatch):
+    from gcws.automation import journal as J
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    second = jr.ensure_job(wf.id, wf.methods()[0].id, jr.batch(wf.id, batch)["id"], "S-control2", "S-control2",
+                           ["x.D"], {}, "fp", state=J.QUEUED)
+    jr.transition(second.id, J.QUEUED, J.PROCESSING)
+    jr.transition(second.id, J.PROCESSING, J.CONTROL)
+    dock = _dock(jr, monkeypatch, qtbot)
+    dock.select(ids["S-control"])
+    assert dock.review(True)
+    assert dock.current == second.id                           # the next one needing control is selected
+    assert dock.undo() and jr.job(ids["S-control"]).state == J.CONTROL
+    assert not dock.b_undo.isVisibleTo(dock) and dock._deliver == set()
+    dock.dismiss_message()
+    assert not (tmp_path / "A" / batch.name / "S-control_NIAS_Report.xlsx").is_file()   # undone: not delivered
+    # a reject is undone the same way
+    dock.select(second.id)
+    assert dock.reject("Bad chromatography") and jr.job(second.id).state == J.REJECTED
+    assert dock.undo() and jr.job(second.id).state == J.CONTROL
+    # several at once
+    dock.set_filter("control")
+    dock.tree.selectAll()
+    assert len(dock.selected_jobs()) == 2 and "2 reports selected" in dock.title.text()
+    assert dock.review(True) and {jr.job(i).state for i in (ids["S-control"], second.id)} == {J.ACCEPTED_MANUAL}
+    assert "and 1 more" in dock.bar_text.text()
+
+
+def test_reject_reasons_menu_and_other(qtbot, data, tmp_path, monkeypatch):
+    from gcws.automation import journal as J, rules as RU
+    from gcws.ui.dialogs.report2 import ReviewDialog
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    RU.save_reject_reasons(["Too dilute", "Bad chromatography"])
+    dock = _dock(jr, monkeypatch, qtbot)
+    dock.select(ids["S-control"])
+    dock.reject_menu.aboutToShow.emit()
+    texts = [a.text() for a in dock.reject_menu.actions() if not a.isSeparator()]
+    assert texts == ["Too dilute", "Bad chromatography", "Other..."]
+    with monkeypatch.context() as m:
+        m.setattr(ReviewDialog, "exec", lambda self: (self.comment.setPlainText("smells"), 1)[1])
+        dock.reject_menu.actions()[-1].trigger()
+    assert jr.job(ids["S-control"]).state == J.REJECTED and jr.job(ids["S-control"]).comment == "smells"
+    # a rejected report can be accepted after all
+    assert dock.b_accept.isEnabled() and dock.review(True)
+    assert jr.job(ids["S-control"]).state == J.ACCEPTED_MANUAL
+
+
+def test_context_menus_of_a_sample_and_a_batch(qtbot, data, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    from gcws.automation import journal as J
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    dock = _dock(jr, monkeypatch, qtbot)
+    row = dock._items[f"j:{ids['S-control']}"]
+    menu = dock._tree_context_menu(dock.tree.visualItemRect(row).center())
+    texts = [a.text() for a in menu.actions() if not a.isSeparator()]
+    for t in ("Open report", "Open in GC Workspace", "Accept", "Accept with comment...", "Reject",
+              "Process again", "Remove from the queue...", "Deliver to the target folders now",
+              "Show history...", "Open the job folder", "Copy sample name", "Delete..."):
+        assert t in texts, t
+    assert dock.current == ids["S-control"]                    # right-click selects the row
+    top = dock.tree.topLevelItem(0)
+    menu = dock._tree_context_menu(dock.tree.visualItemRect(top).center())
+    texts = [a.text() for a in menu.actions() if not a.isSeparator()]
+    assert texts == ["Open batch report", "Open batch folder", 'Accept all "control needed" (1)...', "Reject batch",
+                     "Process batch again...", "Delete batch..."]
+    bid = top.data(0, 0x0100)
+    with monkeypatch.context() as m:
+        m.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+        assert dock.accept_batch(bid)
+        assert jr.job(ids["S-control"]).state == J.ACCEPTED_MANUAL
+        assert dock.reject_batch(bid, "Repeat measurement")
+        assert {jr.job(ids[n]).state for n in ("S-control", "S-auto")} == {J.REJECTED}
+        assert dock.reprocess_batch(bid)
+        assert jr.job(ids["S-failed"]).state == J.QUEUED and jr.job(ids["S-control"]).state == J.QUEUED
+
+
+def test_delete_hides_and_show_deleted_restores(qtbot, data, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    dock = _dock(jr, monkeypatch, qtbot)
+    dock.select(ids["S-failed"])
+    asked = []
+    with monkeypatch.context() as m:
+        m.setattr(QMessageBox, "question", lambda *a, **k: asked.append(a[2]) or QMessageBox.Yes)
+        assert dock.delete_selected() == [ids["S-failed"]]
+    assert "Nothing on disk is deleted" in asked[0]
+    assert "S-failed" not in _names(dock) and dock.chips["all"].text() == "All 4"
+    assert dock.undo() and "S-failed" in _names(dock)            # Undo restores it
+    dock.select(ids["S-failed"])
+    assert dock.delete_selected(confirm=False)
+    dock.a_show_deleted.setChecked(True)
+    row = dock._items[f"j:{ids['S-failed']}"]
+    assert row.text(1).startswith("Deleted") and row.font(0).italic()
+    dock.select(ids["S-failed"])
+    assert dock.a_restore.isEnabled() and not dock.a_delete.isEnabled()
+    assert dock.restore_selected() == [ids["S-failed"]] and not jr.job(ids["S-failed"]).deleted
+    # a whole batch
+    bid = jr.batch(wf.id, batch)["id"]
+    assert dock.delete_batch(bid, confirm=False)
+    dock.a_show_deleted.setChecked(False)
+    assert dock.tree.topLevelItemCount() == 0 and "Nothing to do" in dock.empty.text()
+    dock.a_show_deleted.setChecked(True)
+    assert dock.tree.topLevelItem(0).text(1) == "Deleted"
+    assert dock.restore_batch(bid) and len(_names(dock)) == 5
+
+
+def test_archive_and_reopen(qtbot, data, tmp_path, monkeypatch):
+    from gcws.automation import journal as J
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    for name in ("S-wait", "S-noblank", "S-failed"):
+        jr.delete([ids[name]])
+    dock = _dock(jr, monkeypatch, qtbot)
+    dock.select(ids["S-control"])
+    assert dock.review(True)
+    dock.dismiss_message()                                     # delivered: the whole batch is done
+    jr.update_job(ids["S-auto"], export_state="done")
+    dock.refresh()
+    assert dock.tree.topLevelItemCount() == 0 and "Archive" in dock.empty.text()
+    assert dock.b_archive.text() == "Archive (1)"
+    dock.set_mode("archive")
+    top = dock.tree.topLevelItem(0)
+    assert top.text(0) == batch.name and top.text(1) == "2/2 accepted" and top.text(3) == "2/2"
+    assert not top.isExpanded()                                # the archive lists batches
+    bid = top.data(0, 0x0100)
+    dock.search.setText("S-auto")                              # a sample name finds its batch
+    assert dock.tree.topLevelItem(0).isExpanded() and _names(dock) == ["S-auto"]
+    dock.search.setText("")
+    menu = dock._tree_context_menu(dock.tree.visualItemRect(dock.tree.topLevelItem(0)).center())
+    assert "Reopen" in [a.text() for a in menu.actions()]
+    assert dock.reopen_batch(bid) and dock.mode == "todo" and dock.b_todo.isChecked()
+    assert set(_names(dock)) == {"S-control", "S-auto"}
+    dock.select(ids["S-auto"])
+    assert dock.reject("Repeat measurement") and jr.job(ids["S-auto"]).state == J.REJECTED
+
+
+def test_keys_history_and_watcher(qtbot, data, tmp_path, monkeypatch):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from gcws.automation import journal as J
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    dock = _dock(jr, monkeypatch, qtbot)
+    dock.select(ids["S-control"])
+    dlg = dock.show_history()
+    try:
+        assert dlg.isVisible() and not dlg.isModal()
+        assert dlg.files.rowCount() == 2 and dlg.history.rowCount() >= 1
+    finally:
+        dlg.close()
+    dock.tree.setFocus()
+    QTest.keyClick(dock.tree, Qt.Key_A)
+    assert jr.job(ids["S-control"]).state == J.ACCEPTED_MANUAL
+    QTest.keyClick(dock.tree, Qt.Key_Z, Qt.ControlModifier)
+    assert jr.job(ids["S-control"]).state == J.CONTROL
+    dock.select(ids["S-failed"])
+    QTest.keyClick(dock.tree, Qt.Key_A)                        # not possible: nothing happens
+    assert jr.job(ids["S-failed"]).state == J.FAILED
+    with monkeypatch.context() as m:
+        m.setattr("PySide6.QtWidgets.QMessageBox.question", lambda *a, **k: 0x00010000)   # No
+        QTest.keyClick(dock.tree, Qt.Key_Delete)
+    assert not jr.job(ids["S-failed"]).deleted
+
+
+class RunningWatcher(NoWatcher):
+    def status(self, journal=None):
+        return {"state": "running", "heartbeat": 1, "current": ""}
+
+
+def test_with_a_running_watcher_the_accept_is_left_to_it(qtbot, data, tmp_path, monkeypatch):
+    from gcws.automation import journal as J
+    from gcws.ui.docks.report2 import Report2Dock
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    monkeypatch.setattr("gcws.automation.control.WatcherControl", lambda *a, **k: RunningWatcher())
+    dock = Report2Dock(journal=jr, poll_ms=60000)
+    qtbot.addWidget(dock)
+    assert dock.watcher.text() == "● Watcher running" and dock.start_btn.isHidden()
+    dock.select(ids["S-control"])
+    assert dock.review(True) and dock._deliver == set()
+    job = jr.job(ids["S-control"])
+    assert job.export_pending and job.deliver_after > time.time() and job.state == J.ACCEPTED_MANUAL
+    assert dock._items[f"j:{ids['S-control']}"].text(3) == "pending"
 
 
 def test_docks_and_menus(qtbot, win):

@@ -253,14 +253,17 @@ Described in [Unattended processing](wf-automation.md#report²-what-needs-your-c
 
 | Control | What it does |
 |---|---|
-| **Start watcher** | Shown when the watcher is not running. |
+| **To do**, **Archive** | Open batches, or those whose reports are all accepted and delivered (with the number of batches). |
 | Workflow box | **All workflows** or one of them. |
-| **Search sample or batch** | Filters the lists. |
+| Period box | **All**, **Today**, **7 days**, **30 days**, **12 months**. |
+| **Search sample or batch** | Filters the list. |
+| Chips | **All**, **Control needed**, **Accepted**, **Waiting**, **Not processed**, **Failed**, **Rejected**, **Removed**: counts; a click filters the list. |
+| Watcher chip, **Start watcher** | Whether the watcher runs; the button is shown when it does not. |
 | **Rules...** | The rules that decide *control needed*. |
-| **Control needed**, **Accepted** | The two lists of reports, grouped by batch folder. |
-| **Waiting / processing**, **Not processed / failed / rejected / removed** | Tabs with the other samples. |
-| **Accept...**, **Reject...** | Your decision on the selected report. |
+| **View** | **Show deleted reports**, **Reject reasons...**. |
+| The list | Batches with their samples (**Sample**, **Status**, **Findings**, **Delivered**, **Processed**); a sample expands to its findings. Right-click a sample or a batch for more. |
+| **Accept** | Your decision, one click; the arrow: **Accept with comment...**. |
+| **Reject** | With a reason, or **Other...** for a comment. |
 | **Open report** | Opens one of its files. |
 | **Open in GC Workspace** | Opens the sample as it was processed. |
-| **More** | **Report again from the (edited) project**, **Process again from the raw data**, **Process without a blank...**, **Remove from the queue...**, **Open the job folder**, **Deliver to the target folders now**. |
-| **Findings**, **Files**, **History** | The details of the selected report. |
+| **Undo** | Takes back the last accept, reject or delete for a few seconds. |
