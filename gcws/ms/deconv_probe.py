@@ -149,7 +149,12 @@ def _sensitive_window(ms, t0: float, t1: float, apex: float,
 def probe(ms, t0: float, t1: float, apex: float, settings: D.DeconvSettings | None = None) -> list[D.Component]:
     """The components of the peak ``t0``..``t1`` (MS time, apex ``apex``) found by the closer look."""
     from gcws.ms import deconv_probe_fast
-    comps, robust = deconv_probe_fast.probe_fast(ms, t0, t1, apex, settings)
+    try:
+        comps, robust = deconv_probe_fast.probe_fast(ms, t0, t1, apex, settings)
+    except Exception:  # noqa: BLE001 - the reference answers what the array path cannot
+        import logging
+        logging.getLogger(__name__).exception("closer look on the array engine failed; using the reference")
+        return probe_reference(ms, t0, t1, apex, settings)
     return comps if robust else probe_reference(ms, t0, t1, apex, settings)
 
 

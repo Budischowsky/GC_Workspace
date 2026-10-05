@@ -86,3 +86,15 @@ def test_fast_probe_matches_reference_on_real_runs(monkeypatch, prefix):
             assert_same(got, reference(*args))
     # what is left are genuine ties, e.g. an ion fitted to its last bit at one scan
     assert len(fallbacks) <= 0.10 * calls
+
+
+def test_probe_falls_back_when_the_fast_path_fails(monkeypatch):
+    from gcws.ms import deconv_probe_fast
+    ms = build([(200.0, MAIN, 80000.0), (204.0, SHOULDER, 15000.0)], background=False, seed=3)
+    args = (ms, RT[194], RT[212], RT[200])
+    expected = P.probe_reference(*args)
+
+    def broken(*_a, **_k):
+        raise RuntimeError("unexpected input")
+    monkeypatch.setattr(deconv_probe_fast, "probe_fast", broken)
+    assert_same(P.probe(*args), expected)

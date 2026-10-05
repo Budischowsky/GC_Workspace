@@ -428,3 +428,23 @@ def test_hits_survive_a_project_round_trip(monkeypatch):
     f.consensus_hits = []
     assert SV.consensus_needed(ws2, table, Settings()) == []
     assert f.consensus_hits == hits((*Y, 90))
+
+
+@pytest.mark.parametrize("change", [dict(mz_auto=False), dict(mz_auto=False, min_mz=50, max_mz=300),
+                                    dict(stop_score=60), "library order"])
+def test_consensus_context_follows_every_search_setting(monkeypatch, change):
+    import gc_search_method as SM
+    from gcws.features import service as SV
+    ws, _g, _t, _f = _dd(monkeypatch)
+    libs = [SM.LibraryEntry("A", True), SM.LibraryEntry("B", True)]
+    base = dict(name="M", libraries=libs, mz_auto=False, min_mz=35, max_mz=600) if change != dict(mz_auto=False) \
+        else dict(name="M", libraries=libs)
+    method = SM.SearchMethod(**base)
+    if change == "library order":
+        other = SM.SearchMethod(**dict(base, libraries=libs[::-1]))
+    else:
+        other = SM.SearchMethod(**dict(base, **change))
+    monkeypatch.setattr(SV, "search_method", lambda _ws, _members: method)
+    before = SV.consensus_context(ws, ["a", "b"])
+    monkeypatch.setattr(SV, "search_method", lambda _ws, _members: other)
+    assert SV.consensus_context(ws, ["a", "b"]) != before

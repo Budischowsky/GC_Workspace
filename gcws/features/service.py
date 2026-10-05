@@ -115,8 +115,9 @@ def consensus_context(ws, members: list[str]) -> str:
     method = search_method(ws, members)
     settings = {k: v for k, v in SM.to_api_settings(method, (1, 1), lite=True).items()
                 if k not in ("min_mz", "max_mz")}
-    return json.dumps({"method": method.name, "settings": settings, "libraries": LS.library_signature()},
-                      sort_keys=True, default=str)
+    fixed = None if method.mz_auto else [int(method.min_mz), int(method.max_mz)]    # else: the spectrum's own
+    return json.dumps({"method": method.name, "settings": settings, "range": fixed,
+                       "libraries": LS.library_signature()}, sort_keys=True, default=str)
 
 
 def consensus_cache_key(spectrum, context: str) -> str:
