@@ -23,7 +23,28 @@ from gcws.ui.undo import ValueCommand
 
 #: list columns
 L_NAME, L_N, L_OPEN = range(3)
+#: the chips' tooltips on the worksheet of a group of three or more
+SHEET_TIPS = {"red": "Identifications differ between the determinations",
+              "yellow": "Found in enough determinations, but the identification is to be reviewed",
+              "green": "Found in the determinations the validity rule asks for, identification accepted",
+              "grey": "Not reported: found in too few determinations (artefact)"}
 PAIR_PAGE, GROUP_PAGE = range(2)
+
+
+#: traffic light -> status level (the icon column)
+LEVEL_OF_LIGHT = {"red": "bad", "yellow": "warn", "green": "ok", "grey": "neutral"}
+
+
+def nfold_light(row: dict) -> str:
+    """The traffic light of a row of a group of three or more (read only: nothing to decide here)."""
+    status = (row.get("status") or "").lower()
+    if "conflict" in status:
+        return "red"
+    if status.startswith("artefact"):
+        return "grey"
+    if status.startswith("valid"):
+        return "green" if (row.get("id_status") or "") == "Accepted" else "yellow"
+    return "yellow"
 
 
 def _scrolled(widget: QWidget, vertical: bool = True) -> QScrollArea:
@@ -103,9 +124,47 @@ class ReplicatesDock(QWidget):
         self.sheet.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.sheet.setSortingEnabled(True)
         self.sheet.itemSelectionChanged.connect(self._sheet_row)
+        self.sheet.horizontalHeader().setContextMenuPolicy(Qt.CustomContextMenu)
+        self.sheet.horizontalHeader().customContextMenuRequested.connect(self._sheet_columns)
+        self._sheet_sort = (0, Qt.AscendingOrder)           # most severe first, until a header is clicked
+        self._sheet_hidden: set[str] = set()                # header texts hidden for this session
+        self.sheet.horizontalHeader().sortIndicatorChanged.connect(self._sheet_sorted)
+        self._filling = False
         self.info = QLabel()
         self.info.setObjectName("hint")
         self.info.setWordWrap(True)
+        # chips: count and filter the rows by colour, as on the double-determination page
+        from gcws.ui.docks.duplicate import FILTERS
+        from gcws.ui.widgets.chips import Chip
+        self.sheet_filter = "all"
+        self.sheet_counts: dict[str, int] = {}
+        self.sheet_chips: dict[str, Chip] = {}
+        chips = QHBoxLayout()
+        chips.setSpacing(4)
+        for key, (label, level, tip) in FILTERS.items():
+            if key == "check":
+                continue                                    # nothing is changed by hand here
+            chip = Chip()
+            chip.setToolTip(SHEET_TIPS.get(key, tip))
+            chip.clicked.connect(lambda k=key: self.set_sheet_filter(k))
+            theme.set_chip(chip, label, level)
+            self.sheet_chips[key] = chip
+            chips.addWidget(chip)
+        chips.addStretch(1)
+        # the overlay of the determinations below the worksheet
+        import pyqtgraph as pg
+        self.overlay = pg.PlotWidget()
+        self.overlay.setMenuEnabled(False)
+        self.overlay.showGrid(x=True, y=True, alpha=theme.PLOT["grid_alpha"])
+        self.overlay.getAxis("bottom").enableAutoSIPrefix(False)
+        self.overlay.getViewBox().setMouseEnabled(x=True, y=False)
+        self.overlay.setToolTip("Every determination of the group, baseline removed. Wheel or drag: time; "
+                                "double-click: the whole run")
+        self.overlay.scene().sigMouseClicked.connect(lambda ev: self._overlay_full() if ev.double() else None)
+        self._overlay_traces = []
+        self._overlay_cursor = pg.InfiniteLine(angle=90, movable=False,
+                                               pen=pg.mkPen(theme.ACCENT, width=1, style=Qt.DashLine))
+        theme.register_plot(self.overlay, lambda: self._draw_overlay() if self._group(self._group_id) else None)
         from gcws.ui.widgets.report_button import report_button
         buttons = QHBoxLayout()
         self.b_report = report_button(self, lambda: self._preview(), lambda kind: self._report(kind),
@@ -116,7 +175,12 @@ class ReplicatesDock(QWidget):
         gl = QVBoxLayout(group_page)
         gl.setContentsMargins(4, 4, 4, 4)
         gl.addWidget(self.info)
-        gl.addWidget(self.sheet, 1)
+        gl.addLayout(chips)
+        sheet_split = QSplitter(Qt.Vertical)
+        sheet_split.addWidget(self.sheet)
+        sheet_split.addWidget(self.overlay)
+        sheet_split.setSizes([360, 200])
+        gl.addWidget(sheet_split, 1)
         gl.addLayout(buttons)
 
         self.stack = QStackedWidget()
@@ -422,6 +486,10 @@ class ReplicatesDock(QWidget):
         self.rows = []
         if g is None:
             self.sheet.setColumnCount(0)
+            self.sheet_counts = {}
+            self._update_sheet_chips()
+            self.overlay.clear()
+            self._overlay_traces = []
             self.info.setText("Groups of three or more determinations show their means here. Make one with + > "
                               "Suggest or + > New... in the list.")
             return
@@ -436,40 +504,123 @@ class ReplicatesDock(QWidget):
         for k, m in enumerate(members):
             lab = replicate_label(self.ws.runs[m].run.path.name)
             letters.append(lab if lab and lab not in letters else chr(65 + k))
-        headers = ["RT", "Name", "CAS", f"Mean [{unit}]"] + [f"{letters[k]} [{unit}]" for k in range(n)] + \
+        headers = ["", "RT", "Name", "CAS", f"Mean [{unit}]"] + [f"{letters[k]} [{unit}]" for k in range(n)] + \
                   (["Rel. diff %"] if n == 2 else ["SD", "RSD %"]) + ["Status", "ID status", "Review"]
+        self._filling = True
         self.sheet.setColumnCount(len(headers))
         self.sheet.setHorizontalHeaderLabels(headers)
         names = [self.ws.runs[m].name for m in members]
         rule = POLICIES.get(g.get("policy", "all"), "")
         self.info.setText(err or f"{g['name']}: {n} determination(s) - " + ", ".join(names)
                           + (f". Valid when: {rule.lower()}." if rule else ""))
-        for row_index, r in enumerate(rows):
+        from gcws.ui.docks.duplicate import ICON, SEVERITY, SORT_ROLE, _SeverityItem
+        lights = [nfold_light(r) for r in rows]
+        self.sheet_counts = {key: sum(1 for lt in lights if key == "all" or lt == key) for key in self.sheet_chips}
+        for row_index, (r, light) in enumerate(zip(rows, lights)):
+            if self.sheet_filter != "all" and light != self.sheet_filter:
+                continue
+            level = LEVEL_OF_LIGHT[light]
             i = self.sheet.rowCount()
             self.sheet.insertRow(i)
             cs = r.get("cs") or []
-            vals = [r["rt"], r["name"], r["cas"], r["mean"]] + [cs[k] if k < len(cs) else None for k in range(n)]
+            vals = [ICON[level], r["rt"], r["name"], r["cas"], r["mean"]] + \
+                [cs[k] if k < len(cs) else None for k in range(n)]
             vals += ([r.get("reldiff")] if n == 2 else [r.get("sd"), r.get("rsd")])
             vals += [DV.english(r["status"]), DV.english(r["id_status"]), DV.english(r["review"])]
             for c, v in enumerate(vals):
-                it = QTableWidgetItem()
+                it = _SeverityItem() if c == 0 else QTableWidgetItem()
                 if isinstance(v, float):
-                    it.setData(Qt.DisplayRole, round(v, 6) if c else round(v, 4))
+                    it.setData(Qt.DisplayRole, round(v, 4) if c == 1 else round(v, 6))
                 elif v is None:
                     it.setText("")
                 else:
                     it.setText(str(v))
-                status = r["status"]
-                level = ("bad" if "conflict" in status.lower() else "neutral" if status.startswith("Artefact")
-                         else "ok" if status.startswith("Valid") else None)
-                if level:
+                if c == 0:
                     it.setBackground(theme.status_brush(level))
+                    it.setForeground(QBrush(theme.status_color(level)))
+                    it.setData(SORT_ROLE, SEVERITY.get(level, 4) * 10000.0 + float(r.get("rt") or 0.0))
+                    it.setToolTip(DV.english(r["status"]))
                 it.setData(Qt.UserRole, row_index)
                 self.sheet.setItem(i, c, it)
         self.sheet.resizeColumnsToContents()
-        self.sheet.horizontalHeader().setSectionResizeMode(1, QHeaderView.Interactive)
-        self.sheet.setColumnWidth(1, 260)
+        self.sheet.horizontalHeader().setSectionResizeMode(2, QHeaderView.Interactive)
+        self.sheet.setColumnWidth(2, 260)
+        for c in range(self.sheet.columnCount()):
+            self.sheet.setColumnHidden(c, c > 2 and self.sheet.horizontalHeaderItem(c).text() in self._sheet_hidden)
         self.sheet.setSortingEnabled(True)
+        self.sheet.sortItems(*self._sheet_sort)
+        self._filling = False
+        self._update_sheet_chips()
+        self._draw_overlay()
+
+    # -- the worksheet's chips, columns and plot ------------------------------------------------
+
+    def _update_sheet_chips(self) -> None:
+        from gcws.ui.docks.duplicate import FILTERS
+        for key, chip in self.sheet_chips.items():
+            label, level, _tip = FILTERS[key]
+            theme.set_chip(chip, f"{label} {self.sheet_counts.get(key, 0)}", level)
+            chip.setProperty("selected", key == self.sheet_filter)
+            theme._repolish(chip)
+
+    def set_sheet_filter(self, key: str) -> None:
+        """Show only the rows of one chip; the chip clicked again shows all rows."""
+        self.sheet_filter = "all" if key == self.sheet_filter or key not in self.sheet_chips else key
+        self.refresh_sheet()
+
+    def _sheet_sorted(self, column: int, order) -> None:
+        if not self._filling:
+            self._sheet_sort = (column, order)
+
+    def _sheet_columns(self, pos) -> None:
+        """Right-click on the worksheet's header: show or hide its columns (for this session)."""
+        menu = QMenu(self)
+        for c in range(3, self.sheet.columnCount()):
+            text = self.sheet.horizontalHeaderItem(c).text()
+            a = menu.addAction(text)
+            a.setCheckable(True)
+            a.setChecked(text not in self._sheet_hidden)
+            a.toggled.connect(lambda on, c=c, t=text: (self._sheet_hidden.discard(t) if on else self._sheet_hidden.add(t),
+                                                       self.sheet.setColumnHidden(c, not on)))
+        menu.exec(self.sheet.horizontalHeader().mapToGlobal(pos))
+
+    def _draw_overlay(self) -> None:
+        """Every determination of the group above the zero line, each in its run's colour."""
+        import pyqtgraph as pg
+        self.overlay.clear()
+        self._overlay_traces = []
+        g = self._group(self._group_id)
+        if g is None:
+            return
+        key = self.duplicate.quant_signal()
+        self.overlay.setLabel("bottom", f"RT ({key})", units="min")
+        self.overlay.setLabel("left", key)
+        self.overlay.addItem(self._overlay_cursor, ignoreBounds=True)
+        for rid in self._members(g):
+            tr = self.duplicate._trace(rid)
+            if tr is None:
+                continue
+            rt, y, color = tr
+            self.overlay.plot(rt, y, pen=pg.mkPen(color, width=1.2), name=self.ws.runs[rid].name)
+            self._overlay_traces.append((rt, y))
+        self._overlay_full()
+
+    def _overlay_full(self) -> None:
+        if not self._overlay_traces:
+            return
+        x0 = min(float(rt[0]) for rt, _ in self._overlay_traces)
+        x1 = max(float(rt[-1]) for rt, _ in self._overlay_traces)
+        self._overlay_zoom(x0, x1)
+
+    def _overlay_zoom(self, x0: float, x1: float) -> None:
+        import numpy as np
+        self.overlay.setXRange(x0, x1, padding=0.01)
+        top = 0.0
+        for rt, y in self._overlay_traces:
+            m = (rt >= x0) & (rt <= x1)
+            if m.any():
+                top = max(top, float(np.percentile(y[m], 99.5)) if x1 - x0 > 3 else float(y[m].max()))
+        self.overlay.setYRange(0, 1.1 * (top or 1.0), padding=0)
 
     def _sheet_row(self):
         items = self.sheet.selectedItems()
@@ -479,6 +630,10 @@ class ReplicatesDock(QWidget):
         k = items[0].data(Qt.UserRole)
         if k is None or not (0 <= k < len(self.rows)):
             return
+        rt = self.rows[k].get("rt")
+        if rt is not None:
+            self._overlay_cursor.setPos(rt)
+            self._overlay_zoom(rt - 0.4, rt + 0.4)
         self.duplicate.members = self._members(g)
         self.duplicate._navigate(self.rows[k])
 
@@ -501,10 +656,10 @@ class ReplicatesDock(QWidget):
         wb = Workbook()
         sh = wb.active
         sh.title = "Replicates"
-        sh.append([self.sheet.horizontalHeaderItem(c).text() for c in range(self.sheet.columnCount())])
+        sh.append([self.sheet.horizontalHeaderItem(c).text() for c in range(1, self.sheet.columnCount())])
         for r in range(self.sheet.rowCount()):
             row = []
-            for c in range(self.sheet.columnCount()):
+            for c in range(1, self.sheet.columnCount()):
                 it = self.sheet.item(r, c)
                 v = it.data(Qt.DisplayRole) if it else None
                 row.append(excel_safe(v))

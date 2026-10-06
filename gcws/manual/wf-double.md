@@ -109,6 +109,10 @@ to the pairing by name and retention time of earlier versions.
 ## Three or more determinations
 
 Select a group of three or more in the list **Determinations** on the left: its worksheet shows the means.
+The colours are those of the pair page - **Red**: the determinations name the substance differently;
+**Yellow**: found often enough, but the identification is to be reviewed; **Green**: found as the validity
+rule asks and identified; **Grey**: found in too few determinations, not reported. The chips filter the
+rows, and the chromatograms of all determinations are drawn on top of each other below the worksheet.
 **More > 3+ determinations…** and **Quantify > Replicate groups (N-fold)** go there too.
 
 | In the list | What it does |

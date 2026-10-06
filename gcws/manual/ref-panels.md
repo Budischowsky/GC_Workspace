@@ -254,8 +254,12 @@ integrated peak shaded in each, and the two spectra, mirrored the same way (feat
 dot selects its substance. **Plots** (beside the summary line) hides or shows them.
 
 The worksheet of a group of three or more: the averaged results (the line above it names the determinations
-and the validity rule), and **Report preview** with the other reports and **Export worksheet...** under its
-arrow.
+and the validity rule), the chips **All**, **Red**, **Yellow**, **Green** and **Grey** that count and filter
+the rows, an icon column in the same order as on the double-determination page (red first; a click on a
+column header sorts by it), and below it the chromatograms of all determinations on top of each other in
+their colours. Clicking a row zooms there and opens the peak. A right-click on the header shows or hides
+columns. **Report preview** has the other reports and **Export worksheet...** under its arrow. The
+worksheet is for reading: names and values are changed in the determinations themselves.
 
 ## Automation
 

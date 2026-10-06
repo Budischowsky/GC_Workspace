@@ -1693,6 +1693,17 @@ def test_replicates_list_of_determinations(qtbot, win, samples):
     dock.list.setCurrentItem(g3)
     assert dock.stack.currentIndex() == 1 and dock.sheet.rowCount() > 0 and "3 determination" in dock.info.text()
     assert dock.current_group()["id"] == "g3"
+    # the worksheet looks like the pair page: chips, an icon column in severity order, the overlay
+    from gcws.ui.docks.duplicate import ICON, SORT_ROLE
+    keys = [dock.sheet.item(r, 0).data(SORT_ROLE) for r in range(dock.sheet.rowCount())]
+    assert keys == sorted(keys) and len(dock._overlay_traces) == 3
+    counts = dock.sheet_counts
+    assert counts["all"] == dock.sheet.rowCount() == sum(counts[k] for k in ("red", "yellow", "green", "grey"))
+    dock.set_sheet_filter("green")
+    assert {dock.sheet.item(r, 0).text() for r in range(dock.sheet.rowCount())} <= {ICON["ok"]}
+    assert dock.sheet.rowCount() == counts["green"]
+    dock.set_sheet_filter("green")
+    assert dock.sheet_filter == "all" and dock.sheet.rowCount() == counts["all"]
     # its validity rule from the list's menu, undoable
     dock.set_policy("majority")
     assert next(g for g in ws.replicate_groups if g["id"] == "g3")["policy"] == "majority"
