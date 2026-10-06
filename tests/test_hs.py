@@ -66,6 +66,96 @@ def test_blank_correction_and_istd_protection():
     assert result.rows[st.id][0]["conc"] == 1
 
 
+def external_workspace(*areas):
+    """Samples without ISTD plus one Standard run per entry of ``areas`` (the area of every HS standard)."""
+    ws = workspace()
+    ws.quant["hs"]["calibration"] = "external"
+    sample = ws.runs["sample"]
+    sample.results = {"TIC": SimpleNamespace(peaks=[copy.copy(sample.results["TIC"].peaks[7])])}
+    sample.ident_set = lambda _: IdentificationSet([Identification(8.1, name="Analyte", status="Accepted")])
+    states = [sample]
+    for n, area in enumerate(areas):
+        st = copy.copy(workspace().runs["sample"])
+        st.id, st.name, st.role = f"std{n}", f"Std {n + 1}", "standard"
+        for p in st.results["TIC"].peaks[:7]:
+            p.area = area
+        ws.runs[st.id] = st
+        states.append(st)
+    ws.states = lambda: states
+    return ws
+
+
+def test_external_calibration_averages_standard_runs():
+    ws = external_workspace(80, 120)
+    result = compute(ws)
+    assert not result.errors
+    sample = result.samples["sample"]
+    assert sample.mean_factor == pytest.approx(7 / 700)            # Σ 1 µg ÷ Σ mean area 100
+    assert result.rows["sample"][0]["conc"] == pytest.approx(2)     # area 200 → 2 µg/HS
+    assert result.rows["sample"][0]["istd"] == ""
+    assert [s["area"] for s in sample.standards] == pytest.approx([100] * 7)
+    assert sample.standards[0]["status"] == "Mean of 2 Standard runs"
+    assert sample.meta["calculation"].startswith("External 1-point calibration")
+    assert "Std 1, Std 2" in sample.meta["calculation"]
+    # a Standard run shows its own standards and is quantified with the common factor
+    std = result.samples["std0"]
+    assert [s["area"] for s in std.standards] == [80] * 7
+    assert result.rows["std0"][0]["istd"] == "HS1"
+    assert result.rows["std0"][7]["conc"] == pytest.approx(2)
+
+
+def test_external_calibration_single_standard_and_weights():
+    ws = external_workspace(100)
+    ws.runs["std0"].results["TIC"].peaks[1].area = 50
+    ws.quant["hs"]["istd_defs"][1]["concentration"] = 2
+    for d in ws.quant["hs"]["istd_defs"]:
+        d["quantify"] = d["code"] == "HS2"
+    ws.quant["hs"]["use_mean_area"] = False
+    result = compute(ws)
+    assert result.rows["sample"][0]["conc"] == pytest.approx(8)       # 200 × 2 µg ÷ 50
+
+
+def test_external_calibration_needs_every_standard_in_every_run():
+    ws = external_workspace(100, 100)
+    ws.quant["hs"]["istd_bindings"] = {"std1": {"HS3": None}}
+    result = compute(ws)
+    assert "Identify or bind HS3 in Standard run Std 2" in result.errors["sample"]
+    assert result.rows["sample"][0]["conc"] is None
+    assert result.samples["sample"].standards[2]["status"] == "Not found in Std 2"
+    ws.quant["hs"]["istd_defs"][2]["quantify"] = False                # an inactive standard may be missing
+    assert not compute(ws).errors
+
+
+def test_external_calibration_without_standard_run():
+    ws = external_workspace()
+    result = compute(ws)
+    assert result.errors["sample"] == "Mark at least one run as Standard for external calibration"
+    assert result.rows["sample"][0]["conc"] is None
+    ws.quant["hs"]["calibration"] = "internal"
+    assert "Identify or bind" in compute(ws).errors["sample"]          # the internal mode looks in the sample
+
+
+def test_external_calibration_blank_and_report(tmp_path):
+    from gcws.report.service import ReportJob, generate
+    from gcws.quant.nias_bridge import make_settings
+    from openpyxl import load_workbook
+    ws = external_workspace(100)
+    blank = copy.copy(ws.runs["sample"])
+    blank.id, blank.name, blank.role = "blank", "Blank", "blank"
+    blank.results = copy.deepcopy(blank.results)
+    blank.results["TIC"].peaks[0].area = 50
+    ws.runs["sample"].blanks = ["blank"]
+    ws.runs["blank"] = blank
+    result = compute(ws)
+    assert result.rows["sample"][0]["conc"] == pytest.approx(1.5)
+    job = ReportJob("hs_screening", [result.samples["sample"]], ["Sample"], make_settings(),
+                    tmp_path / "HS.xlsx", tmp_path / "HS.docx", None, record_seen=False)
+    wb = load_workbook(generate(job).target)
+    assert wb["HS Result"]["E6"].value == pytest.approx(1.5)
+    assert wb["HS calculation"]["G2"].value.startswith("External 1-point calibration")
+    assert wb["HS standards"]["H2"].value == "Mean of 1 Standard run"
+
+
 @pytest.mark.parametrize("bad", [None, 0, -1, float("nan"), float("inf")])
 def test_invalid_normalization_never_produces_result(bad):
     ws = workspace()
@@ -146,6 +236,27 @@ def test_hs_ui_switch_and_project(qtbot, tmp_path):
     ws.project_undo.undo()
     assert ws.quant == original
     assert ws.panel_keys == ["FID", "TIC"]
+
+
+def test_hs_panel_calibration_choice(qtbot):
+    from gcws.ui.workspace import Workspace
+    from gcws.ui.docks.quant import QuantDock
+    ws = Workspace()
+    dock = QuantDock(ws)
+    qtbot.addWidget(dock)
+    dock.mode.setCurrentIndex(dock.mode.findData("hs_screening"))
+    dock._mode_changed()
+    panel = dock.hs_panel
+    assert panel.calibration.currentData() == "internal"
+    panel.calibration.setCurrentIndex(panel.calibration.findData("external"))
+    panel.save_inputs()
+    assert ws.quant["hs"]["calibration"] == "external"
+    panel.refresh()
+    assert "Standard runs" in panel.note.text()
+    assert not panel.bind_buttons[1].isEnabled()           # no run loaded: nothing to bind
+    ws.project_undo.undo()
+    panel.refresh()
+    assert panel.calibration.currentData() == "internal"
 
 
 def test_hs_full_window_qgd(qtbot, monkeypatch, tmp_path):

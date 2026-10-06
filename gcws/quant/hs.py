@@ -63,6 +63,55 @@ def matched_standards(st, config):
     return result
 
 
+def external(cfg) -> bool:
+    """External 1-point calibration: the standards are in the Standard runs, not in the samples."""
+    return cfg.get("calibration") == "external"
+
+
+def factor(active, cfg, missing="Identify or bind every activated HS standard"):
+    """µg per area count from the activated standards: Σ amount ÷ Σ area, and the problems that prevent it."""
+    problems = []
+    if not active:
+        problems.append("Activate at least one HS internal standard")
+    if any(s["area"] is None for s in active):
+        problems.append(missing)
+    if not cfg.get("use_mean_area", True) and len(active) != 1:
+        problems.append("Single-standard calculation requires exactly one activated HS standard")
+    if problems:
+        return None, problems
+    amounts = [positive(s.get("concentration"), f"amount for {s['code']} (µg/HS)") for s in active]
+    areas = [positive(s["area"], f"TIC area for {s['code']}") for s in active]
+    return sum(amounts) / sum(areas), []
+
+
+def calibration(ws, cfg):
+    """Each HS standard's TIC area averaged over every Standard run: (standards, factor, problems, run names)."""
+    runs = [st for st in ws.states() if st.role == "standard"]
+    if not runs:
+        return [], None, ["Mark at least one run as Standard for external calibration"], []
+    problems, matched = [], []
+    for st in runs:
+        if TIC not in st.results:
+            problems.append(f"Standard run {st.name} has no integrated TIC")
+        else:
+            matched.append((st.name, matched_standards(st, cfg)))
+    standards, missing = [], []
+    for k, d in enumerate(cfg.get("istd_defs", default_defs())):
+        found = [m[k] for _, m in matched if m[k]["index"] is not None]
+        lost = [name for name, m in matched if m[k]["index"] is None]
+        complete = bool(found) and not lost
+        n = len(found)
+        status = f"Mean of {n} Standard run{'s' if n != 1 else ''}" if complete else             f"Not found in {', '.join(lost)}" if lost else "No Standard run with a TIC"
+        standards.append(dict(d, index=None, status=status, runs=n,
+                              rt=sum(s["rt"] for s in found) / n if complete else None,
+                              area=sum(s["area"] for s in found) / n if complete else None))
+        if lost and d.get("quantify", True):
+            missing.append(f"Identify or bind {d['code']} in Standard run {', '.join(lost)}")
+    active = [s for s in standards if s.get("quantify", True)]
+    value, more = factor(active, cfg, "; ".join(missing) or "Identify or bind every activated HS standard")
+    return standards, value if not problems else None, problems + more, [st.name for st in runs]
+
+
 @dataclass
 class HSRow:
     rt: float
@@ -88,6 +137,11 @@ def compute(ws):
     out = QuantResult()
     cfg = ws.quant.get("hs", {})
     unit = cfg.get("unit", UNITS[0])
+    if external(cfg):
+        try:
+            cal = calibration(ws, cfg)
+        except (ValueError, TypeError, KeyError) as exc:
+            cal = [], None, [str(exc)], []
     for st in ws.states():
         if st.role not in ("sample", "standard"):
             continue
@@ -96,19 +150,15 @@ def compute(ws):
                 raise ValueError("HS-Screening requires an integrated TIC")
             sample = HSSample(st.name)
             out.samples[st.id] = sample
-            sample.standards = matched_standards(st, cfg)
-            active = [s for s in sample.standards if s.get("quantify", True)]
-            problems = []
-            if not active:
-                problems.append("Activate at least one HS internal standard")
-            if any(s["index"] is None for s in active):
-                problems.append("Identify or bind every activated HS standard")
-            if not cfg.get("use_mean_area", True) and len(active) != 1:
-                problems.append("Single-standard calculation requires exactly one activated HS standard")
-            if not problems:
-                amounts = [positive(s.get("concentration"), f"amount for {s['code']} (µg/HS)") for s in active]
-                areas = [positive(s["area"], f"TIC area for {s['code']}") for s in active]
-                sample.mean_factor = sum(amounts) / sum(areas)
+            if external(cfg):
+                # A Standard run shows its own standards (to check and bind); a sample has none of them.
+                averaged, sample.mean_factor, problems, cal_runs = cal
+                problems = list(problems)
+                sample.standards = matched_standards(st, cfg) if st.role == "standard" else averaged
+            else:
+                sample.standards = matched_standards(st, cfg)
+                active = [s for s in sample.standards if s.get("quantify", True)]
+                sample.mean_factor, problems = factor(active, cfg)
             amount_valid = not problems
             inputs = cfg.get("samples", {}).get(st.id, {})
             normalizers = {}
@@ -128,7 +178,7 @@ def compute(ws):
                     problems.append(str(exc))
             sample.meta = dict(unit=unit, inputs=dict(inputs), source=str(st.run.path),
                                factor=sample.mean_factor, denominator=denominator,
-                               calculation="Mean ISTD areas" if cfg.get("use_mean_area", True) else "Single ISTD",
+                               calculation=calculation(cfg, cal_runs if external(cfg) else ()),
                                blank_correction=cfg.get("blank_correction", True),
                                blanks=[ws.runs[b].name for b in st.blanks + st.blanks_istd if b in ws.runs])
             if problems:
@@ -174,6 +224,14 @@ def compute(ws):
         except (ValueError, TypeError, KeyError) as exc:
             out.errors[st.id] = str(exc)
     return out
+
+
+def calculation(cfg, runs=()):
+    """The calculation as the report's HS calculation sheet names it."""
+    text = "Mean ISTD areas" if cfg.get("use_mean_area", True) else "Single ISTD"
+    if external(cfg):
+        return f"External 1-point calibration ({text}) from {len(runs)} Standard run" +             ("s" if len(runs) != 1 else "") + (f": {', '.join(runs)}" if runs else "")
+    return text
 
 
 def engine_peaks(sample, value=None):

@@ -123,6 +123,24 @@ the program opens this window if they are missing.
 Calculation: corrected TIC area × mean ISTD amount ÷ mean ISTD TIC area. These are screening estimates; the
 response of every substance is taken to be that of the standards.
 
+#### External calibration
+
+When the samples contain no ISTD, the same seven standards are measured in separate calibration vials (the ISTD
+mix) - a 1-point calibration.
+
+1. Set **Calibration** to **External (Standard runs)**.
+2. Give every calibration vial the role **Standard** in the sample rail.
+3. Open each Standard run and check that the seven standards are found; bind them there if needed. Binding is
+   only possible in Standard runs.
+
+Each standard's TIC area is averaged over all Standard runs; the factor is Σ µg ÷ Σ mean areas of the activated
+standards (with one active standard: its µg ÷ its mean area). Every TIC peak of a sample is quantified as
+corrected area × factor; blank correction and the units work as above. An activated standard missing in any
+Standard run stops the calculation, and the message names the run. The HS report lists the averaged standards and
+the calibration runs.
+
+To keep this setup, save it with **Method > Save current settings as Method...** (e.g. "HS external").
+
 ## Where the results are
 
 The peak table shows **Conc.** in the unit of the mode, **Corr. area** (after the blank correction), **ISTD**

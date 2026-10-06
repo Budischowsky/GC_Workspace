@@ -6,7 +6,12 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QFormLayout, QComboBox, QDo
                                QLabel, QTableWidget, QTableWidgetItem, QHeaderView,
                                QPushButton, QHBoxLayout, QCheckBox, QMessageBox)
 
-from gcws.quant.hs import UNITS, default_defs
+from gcws.quant.hs import UNITS, default_defs, external
+
+CALIBRATIONS = (("internal", "Internal standards in each sample"), ("external", "External (Standard runs)"))
+NOTES = {"internal": "TIC area ÷ mean activated ISTD area × mean ISTD amount = µg/HS.\n",
+         "external": "TIC area ÷ mean ISTD area of the Standard runs × mean ISTD amount = µg/HS.\n"
+                     "Mark the calibration vials (ISTD mix) as Standard; the samples contain no ISTD.\n"}
 
 
 class HSQuantPanel(QWidget):
@@ -14,12 +19,15 @@ class HSQuantPanel(QWidget):
         super().__init__(parent)
         self.ws, self.loading = ws, False
         layout = QVBoxLayout(self)
-        note = QLabel("TIC area ÷ mean activated ISTD area × mean ISTD amount = µg/HS.\n"
-                      "Divide by sample area (dm²) or mass (g) for normalized results.\n"
-                      "Define seven standards; their default amount is 1 µg per vial.")
+        self.note = note = QLabel()
         note.setWordWrap(True)
         layout.addWidget(note)
         form = QFormLayout()
+        self.calibration = QComboBox()
+        for key, label in CALIBRATIONS:
+            self.calibration.addItem(label, key)
+        self.calibration.activated.connect(self.save_inputs)
+        form.addRow("Calibration", self.calibration)
         self.unit = QComboBox()
         self.unit.addItems(UNITS)
         self.unit.activated.connect(self.save_inputs)
@@ -54,12 +62,14 @@ class HSQuantPanel(QWidget):
         row = QHBoxLayout()
         self.codes = QComboBox()
         row.addWidget(self.codes)
+        self.bind_buttons = [self.codes]
         for label, fn in (("Bind selected TIC peak", lambda: self.bind()), ("Unbind", lambda: self.binding(None)),
                           ("Automatic", lambda: self.binding(...)), ("Detect...", self._detect),
                           ("Learn spectrum", self._learn)):
             button = QPushButton(label)
             button.clicked.connect(fn)
             row.addWidget(button)
+            self.bind_buttons.append(button)
         layout.addLayout(row)
         self.status = QLabel()
         self.status.setWordWrap(True)
@@ -89,11 +99,19 @@ class HSQuantPanel(QWidget):
     def refresh(self):
         self.loading = True
         cfg = self.config()
+        ext = external(cfg)
+        self.calibration.setCurrentIndex(self.calibration.findData("external" if ext else "internal"))
+        self.note.setText(NOTES["external" if ext else "internal"] +
+                          "Divide by sample area (dm²) or mass (g) for normalized results.\n"
+                          "Define seven standards; their default amount is 1 µg per vial.")
         self.unit.setCurrentText(cfg.get("unit", UNITS[0]))
         self.mean.setChecked(cfg.get("use_mean_area", True))
         self.blank.setChecked(cfg.get("blank_correction", True))
         st = self.ws.active
         self.sample_name.setText(st.name if st else "Load a sample")
+        # External calibration: the standards are bound in the Standard runs only.
+        for w in self.bind_buttons:
+            w.setEnabled(not ext or (st is not None and st.role == "standard"))
         inputs = cfg.get("samples", {}).get(st.id, {}) if st else {}
         for key, box in (("area_dm2", self.area), ("mass_g", self.mass)):
             box.setEnabled(st is not None)
@@ -124,7 +142,15 @@ class HSQuantPanel(QWidget):
                     item = QTableWidgetItem("" if val is None else str(val))
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                     self.bound.setItem(r, c, item)
-            self.status.setText(result.errors.get(st.id) or f"ISTD factor: {sample.mean_factor:.6g} µg/area")
+            if result.errors.get(st.id):
+                text = result.errors[st.id]
+            elif ext:
+                runs = max((s.get("runs", 0) for s in sample.standards), default=0) if st.role != "standard" else 0
+                text = f"External factor: {sample.mean_factor:.6g} µg/area" + \
+                    (f" (mean of {runs} Standard run{'s' if runs != 1 else ''})" if runs else "")
+            else:
+                text = f"ISTD factor: {sample.mean_factor:.6g} µg/area"
+            self.status.setText(text)
         else:
             self.status.setText("Load and integrate a sample TIC to quantify HS screening.")
         self.loading = False
@@ -134,6 +160,7 @@ class HSQuantPanel(QWidget):
             return
         cfg = copy.deepcopy(self.config())
         cfg.update(unit=self.unit.currentText(), use_mean_area=self.mean.isChecked(),
+                   calibration=self.calibration.currentData(),
                    blank_correction=self.blank.isChecked())
         if self.ws.active:
             cfg.setdefault("samples", {})[self.ws.active.id] = dict(area_dm2=self.area.value(), mass_g=self.mass.value())
