@@ -155,7 +155,7 @@ def restore_layout(win, name: str) -> bool:
     geo = s.value(f"layouts/{name}/geometry")
     if isinstance(geo, QByteArray):
         win.restoreGeometry(geo)
-    win.sidebar.expand()
+    win.sidebar.expand_all()
     restored = bool(win.restoreState(state, LAYOUT_VERSION))
     if restored:
         place_missing(win, state)

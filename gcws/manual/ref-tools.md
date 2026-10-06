@@ -115,6 +115,7 @@ Right-click the title bar of a panel, its strip on the right edge, or its tab:
 | **Detach** / **Dock back** | Makes the panel a window of its own, or puts it back into the main window. |
 | **Detach to screen 2** (3, ...) | Only with more than one screen: detaches the panel straight onto that screen, centred and sized to fit it. |
 | **Move to** ▸ **Left side**, **Right side**, **Top**, **Bottom** | Docks the panel along that whole side of the window. |
+| **Collapse to the side** | Hides the panel behind a button with its name on a narrow strip along its side of the window; click the button to bring the panel back. The View menu, `Ctrl+1` ... `Ctrl+9` and a layout preset bring it back as well. Collapsed panels are remembered with the layout. |
 | **Close other tabs** | Only for a panel in a group of tabs: hides the other panels of the group. |
 | **Close** | Hides the panel. |
 

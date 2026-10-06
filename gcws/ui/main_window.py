@@ -231,6 +231,8 @@ class MainWindow(QMainWindow):
             for label, area in (("Left side", Qt.LeftDockWidgetArea), ("Right side", Qt.RightDockWidgetArea),
                                 ("Top", Qt.TopDockWidgetArea), ("Bottom", Qt.BottomDockWidgetArea)):
                 move.addAction(label, lambda a=area: self.move_panel(dock, a))
+        if not dock.isFloating() and not dock.isHidden():
+            m.addAction("Collapse to the side", lambda: (self.restore_maximized(), self.sidebar.collapse_panel(dock)))
         others = [] if dock.isFloating() else [o for o in self.tabifiedDockWidgets(dock)
                                                 if not o.isHidden() and not o.isFloating()]
         if others and dock.features() & QDockWidget.DockWidgetClosable:
@@ -707,7 +709,7 @@ class MainWindow(QMainWindow):
         if self._maximized is not None and self._maximized[0] is not d:
             self.restore_maximized()            # else the panel would appear beside the maximized one
         if self.sidebar.contains(d):
-            self.sidebar.expand()
+            self.sidebar.reveal(d)
         hidden = not d.isVisible()              # closed, or behind another tab
         d.show()
         d.raise_()
@@ -2086,7 +2088,7 @@ class MainWindow(QMainWindow):
             self.delete_layouts_menu.addAction(n, lambda n=n: self.delete_saved_layout(n))
 
     def apply_preset(self, name):
-        self.sidebar.expand()
+        self.sidebar.expand_all()
         self.restore_maximized()
         presets.apply_preset(self, name)
         presets.set_current("preset", name)

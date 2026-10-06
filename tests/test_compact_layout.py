@@ -595,3 +595,47 @@ def test_go_to_panel_keys_and_switcher(qtbot, win):
     assert "Audit trail   (closed)" in texts and len(texts) == len(win.docks)
     QTest.keyClick(win.switcher, Qt.Key_Escape)
     win.apply_preset("Chromatogram top")
+
+
+def test_collapse_any_panel_to_its_side(qtbot, win):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+    from gcws.ui.layout import presets
+    from gcws.ui.main_window import MainWindow
+    win.apply_preset("Table left (classic)")
+    QApplication.processEvents()
+    qtbot.wait(20)
+    sb = win.sidebar
+    props, spec = win.docks["props"], win.docks["spectrum"]
+    labels = {a.text(): a for a in win.panel_menu(spec).actions()}
+    width = spec.width()
+    labels["Collapse to the side"].trigger()
+    QApplication.processEvents()
+    assert spec.isHidden() and sb.strips[Qt.RightDockWidgetArea].isVisible()
+    assert not sb.restore_button.isVisible()                      # Folders itself is not collapsed
+    props.raise_()
+    sb.collapse_panel(props)
+    assert props.isHidden() and sb.strip.isVisible() and sb.contains(props)
+    # the button brings it back at about its width
+    button = sb.strips[Qt.RightDockWidgetArea].widgetForAction(sb.panels[spec.objectName()]["action"])
+    button.click()
+    QApplication.processEvents()
+    qtbot.wait(20)
+    assert spec.isVisible() and abs(spec.width() - width) < 30 and not sb.contains(spec)
+    assert not sb.strips[Qt.RightDockWidgetArea].isVisible()
+    # a command or key reveals it too
+    win._show_dock("props")
+    assert props.isVisible() and not sb.panels
+    # remembered with the session
+    sb.collapse_panel(props)
+    win.close()
+    other = MainWindow()
+    qtbot.addWidget(other)
+    other.show()
+    QApplication.processEvents()
+    try:
+        assert other.docks["props"].isHidden() and other.sidebar.contains(other.docks["props"])
+        other.apply_preset("Chromatogram top")                   # a preset brings everything back
+        assert not other.sidebar.panels and not other.docks["props"].isHidden()
+    finally:
+        other.close()
