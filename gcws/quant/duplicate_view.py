@@ -290,6 +290,14 @@ def limits(ws) -> tuple[float, float]:
     return limit, rl
 
 
+def default_limit(ws) -> float:
+    """The difference limit (%) a new method starts with."""
+    if ws.quant.get("mode") == "hs_screening":
+        return 30.0
+    import gc_duplicate as GD
+    return float(GD.DEFAULT_MAX_RELDIFF)
+
+
 # -- analyst edits (double determination -> report) ----------------------------------------------
 #
 # The analyst can change the areas and concentrations of a pair, its mean, add a comment and decide

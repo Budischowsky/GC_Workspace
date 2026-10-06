@@ -164,9 +164,10 @@ class DuplicatePage(QWidget):
             self.chips[key] = chip
             lim.addWidget(chip)
         lim.addStretch(1)
-        lim.addWidget(QLabel("Accept a difference up to"))
+        lim.addWidget(QLabel("Difference limit"))
         lim.addWidget(self.limit)
-        lim.addWidget(theme.hint("(report parameter)", False))
+        self.limit_chip = theme.chip("report parameter", "info")
+        lim.addWidget(self.limit_chip)
 
         self.banner = ElidedLabel()               # one line; the whole text is its tooltip
         self.banner.setObjectName("chip")
@@ -317,9 +318,7 @@ class DuplicatePage(QWidget):
             self._select(self.b, cur_b if (cur_b in ids or cur_b == "") else DV.suggest_partner(self.ws, cur_a))
         elif ids:
             self.set_pair(self._default_a())
-        self.limit.blockSignals(True)
-        self.limit.setValue(DV.limits(self.ws)[0])
-        self.limit.blockSignals(False)
+        self.show_limit()
 
     def _default_a(self):
         act = self.ws.active
@@ -393,9 +392,7 @@ class DuplicatePage(QWidget):
         of the feature table recomputes the quantification itself), and once for several changes."""
         if self.isVisible() and self.members:
             self._refresh.start()
-        self.limit.blockSignals(True)
-        self.limit.setValue(DV.limits(self.ws)[0])
-        self.limit.blockSignals(False)
+        self.show_limit()
 
     def labels(self):
         from gcws.io.sequence import replicate_label
@@ -1432,6 +1429,19 @@ class DuplicatePage(QWidget):
 
     # -- output ------------------------------------------------------------------------------------
 
+    def show_limit(self) -> None:
+        """The limit of the quantification settings; marked when it is not the default."""
+        value, default = DV.limits(self.ws)[0], DV.default_limit(self.ws)
+        self.limit.blockSignals(True)
+        self.limit.setValue(value)
+        self.limit.blockSignals(False)
+        changed = abs(value - default) > 1e-9
+        self.limit.setProperty("changed", changed)
+        theme.set_chip(self.limit_chip, f"report parameter · default {default:g} %" if changed else "report parameter",
+                       "warn" if changed else "info")
+        self.limit_chip.setToolTip("Duplicate difference limit of the report settings: every report of this "
+                                   "project uses it" + (f". The default is {default:g} %." if changed else "."))
+
     def _limit_changed(self):
         from gcws.quant.nias_bridge import make_settings, settings_dict
         new = float(self.limit.value())
@@ -1441,11 +1451,13 @@ class DuplicatePage(QWidget):
         if q.get("mode") == "hs_screening":
             q.setdefault("hs", {})["duplicate_max_reldiff"] = new
             self.ws.push_quant(f"HS duplicate difference limit = {new:g} %", q)
+            self.ws.message.emit(f"Difference limit is a report parameter: every report now uses {new:g} %.")
             return
         s = make_settings(q.get("settings"))
         s.duplicate_max_reldiff = new
         q["settings"] = settings_dict(s)
         self.ws.push_quant(f"duplicate difference limit = {new:g} %", q)
+        self.ws.message.emit(f"Difference limit is a report parameter: every report now uses {new:g} %.")
 
     def _report(self, kind, preview=False):
         self._sync_group(self.members)

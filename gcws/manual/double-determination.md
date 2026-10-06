@@ -172,7 +172,7 @@ Every substance gets a colour, so that you only have to look at the exceptions.
 | **Red** | Your decision: found in one determination only and not detectable in the other, different spectra at the same time, one peak here and two there, an ambiguous pairing, or a difference above 1.5 times the limit. | Decide. |
 | **Grey** | Not reported anyway: below the reporting limit, or at blank level. | Nothing. |
 
-The limit is **Accept a difference up to** at the top of the tab (30 % unless changed). It is the same number
+The limit is **Difference limit** at the top of the tab (30 % unless changed). It is the same number
 as the report parameter *Duplicate difference limit*: changing it here changes the report too.
 
 The **Red** chip and `F3` (next open red row) lead you through the decisions. **To check** adds the yellow

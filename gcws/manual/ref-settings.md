@@ -149,7 +149,7 @@ The choices of the search start window are remembered:
 All settings with their defaults are in
 [How the double determination works](double-determination.md#settings).
 
-**Accept a difference up to** (the difference limit, 30 % unless changed) is a NIAS report parameter and is
+**Difference limit** (the difference limit, 30 % unless changed) is a NIAS report parameter and is
 set at the top of the **Double determination** tab.
 
 ## Quantification

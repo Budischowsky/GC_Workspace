@@ -396,11 +396,16 @@ def test_double_determination_from_tab_menu(qtbot, win, samples):
     win.a_redo.trigger()
     if auto:
         win.a_redo.trigger()
-    # the difference limit is the report parameter
+    # the difference limit is the report parameter: said when it changes, marked when not the default
+    assert not page.limit.property("changed") and page.limit_chip.text() == "report parameter"
+    said = []
+    ws.message.connect(said.append)
     page.limit.setValue(12.5)
     page._limit_changed()
     from gcws.quant.duplicate_view import limits
     assert limits(ws)[0] == pytest.approx(12.5)
+    assert any("every report now uses 12.5 %" in t for t in said)
+    assert page.limit.property("changed") and "default 30 %" in page.limit_chip.text()
     # the "To check" chip hides the confirmed rows; clicked again it shows all
     page.set_filter("check")
     assert page.table.rowCount() == page.counts["check"] <= len(page.rows)

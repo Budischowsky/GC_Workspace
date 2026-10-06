@@ -87,9 +87,10 @@ of this double determination.
 
 ## The limit
 
-**Accept a difference up to** is the largest relative difference between A and B (as a percentage of their
-mean) that counts as agreement. It is the report parameter *Duplicate difference limit* - changing it here
-changes the report too.
+**Difference limit** is the largest relative difference between A and B (as a percentage of their mean)
+that counts as agreement. It is the report parameter *Duplicate difference limit* - changing it here changes
+every report of the project, and the status bar says so. The chip beside it reads **report parameter**; when
+the value is not the default it turns yellow and shows the default.
 
 ## Report
 
