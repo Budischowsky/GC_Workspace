@@ -158,8 +158,48 @@ def restore_layout(win, name: str) -> bool:
     win.sidebar.expand()
     restored = bool(win.restoreState(state, LAYOUT_VERSION))
     if restored:
+        place_missing(win, state)
+        ensure_on_screen(win)
         win.restore_view_preferences(f"layouts/{name}")
     return restored
+
+
+def place_missing(win, state) -> list[str]:
+    """Panels the saved state does not know (added in a later version) go to their usual tab group;
+    Qt would leave them wherever the previous arrangement had them."""
+    raw = bytes(state)
+    placed = []
+    for key, dock in win.docks.items():
+        if dock.objectName().encode("utf-16-be") in raw:
+            continue
+        anchor = win.docks.get(home(key))
+        dock.setFloating(False)
+        if anchor is not None and anchor is not dock and not anchor.isFloating() and not anchor.isHidden():
+            group = [anchor] + [d for d in win.tabifiedDockWidgets(anchor) if d is not dock]
+            front = next((d for d in group if d.isVisible()), anchor)
+            win.tabifyDockWidget(anchor, dock)
+            dock.show()
+            front.raise_()                       # the new panel waits behind its tab
+        else:
+            win.addDockWidget(R, dock)
+            dock.show()
+        placed.append(key)
+    return placed
+
+
+def ensure_on_screen(win) -> None:
+    """A detached panel saved on a screen that is no longer there comes back onto the window's screen."""
+    screens = [s.availableGeometry() for s in QGuiApplication.screens()]
+    target = (win.screen() or QGuiApplication.primaryScreen()).availableGeometry()
+    for dock in win.docks.values():
+        if not dock.isFloating():
+            continue
+        frame = dock.frameGeometry()
+        if any(frame.intersected(g).width() >= 100 and frame.intersected(g).height() >= 50 for g in screens):
+            continue
+        w = min(dock.width(), target.width() - 80)
+        h = min(dock.height(), target.height() - 120)
+        dock.setGeometry(target.x() + 40, target.y() + 60, w, h)
 
 
 def delete_layout(name: str) -> None:

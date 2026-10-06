@@ -394,3 +394,38 @@ def test_lock_and_docking_suggestion_are_remembered(qtbot, win):
         other.a_suggest_docking.setChecked(True)
         other.close()
     win.a_lock_panels.setChecked(False)
+
+
+def test_layout_saved_before_a_panel_existed_puts_it_in_its_group(qtbot, win):
+    from PySide6.QtCore import QByteArray, QSettings, Qt
+    from PySide6.QtWidgets import QApplication
+    from gcws.ui.layout import presets
+    win.apply_preset("Chromatogram top")
+    QApplication.processEvents()
+    old = bytes(win.saveState(presets.LAYOUT_VERSION))
+    old = old.replace("dock.report2".encode("utf-16-be"), "dock.zzzzzzz".encode("utf-16-be"))   # unknown then
+    QSettings().setValue("layouts/old/state", QByteArray(old))
+    report2, table = win.docks["report2"], win.docks["table"]
+    win.addDockWidget(Qt.LeftDockWidgetArea, report2)        # where Qt alone would leave it
+    QApplication.processEvents()
+    assert presets.restore_layout(win, "old")
+    QApplication.processEvents()
+    assert report2 in win.tabifiedDockWidgets(table) and not report2.isFloating()
+    assert table.isVisible()                                # the panel in front stays in front
+    assert presets.place_missing(win, win.saveState(presets.LAYOUT_VERSION)) == []
+
+
+def test_detached_panel_off_every_screen_comes_back(qtbot, win):
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtWidgets import QApplication
+    from gcws.ui.layout import presets
+    audit = win.docks["audit"]
+    audit.setFloating(True)
+    audit.setGeometry(-20000, -20000, 500, 300)
+    QApplication.processEvents()
+    presets.ensure_on_screen(win)
+    QApplication.processEvents()
+    frame = audit.frameGeometry()
+    assert any(frame.intersects(s.availableGeometry()) for s in QGuiApplication.screens())
+    audit.setFloating(False)
+    win.apply_preset("Chromatogram top")

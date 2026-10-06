@@ -2006,8 +2006,10 @@ class MainWindow(QMainWindow):
         geo, state = s.value("window/geometry"), s.value("window/state")
         if geo is not None:
             self.restoreGeometry(geo)
-        if state is not None:
-            return bool(self.restoreState(state, presets.LAYOUT_VERSION))
+        if state is not None and self.restoreState(state, presets.LAYOUT_VERSION):
+            presets.place_missing(self, state)
+            presets.ensure_on_screen(self)
+            return True
         return False
 
     def closeEvent(self, ev):

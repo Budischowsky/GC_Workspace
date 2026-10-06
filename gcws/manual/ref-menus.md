@@ -167,7 +167,9 @@ See [Unattended processing](wf-automation.md).
 | **Light Mode**, **Dark Mode**, **Dark Mode - Neon** | | The look of the program. |
 | **Next theme** | `Ctrl+Shift+D` | Steps to the next look. |
 
-The layout you chose last, a preset or a saved one, is ticked.
+The layout you chose last, a preset or a saved one, is ticked. A panel that did not exist yet when a layout
+was saved is put into its usual group of tabs, and a detached panel saved on a screen that is no longer
+connected comes back onto this screen.
 
 In every layout, Quantification, Replicates / results, Automation and Report² are tabs beside the peak table,
 where they have room; Integration method, Properties and Audit trail are tabs beside Folders.
