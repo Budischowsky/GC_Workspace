@@ -1635,3 +1635,34 @@ def test_double_determination_columns_gauge_and_severity(qtbot, win, samples):
     page._fill_table()
     rts = [float(t.item(r, C_RT).text().replace(",", ".")) for r in range(t.rowCount())]
     assert rts == sorted(rts)
+
+
+def test_double_determination_plots_follow_the_list(qtbot, win, samples):
+    import pyqtgraph as pg
+    from gcws.features.model import PAIRING_CLASSIC, Settings
+    from gcws.ui.docks.duplicate import C_NAME
+    _load(qtbot, win, samples, ["07_", "11_"])
+    ws = win.ws
+    a = next(s.id for s in ws.states() if s.name.startswith("07_"))
+    b = next(s.id for s in ws.states() if s.name.startswith("11_"))
+    win.loaded_samples.pairRequested.emit(a, b)
+    page = win.replicates.duplicate
+    page.set_filter("red")                                    # the clicked substance may be filtered out
+    dots = next(i for i in page.mirror.getPlotItem().items if isinstance(i, pg.ScatterPlotItem))
+    pt = next(p for p in dots.points() if page.rows[p.data()[0]].get("light") == "green")
+    k = pt.data()[0]
+    dots.sigClicked.emit(dots, [pt], None)
+    assert page.filter == "all" and page._current_row() is page.rows[k]
+    # the selected substance: its integrated peak shaded in A (above) and B (below)
+    page._row_selected()
+    assert len(page._bounds) == 2
+    (xa, ya), (xb, yb) = (it.getData() for it in page._bounds)
+    assert ya.max() > 0 and yb.min() < 0
+    # the plots can be hidden (remembered); classic pairing has no spectra to mirror
+    page.b_plots.setChecked(False)
+    assert page.plots.isHidden()
+    page.b_plots.setChecked(True)
+    assert not page.plots.isHidden() and not page.spec.isHidden()
+    page.set_settings(Settings(pairing=PAIRING_CLASSIC))
+    assert page.spec.isHidden()
+    page.table.setCurrentCell(0, C_NAME)

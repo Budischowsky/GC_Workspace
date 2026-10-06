@@ -242,8 +242,9 @@ The line under the chips sums up the comparison in one line (the whole text is i
 how many substances go into the report and how many you changed. Right-click a column header to show or hide
 columns; **Diff. %** is a bar against the limit.
 
-Below the list: the two chromatograms of the selected substance, A upwards and B downwards, and the two
-spectra, mirrored the same way.
+Below the list: the two chromatograms of the selected substance, A upwards and B downwards, with its
+integrated peak shaded in each, and the two spectra, mirrored the same way (feature pairing only). Clicking a
+dot selects its substance. **Plots** (beside the summary line) hides or shows them.
 
 **Groups (N-fold)** tab: **Suggest**, **New...**, **Members...**, **Delete**, the box
 **A peak counts as valid when**, the averaged results, and **Report preview** with the other reports and

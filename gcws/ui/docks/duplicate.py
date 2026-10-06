@@ -232,10 +232,12 @@ class DuplicatePage(QWidget):
         self.spec.setToolTip("The spectra of the selected substance: A up, B down (co-eluting ions, "
                              "background subtracted), each scaled to its base peak")
         theme.register_plot(self.spec, lambda: self._draw_spectra())
-        plots = QSplitter(Qt.Horizontal)
+        self.plots = plots = QSplitter(Qt.Horizontal)
         plots.addWidget(self.mirror)
         plots.addWidget(self.spec)
         plots.setSizes([520, 300])
+        self._bounds = []                            # the shaded peaks of the selected substance
+        self._signed = {}                            # determination index -> (rt, signed signal) as drawn
         split = QSplitter(Qt.Vertical)
         split.addWidget(self.table)
         split.addWidget(plots)
@@ -258,6 +260,12 @@ class DuplicatePage(QWidget):
         lay.setContentsMargins(4, 4, 4, 4)
         lay.setSpacing(6)
         self.edit_note = theme.hint("", False)
+        from PySide6.QtCore import QSettings
+        self.b_plots = QToolButton()
+        self.b_plots.setText("Plots")
+        self.b_plots.setCheckable(True)
+        self.b_plots.setToolTip("Show or hide the chromatograms and spectra below the list")
+        self.b_plots.toggled.connect(self.set_plots_visible)
         keys = QToolButton()
         keys.setText("?")
         keys.setAutoRaise(True)
@@ -265,6 +273,7 @@ class DuplicatePage(QWidget):
         status = QHBoxLayout()
         status.addWidget(self.banner, 1)
         status.addWidget(self.edit_note)
+        status.addWidget(self.b_plots)
         status.addWidget(keys)
         lay.addLayout(pick)
         lay.addLayout(lim)
@@ -272,6 +281,8 @@ class DuplicatePage(QWidget):
         lay.addWidget(split, 1)
         lay.addLayout(buttons)
 
+        self.b_plots.setChecked(QSettings().value("replicates/plots", True, type=bool))
+        self.set_plots_visible(self.b_plots.isChecked())
         ws.runAdded.connect(lambda *_: self.refresh_choices())
         ws.runRemoved.connect(lambda *_: self.refresh_choices())
         ws.runChanged.connect(lambda *_: self.refresh_choices())
@@ -721,6 +732,7 @@ class DuplicatePage(QWidget):
         else:
             self._show_summary(rows, labels)
         theme._repolish(self.banner)
+        self.spec.setVisible(self.table_features is not None)      # classic pairing: no spectra to mirror
         self._fill_table()
         self._update_report_note()
         self._draw_mirror()
@@ -1243,8 +1255,12 @@ class DuplicatePage(QWidget):
             self._traces.append((rt, sign * y))
         self.mirror.addItem(pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen(theme.BORDER_STRONG)), ignoreBounds=True)
         spots, self._marks = [], []
+        self._signed = {}
+        for i, tr in enumerate(traces):
+            if tr is not None:
+                self._signed[i] = (tr[0], (1 if i == 0 else -1) * tr[1])
         istd = self._istd_times()
-        for row, v in zip(self.rows, self.verdicts):
+        for k, (row, v) in enumerate(zip(self.rows, self.verdicts)):
             color = theme.status_color(v.level)
             for sign, key, tr in ((1, "source1", traces[0] if traces else None),
                                   (-1, "source2", traces[1] if len(traces) > 1 else None)):
@@ -1256,11 +1272,63 @@ class DuplicatePage(QWidget):
                 self._marks.append((src["rt"], abs(y), is_istd))
                 spots.append({"pos": (src["rt"], sign * y), "brush": pg.mkBrush(color),
                               "pen": pg.mkPen(theme.SURFACE, width=0.8), "size": 8,
-                              "data": row.get("name") or ""})
+                              "data": (k, row.get("name") or "")})
         if spots:
-            dots = pg.ScatterPlotItem(spots=spots, hoverable=True, tip=lambda x, y, data: f"{data}  RT {x:.3f}")
+            dots = pg.ScatterPlotItem(spots=spots, hoverable=True,
+                                      tip=lambda x, y, data: f"{data[1]}  RT {x:.3f} (click: select)")
+            dots.sigClicked.connect(self._dot_clicked)
             self.mirror.addItem(dots, ignoreBounds=True)
         self.full_view()
+        self._draw_bounds(self._current_row())
+
+    def _dot_clicked(self, _item, points, *_):
+        """A dot of the mirror plot selects its substance in the list (all rows shown if it was filtered out)."""
+        if not points:
+            return
+        data = points[0].data()
+        k = data[0] if isinstance(data, tuple) else None
+        if k is None or not (0 <= k < len(self.rows)):
+            return
+        r = self._visual_row(self.rows[k])
+        if r is None:
+            self.set_filter("all")
+            r = self._visual_row(self.rows[k])
+        if r is not None:
+            self.table.setCurrentCell(r, C_NAME)
+            self.table.scrollToItem(self.table.item(r, C_NAME))
+
+    def _source_peak(self, i: int, src):
+        """The integrated peak of determination ``i`` at ``src`` (apex within 0.05 min), or None."""
+        if src is None or i >= len(self.members) or self.members[i] not in self.ws.runs:
+            return None
+        res = self.ws.result(self.members[i], self.quant_signal())
+        if res is None or not res.peaks:
+            return None
+        peak = min(res.peaks, key=lambda p: abs(p.apex_rt - src["rt"]))
+        return peak if abs(peak.apex_rt - src["rt"]) <= 0.05 else None
+
+    def _draw_bounds(self, row) -> None:
+        """Shade the integrated peak of the selected substance in each determination, A above and B
+        below the zero line, so different boundaries are seen before they are harmonised."""
+        for item in self._bounds:
+            self.mirror.removeItem(item)
+        self._bounds = []
+        if row is None:
+            return
+        for i, key in ((0, "source1"), (1, "source2")):
+            peak = self._source_peak(i, row.get(key))
+            if peak is None or i not in self._signed:
+                continue
+            rt, y = self._signed[i]
+            m = (rt >= peak.start) & (rt <= peak.end)
+            if m.sum() < 2:
+                continue
+            st = self.ws.runs.get(self.members[i])
+            color = pg.mkColor(st.color if st is not None else theme.ACCENT)
+            color.setAlpha(80)
+            item = self.mirror.plot(rt[m], y[m], pen=None, fillLevel=0.0, brush=pg.mkBrush(color))
+            item.setToolTip(f"{self.labels()[i]}: integrated {peak.start:.3f} - {peak.end:.3f} min")
+            self._bounds.append(item)
 
     def full_view(self):
         """The whole integrated part of both determinations."""
@@ -1325,6 +1393,7 @@ class DuplicatePage(QWidget):
         if rt is not None:
             self.cursor.setPos(rt)
             self.mirror.setXRange(rt - 0.4, rt + 0.4, padding=0)
+            self._draw_bounds(row)
             self._navigate(row, prefer_b=False)
         self._draw_spectra()
 
@@ -1352,6 +1421,14 @@ class DuplicatePage(QWidget):
                     self.ws.select_peak(j)
                     self.ws.peakFocusRequested.emit(j)
             return
+
+    def set_plots_visible(self, on: bool) -> None:
+        """The chromatograms and spectra below the list (remembered)."""
+        from PySide6.QtCore import QSettings
+        self.plots.setVisible(on)
+        QSettings().setValue("replicates/plots", bool(on))
+        if self.b_plots.isChecked() != on:
+            self.b_plots.setChecked(on)
 
     # -- output ------------------------------------------------------------------------------------
 

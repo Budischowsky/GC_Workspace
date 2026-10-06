@@ -46,7 +46,11 @@ The column with the verdict says why a row has its colour; its tooltip gives the
   decided*, and says **All decisions made** when none is left. Undo makes the row open again.
 - **To check** shows the red and yellow rows and the rows you changed.
 - Click a row: both chromatograms below show that substance, A upwards and B downwards, and beside them the
-  two spectra, mirrored the same way.
+  two spectra, mirrored the same way (feature pairing only). The integrated peak of the substance is shaded
+  in both determinations, so different boundaries show before you harmonise them.
+- Click a dot in the chromatograms to select its substance in the list (the list shows all rows again if
+  the substance was filtered out).
+- **Plots** beside the summary line hides the chromatograms and spectra, so the list gets the whole height.
 
 ## Decide
 
