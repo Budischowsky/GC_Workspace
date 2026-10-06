@@ -112,8 +112,19 @@ rows left open with the project, writes them to the audit trail, and the pair ge
   accepted too - also when you opened the project by hand rather than from Report². Changes you made are
   saved first, and the report is then made again; without changes it is accepted as it is, with the usual
   few seconds to undo it in Report².
-- Otherwise the acceptance is saved with the project only (save the project to keep it). Report² does not
-  list pairs that no workflow processed.
+- Otherwise (a project you made yourself) the pair is **listed in Report²**, accepted by you: GC Workspace
+  makes its report (Excel, Word and the double-determination workbook, as **Report preview** does) and
+  keeps it with a copy of the project in a Report² job folder. It stands under the batch of its sequence
+  folder - beside the samples a workflow processed there, if any - and Report² shows and selects it. Your
+  own project is not changed (save it to keep the acceptance). The report needs what **Report preview**
+  needs (e.g. the migration conditions); if something is missing, the status bar says what, and the pair is
+  listed when you accept it again.
+- When Report² lists that name in the batch already, GC Workspace asks: **Rename…** gives the pair (and its
+  entry) a new name - a free one such as *Name (2)* is proposed; **Overwrite** replaces the entry you
+  accepted before with this one (its next revision), or hides the report a workflow made of that name
+  (**View > Show deleted reports** in Report² brings it back); **Cancel** lists nothing.
+- An entry accepted by hand is never processed or delivered by a workflow: open it in Replicates from
+  Report², change it and accept it again - its entry is replaced without asking.
 
 A change after that - a value, a **Report** box, a comment, a name - reopens the pair: the button then reads
 **Accept again** and its tooltip says who accepted it before.

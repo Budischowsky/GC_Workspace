@@ -177,6 +177,7 @@ decide** and **Yellow - to check** (hover for their names); the details are in *
 | **Process again > Report again from the (edited) project** | After you corrected the sample and saved the project: makes the report again from it. |
 | **Process again > Process again from the raw data** | Starts over from the raw data. |
 | **Process again > Process without a blank...** | Processes a sample that has no blank in its batch. |
+| (an entry **Accepted by hand**) | A double determination accepted in Replicates that no workflow processed: **Process again** and **Deliver to the target folders now** are not offered - open it in Replicates, change it and accept it again. |
 | **Remove from the queue...** | As **Remove from queue** in the Automation panel. |
 | **Deliver to the target folders now** | Delivers the files again. |
 | **Show history...** | What happened to the report - processed, accepted, rejected, delivered, by whom and when - and its files with where they were delivered. |

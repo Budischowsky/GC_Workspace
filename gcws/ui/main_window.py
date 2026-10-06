@@ -1609,19 +1609,18 @@ class MainWindow(QMainWindow):
 
     def _accept_pair(self, group_id: str) -> bool:
         """The analyst accepted a double determination. When it is a Report² report, it is accepted there
-        too (the project is saved first, with Report²'s undo bar); the status bar always says what happened."""
+        too (the project is saved first, with Report²'s undo bar); a pair no workflow processed is listed
+        in Report², accepted. The status bar always says what happened."""
         from gcws.automation import journal as J
+        from gcws.automation import manual as MA
         from gcws.ui.docks.report2 import can_accept
         g = next((g for g in self.ws.replicate_groups if g["id"] == group_id), None)
         if g is None:
             return False
         who = (g.get("signoff") or {}).get("by", "")
         job = self._report2_job_of(g)
-        if job is None:
-            self.ws.message.emit(f"Double determination {g['name']} accepted by {who}: saved with the project "
-                                 "(save it to keep it). It is no Report² report - Report² lists the samples a "
-                                 "workflow processed.")
-            return False
+        if job is None or MA.is_manual(job):
+            return self._list_in_report2(g, job)
         if not self._report2_job:                       # opened another way: bind it as "Open in Replicates" does
             try:
                 data = P.read(job.project_path)
@@ -1650,6 +1649,131 @@ class MainWindow(QMainWindow):
             self.ws.message.emit(f"Accepted here; Report² could not accept {job.group_name} (it changed "
                                  "meanwhile) - look at it in Report².")
         return ok
+
+    def _list_in_report2(self, g: dict, entry=None) -> bool:
+        """List an accepted pair no workflow processed in Report²: its report and a copy of its project in
+        a job folder, accepted, under the batch of its sequence folder. When Report² has that name there
+        already, the analyst renames the pair or overwrites the entry. ``entry``: the pair's own entry
+        (opened from its project copy), replaced without asking. The report is made in the background."""
+        from gcws.automation import manual as MA
+        from gcws.automation import pipeline as PL
+        from gcws.automation import store
+        from gcws.automation.workflow import new_id
+        from gcws.quant.service import quant_detector
+        from gcws.report import assemble as AS
+        from gcws.report import service as RS
+        members = [m for m in g["members"] if m in self.ws.runs]
+        if len(members) != 2:
+            return False
+        name, hide = g["name"], None
+        kind = "hs_screening" if quant_detector(self.ws.quant) == "TIC" else "nias"
+        try:
+            mem, samples = AS.prepare(self.ws, kind, g)
+        except AS.ReportNotPossible as exc:
+            self.ws.message.emit(f"Double determination {name} accepted in the project; not listed in Report²: "
+                                 f"{exc.message.splitlines()[0]} Then accept it again.")
+            return False
+        try:
+            jr = self.report2.journal
+            if entry is not None:
+                batch = jr.batch_by_id(entry.batch_id)
+            else:
+                batch = MA.batch_for(jr, self.ws.runs[members[0]].run.path.parent)
+                other = MA.clash(jr, batch["id"], name)
+                if other is not None:
+                    from gcws.ui.dialogs import report2 as RD
+                    choice = RD.ask_name_clash(self, name, batch.get("name") or "", other,
+                                               MA.free_name(jr, batch["id"], name),
+                                               lambda text: MA.clash(jr, batch["id"], text) is not None)
+                    if choice is None:
+                        self.ws.message.emit(f"Double determination {name} accepted in the project; not listed "
+                                             "in Report² (the name is listed already).")
+                        return False
+                    if choice[0] == "rename":
+                        name = choice[1]
+                        self.replicates.rename_group(g["id"], name)
+                    elif MA.is_manual(other):
+                        entry = other                    # overwritten: the same entry, its next revision
+                    else:
+                        hide = other                     # a workflow's report: hidden, restorable
+                if entry is None:
+                    entry = MA.entry(jr, batch["id"], name)    # deleted once under this name: used again
+        except Exception as exc:  # noqa: BLE001 - no journal: the acceptance stays in the project
+            self.ws.message.emit(f"Double determination {name} accepted in the project; Report² is not "
+                                 f"available ({exc}).")
+            return False
+        jid = entry.id if entry is not None else new_id("j")
+        revision = (entry.revision + 1) if entry is not None else 1
+        job_dir = store.jobs_dir() / jid
+        stem = RS.report_stem([self.ws.runs[m].name for m in mem])
+        project = Path(entry.project_path) if entry is not None and entry.project_path else job_dir / f"{stem}.gcws"
+        out = job_dir / f"r{revision}"
+        rjob = AS.build_job(self.ws, kind, g, out / f"{stem}{RS.SUFFIXES[kind]}.xlsx", members=mem,
+                            samples=samples, record_seen=False, batch_workbook=True)
+        evidence = PL.evidence_for(self.ws, mem, kind=kind)
+        names = [self.ws.runs[m].run.path.name for m in mem]
+        own = bool(self.ws.project_path) and Path(self.ws.project_path) == project
+        before = self.ws.automation
+        self.ws.automation = {"job_id": jid, "revision": revision, "workflow_id": MA.MANUAL, "sample": name}
+        try:
+            snapshot = P.to_dict(self.ws, project)       # the project as it was accepted (saved with the report)
+        finally:
+            if not own:
+                self.ws.automation = before
+        who = (g.get("signoff") or {}).get("by", "")
+        self.progress.setRange(0, 0)
+        self.progress.setFormat("Report²")
+        self.progress.show()
+        self.statusBar().showMessage(f"{name}: making the report for Report² ...")
+
+        def done(res):
+            from gcws.automation import rules as RU
+            self.progress.hide()
+            files = {"xlsx": str(res.target)}
+            if res.word is not None:
+                files["docx"] = str(res.word)
+            if res.batch is not None:
+                files["dd"] = str(res.batch)
+            ev = dict(evidence, rows=PL.slim_rows(res), summary=res.summary or {}, warnings=list(res.warnings))
+            try:
+                findings = RU.evaluate(RU.load_default_rules(), ev).to_list()
+            except Exception:  # noqa: BLE001 - listed without findings
+                findings = []
+            try:
+                project.parent.mkdir(parents=True, exist_ok=True)
+                P.save(self.ws, project, data=snapshot)
+                if own and P.to_dict(self.ws, project) == snapshot:
+                    self.ws.dirty = False                # nothing changed since: the open project is saved
+                if hide is not None:
+                    jr.delete([hide.id], who or None)
+                job = MA.record(jr, job_id=jid, batch_id=batch["id"], name=name, members=names,
+                                files={MA.MANUAL: files}, project_path=project, job_dir=job_dir, evidence=ev,
+                                findings=findings, summary=res.summary or {}, reviewer=who,
+                                replace=entry.id if entry is not None else None)
+            except Exception as exc:  # noqa: BLE001
+                self.ws.message.emit(f"Accepted in the project; Report² could not list {name} ({exc}).")
+                return
+            if own and self._report2_job and self._report2_job[0] == job.id:
+                self._report2_job = (job.id, job.revision, project)
+                self._report2_baseline = _report_inputs(P.to_dict(self.ws, project))
+            self.report2.refresh()
+            self.report2.reveal(job.id)
+            self.ws.log("Listed in Report² (accepted by hand)", " / ".join(names), name,
+                        "" if entry is None else f"revision {revision - 1}", f"revision {job.revision}")
+            self.ws.message.emit(f"Accepted and listed in Report²: {name}" +
+                                 (f" (revision {job.revision}, the earlier one replaced)" if entry is not None else "")
+                                 + (f"; {hide.group_name} of the workflow is hidden" if hide is not None else ""))
+
+        def failed(err):
+            self.progress.hide()
+            if entry is None:
+                import shutil
+                shutil.rmtree(job_dir, ignore_errors=True)
+            self.ws.message.emit(f"Accepted in the project; not listed in Report²: the report failed "
+                                 f"({err.splitlines()[0]}).")
+
+        workers.submit(RS.generate, rjob, on_done=done, on_error=failed)
+        return True
 
     def _show_report2_pair_menu(self):
         """Choose any processed pair currently visible in Report², grouped by batch."""
@@ -1741,7 +1865,10 @@ class MainWindow(QMainWindow):
                 P.save(self.ws, path)
                 self.ws.project_path = path
                 self.ws.dirty = False
-            if changed and not job.edited and not self.report2.journal.mark_edited(jid, revision):
+            from gcws.automation.manual import is_manual
+            # an entry accepted by hand is made again when the pair is accepted again (no workflow does it)
+            if changed and not job.edited and not is_manual(job) and \
+                    not self.report2.journal.mark_edited(jid, revision):
                 raise RuntimeError("The report changed while it was being saved. Reload it before continuing.")
         except Exception as exc:  # noqa: BLE001 - leave the current project open on any save failure
             QMessageBox.warning(self, "Report²", f"Could not save the edited project:\n{exc}")

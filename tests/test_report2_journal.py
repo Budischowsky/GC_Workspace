@@ -179,3 +179,40 @@ def test_reject_reasons_default_and_saved(tmp_path, monkeypatch):
     assert RU.load_reject_reasons() == RU.DEFAULT_REJECT_REASONS
     RU.save_reject_reasons([" Too dilute ", "", "Bad chromatography"])
     assert RU.load_reject_reasons() == ["Too dilute", "Bad chromatography"]
+
+
+def test_pairs_accepted_by_hand(tmp_path):
+    """A pair no workflow processed, accepted in Replicates: listed accepted under the batch of its folder
+    (the workflow's batch when there is one), never waiting for delivery; accepted again it gets the next
+    revision of the same entry."""
+    from gcws.automation import manual as MA
+    from gcws.automation.workflow import new_id
+    J, jr, b = _journal(tmp_path)
+    folder = tmp_path / "26016605_TEST"
+    assert MA.batch_for(jr, folder)["id"] == b["id"]               # the workflow's batch of that folder
+    other = MA.batch_for(jr, tmp_path / "elsewhere")
+    assert other["workflow_id"] == MA.MANUAL and other["id"] != b["id"]
+    wf = _done(J, jr, b, "Pair", J.CONTROL)
+    assert MA.clash(jr, b["id"], "pair").id == wf.id and MA.clash(jr, b["id"], "Other") is None
+    assert MA.free_name(jr, b["id"], "Pair") == "Pair (2)"
+
+    def listed(name, replace=None, jid=None):
+        return MA.record(jr, job_id=jid or new_id("j"), batch_id=b["id"], name=name, members=["A.D", "B.D"],
+                         files={MA.MANUAL: {"xlsx": "r.xlsx"}}, project_path=tmp_path / "p.gcws",
+                         job_dir=tmp_path / "job", evidence={"members": []}, findings=[], summary={},
+                         reviewer="analyst", replace=replace)
+    job = listed("Pair (2)")
+    assert job.state == J.ACCEPTED_MANUAL and job.reviewer == "analyst" and not job.export_pending
+    assert job.revision == 1 and job.members == ["A.D", "B.D"] and MA.is_manual(job)
+    assert MA.clash(jr, b["id"], "pair (2)").id == job.id and MA.free_name(jr, b["id"], "Pair") == "Pair (3)"
+    again = listed("Pair (2)", replace=job.id)
+    assert again.id == job.id and again.revision == 2 and again.state == J.ACCEPTED_MANUAL
+    # rejected in Report², then accepted there again: still nothing to deliver
+    assert jr.review(job.id, False) and jr.review(job.id, True)
+    assert jr.job(job.id).state == J.ACCEPTED_MANUAL and not jr.job(job.id).export_pending
+    # deleted, then accepted again under that name: the same entry comes back
+    jr.delete([job.id])
+    assert MA.clash(jr, b["id"], "Pair (2)") is None and MA.entry(jr, b["id"], "Pair (2)").id == job.id
+    back = listed("Pair (2)", replace=MA.entry(jr, b["id"], "Pair (2)").id)
+    assert back.id == job.id and not back.deleted and back.revision == 3
+    assert J.batch_closed(jr.batch_by_id(b["id"]), [back])          # nothing pending: it can be archived

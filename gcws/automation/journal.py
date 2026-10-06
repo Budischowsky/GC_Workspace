@@ -57,6 +57,8 @@ QUEUE = (WAITING, QUEUED, PROCESSING, FAILED, NOT_PROCESSED)
 #: the states "Remove from queue" applies to (a job being processed is not taken away from the watcher)
 REMOVABLE = (WAITING, QUEUED, FAILED, NOT_PROCESSED)
 BATCH_KEY = "__batch__"                 # the job row of a batch report
+#: the workflow id of the entries the analyst accepted outside any workflow (``gcws.automation.manual``)
+MANUAL_WORKFLOW = "manual"
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS watcher(id INTEGER PRIMARY KEY CHECK (id = 1), pid INTEGER, host TEXT, user TEXT,
@@ -312,6 +314,39 @@ class Journal:
                                   state if cur.state == WAITING else WAITING, cur.id))
             return self.job(cur.id)
 
+    def record_manual(self, job_id: str, *, workflow_id: str, method_node: str, batch_id: int, group_key: str,
+                      group_name: str, members: list, files: dict, project_path: str, job_dir: str,
+                      evidence: dict, findings: list, summary: dict, reviewer: str,
+                      replace: Optional[str] = None) -> Job:
+        """An entry the analyst accepted outside any workflow (``gcws.automation.manual``): inserted as
+        accepted, or ``replace`` (such an entry, also one with the same key) at its next revision.
+        Nothing waits for delivery: no workflow delivers it."""
+        now = time.time()
+        values = dict(group_key=group_key, group_name=group_name, members_json=json.dumps(members),
+                      files_json=json.dumps(files, default=str), evidence_json=json.dumps(evidence, default=str),
+                      findings_json=json.dumps(findings, default=str), summary_json=json.dumps(summary, default=str),
+                      project_path=project_path, job_dir=job_dir, state=ACCEPTED_MANUAL, reviewer=reviewer,
+                      reviewed_at=now, started=now, finished=now, export_pending=0, export_state="none",
+                      edited=0, review_pending_json=None, deleted=0, reason="accepted in Replicates")
+        with self.tx():
+            same = self.find_job(workflow_id, method_node, batch_id, group_key)
+            old = self.job(replace) if replace else same
+            if same is not None and old is not None and same.id != old.id:
+                raise ValueError(f"{group_name} is listed already")
+            if old is None:
+                cols = dict(values, id=job_id, workflow_id=workflow_id, method_node=method_node, batch_id=batch_id,
+                            blanks_json="{}", input_fp="manual", created=now)
+                self.con.execute(f"INSERT INTO jobs({', '.join(cols)}) VALUES({', '.join('?' * len(cols))})",
+                                 tuple(cols.values()))
+                self._event_raw("info", workflow_id, batch_id, job_id, f"{group_name}: accepted by {reviewer} "
+                                "in Replicates (no workflow)", reviewer)
+                return self.job(job_id)
+            sets = ", ".join(f"{k}=?" for k in values)
+            self.con.execute(f"UPDATE jobs SET revision=revision+1, {sets} WHERE id=?", (*values.values(), old.id))
+            self._event_raw("info", workflow_id, batch_id, old.id, f"{group_name}: accepted again by {reviewer} "
+                            f"in Replicates (revision {old.revision + 1})", reviewer)
+            return self.job(old.id)
+
     def transition(self, job_id: str, from_states, to: str, **fields) -> bool:
         """Set ``to`` if the job is in one of ``from_states`` (and ``to`` is allowed); True if done."""
         from_states = [from_states] if isinstance(from_states, str) else list(from_states)
@@ -417,9 +452,10 @@ class Journal:
             return False
         to = ACCEPTED_MANUAL if accept else REJECTED
         now = time.time()
+        deliver = accept and j.workflow_id != MANUAL_WORKFLOW          # no workflow delivers an entry by hand
         ok = self.transition(job_id, (CONTROL, ACCEPTED_AUTO, ACCEPTED_MANUAL, REJECTED), to, reviewer=user,
-                             comment=comment, reviewed_at=now, export_pending=1 if accept else 0,
-                             deliver_after=now + grace if accept and grace else 0)
+                             comment=comment, reviewed_at=now, export_pending=1 if deliver else 0,
+                             deliver_after=now + grace if deliver and grace else 0)
         if ok:
             self.event("info", f"{j.group_name}: {'accepted' if accept else 'rejected'} by {user}"
                        + (f" - {comment}" if comment else ""), job_id=job_id, workflow_id=j.workflow_id,

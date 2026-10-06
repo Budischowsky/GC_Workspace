@@ -905,8 +905,8 @@ class DuplicatePage(QWidget):
         if not ready:
             tip += "Compare two determinations first"
         else:
-            tip += ("Accept this double determination (saved with the project and in the audit trail; a pair "
-                    "opened from Report² is accepted there too)")
+            tip += ("Accept this double determination (saved with the project and in the audit trail). A pair "
+                    "a workflow processed is accepted in Report² too; any other is listed there with its report")
             if n_open:
                 tip += (f". {n_open} red row{'s are' if n_open != 1 else ' is'} still open: "
                         "they go into the report by the default rule (Only in A/B not reported, the others reported)")

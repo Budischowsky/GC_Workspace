@@ -244,7 +244,7 @@ The double-determination page:
 | **?** | The keys of the list (Enter, Backspace, Space on the **Report** box, Delete, F2, Ctrl+C / Ctrl+V, Ctrl+D). |
 | **Report preview** | The report of this pair (NIAS, or HS-Screening on the TIC). Its arrow offers **NIAS report...**, **Fingerprint report...**, **Total extraction report...**, **HS-Screening report...** and **Export worksheet...**. |
 | **Harmonise boundaries** | Takes over every proposed integration boundary. Shown when there are proposals. |
-| **Accept double determination** | Possible once A and B are compared; red rows still open keep their default (the tooltip counts them). Saves who accepted it and when with the project, writes it to the audit trail and marks the pair ✔ in the list; when the pair is a Report² report (a workflow processed it) it is accepted there too, however the project was opened. The status bar says which. A later change reopens it (**Accept again**). |
+| **Accept double determination** | Possible once A and B are compared; red rows still open keep their default (the tooltip counts them). Saves who accepted it and when with the project, writes it to the audit trail and marks the pair ✔ in the list; when the pair is a Report² report (a workflow processed it) it is accepted there too, however the project was opened; otherwise it is listed in Report² with its report (**Rename…** / **Overwrite** when the name is taken). The status bar says which. A later change reopens it (**Accept again**). |
 
 A right-click on a row offers **Delete row**, **Reset row** and the other row actions (see [Double determination](wf-double.md#decide)).
 
@@ -283,7 +283,7 @@ Described in [Unattended processing](wf-automation.md#report²-what-needs-your-c
 | Control | What it does |
 |---|---|
 | **To do**, **Archive** | Open batches, or those whose reports are all accepted and delivered (with the number of batches). |
-| Workflow box | **All workflows** or one of them. |
+| Workflow box | **All workflows** or one of them; **Accepted by hand** shows the double determinations accepted in Replicates that no workflow processed. |
 | Period box | **All**, **Today**, **7 days**, **30 days**, **12 months**. |
 | **Search sample or batch** | Filters the list. |
 | Chips | **All**, **Control needed**, **Accepted**, **Waiting**, **Not processed**, **Failed**, **Rejected**, **Removed**: counts; a click filters the list. |

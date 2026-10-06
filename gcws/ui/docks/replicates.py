@@ -507,11 +507,17 @@ class ReplicatesDock(QWidget):
             return
         name, ok = QInputDialog.getText(self, "Rename", "Name:", text=g["name"])
         if ok and name.strip():
-            groups = copy.deepcopy(self.ws.replicate_groups)
-            for x in groups:
-                if x["id"] == g["id"]:
-                    x["name"] = name.strip()
-            self._set_groups(groups, f"rename group to {name.strip()}")
+            self.rename_group(g["id"], name)
+
+    def rename_group(self, group_id: str, name: str) -> None:
+        """Give the group ``group_id`` the name ``name`` (one undo step)."""
+        name = name.strip()
+        groups = copy.deepcopy(self.ws.replicate_groups)
+        for x in groups:
+            if x["id"] == group_id:
+                x["name"] = name
+        if name and groups != self.ws.replicate_groups:
+            self._set_groups(groups, f"rename group to {name}")
 
     def set_policy(self, key: str) -> None:
         """The validity rule of the selected group (one undo step)."""

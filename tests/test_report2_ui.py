@@ -717,3 +717,86 @@ def test_batch_report_of_a_folder(qtbot, win, samples, tmp_path, monkeypatch):
     assert any(r.action == "Batch report" for r in ws.audit.records)
     assert sorted(p.name for p in samples.iterdir())                         # nothing written into the batch
     assert not any(p.name.endswith("_Batch_Report.docx") for p in samples.iterdir())
+
+
+def test_accepted_pair_is_listed_in_report2(qtbot, win, samples, tmp_path, monkeypatch):
+    """A pair no workflow processed: Accept lists it in Report² (its report and a project copy, accepted,
+    in the batch of its folder). Accepted again under a name Report² has, the analyst renames the pair or
+    overwrites the entry; a workflow's report that is overwritten is hidden."""
+    from types import SimpleNamespace
+    from gcws.automation import journal as J
+    from gcws.automation import manual as MA
+    from gcws.automation import store
+    from gcws.core import project as P
+    from gcws.report import service as RS
+    from gcws.ui.dialogs import report2 as RD
+    from test_pipeline import MIGRATION, lib_oracle
+    _load(qtbot, win, samples, ["07_", "08_", "11_"])
+    ws = win.ws
+    lib_oracle(ws, [s.id for s in ws.states() if s.role == "sample"])
+    ws.quant["migration"] = dict(MIGRATION)
+    ws.recompute_quant()
+    a = next(s.id for s in ws.states() if s.name.startswith("07_"))
+    b = next(s.id for s in ws.states() if s.name.startswith("11_"))
+    jr = J.Journal(tmp_path / "journal.sqlite")
+    win.report2._journal = jr
+    monkeypatch.setattr(store, "jobs_dir", lambda: tmp_path / "jobs")
+    monkeypatch.setattr(RS, "docx_to_pdf", _no_word)                 # the Report² preview needs no Word
+    win.loaded_samples.pairRequested.emit(a, b)
+    page = win.replicates.duplicate
+    said = []
+    ws.message.connect(said.append)
+
+    def listed(n):
+        qtbot.waitUntil(lambda: sum("listed in Report²" in t and "not listed" not in t for t in said) >= n,
+                        timeout=240000)
+
+    page.b_accept.click()
+    listed(1)
+    (job,) = jr.jobs(include_batch=False)
+    g = page.group()
+    assert MA.is_manual(job) and job.state == J.ACCEPTED_MANUAL and job.group_name == g["name"]
+    assert job.reviewer == g["signoff"]["by"] and not job.export_pending
+    assert Path(jr.batch_by_id(job.batch_id)["folder"]) == ws.runs[a].run.path.parent
+    files = job.files[MA.MANUAL]
+    assert Path(files["xlsx"]).is_file() and Path(files["docx"]).is_file()
+    assert win.report2._is_pair(job) and P.read(job.project_path)["automation"]["workflow_id"] == MA.MANUAL
+    assert win.report2.current == job.id and ws.project_path is None and not ws.automation
+    # accepted again: the name is listed - cancelled, overwritten, renamed (the report is not made again here)
+    def fake(rjob, progress=None):
+        rjob.target.parent.mkdir(parents=True, exist_ok=True)
+        rjob.target.write_text("report")
+        return SimpleNamespace(target=rjob.target, word=None, batch=None, combined=[], summary={}, warnings=[],
+                               reported=[])
+    monkeypatch.setattr(RS, "generate", fake)
+    asked = []
+    with monkeypatch.context() as m:
+        m.setattr(RD, "ask_name_clash", lambda *args: asked.append(args[1]))
+        assert not win._accept_pair(g["id"])
+    assert asked == [g["name"]] and len(jr.jobs(include_batch=False)) == 1
+    with monkeypatch.context() as m:
+        m.setattr(RD, "ask_name_clash", lambda *args: ("overwrite", args[1]))
+        assert win._accept_pair(g["id"])
+        listed(2)
+    assert [(j.id, j.revision) for j in jr.jobs(include_batch=False)] == [(job.id, 2)]
+    assert Path(jr.job(job.id).files[MA.MANUAL]["xlsx"]).parent.name == "r2"
+    with monkeypatch.context() as m:
+        m.setattr(RD, "ask_name_clash", lambda *args: ("rename", args[4]))      # the suggested free name
+        assert win._accept_pair(g["id"])
+        listed(3)
+    second = next(j for j in jr.jobs(include_batch=False) if j.id != job.id)
+    assert second.group_name == f"{g['name']} (2)" == page.group()["name"]
+    # a workflow's report of that name: overwritten = hidden (restorable), the pair listed by hand
+    wf = jr.ensure_job("wf", "m", job.batch_id, "other", "Other", ["X.D"], {}, "fp", state=J.QUEUED)
+    win.replicates.rename_group(g["id"], "Other")
+    with monkeypatch.context() as m:
+        m.setattr(RD, "ask_name_clash", lambda *args: ("overwrite", args[1]))
+        assert win._accept_pair(g["id"])
+        listed(4)
+    assert jr.job(wf.id).deleted
+    third = MA.clash(jr, job.batch_id, "Other")
+    assert MA.is_manual(third) and third.state == J.ACCEPTED_MANUAL
+    # Report² never processes or delivers such an entry again
+    from gcws.ui.docks.report2 import can_reprocess
+    assert not can_reprocess(third)
+    ws.dirty = False

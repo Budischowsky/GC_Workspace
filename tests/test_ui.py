@@ -1718,9 +1718,11 @@ def test_replicates_list_of_determinations(qtbot, win, samples):
     assert dock.stack.currentIndex() == 1
 
 
-def test_double_determination_accept(qtbot, win, samples):
+def test_double_determination_accept(qtbot, win, samples, tmp_path):
+    from gcws.automation import journal as J
     from gcws.quant import duplicate_view as DV
     _load(qtbot, win, samples, ["07_", "11_"])
+    win.report2._journal = J.Journal(tmp_path / "journal.sqlite")
     ws = win.ws
     a = next(s.id for s in ws.states() if s.name.startswith("07_"))
     b = next(s.id for s in ws.states() if s.name.startswith("11_"))
@@ -1756,8 +1758,8 @@ def test_double_determination_accept(qtbot, win, samples):
     assert not dock._item_for(("group", g["id"])).text(0).startswith("✔")
     said = []
     ws.message.connect(said.append)
-    page.b_accept.click()                                   # not a Report² report: the status bar says so
-    assert any("no Report² report" in t for t in said)
+    page.b_accept.click()             # no report possible yet (no migration conditions): the status bar says so
+    assert any("not listed in Report²" in t for t in said) and not win.report2.journal.jobs()
 
 
 def test_replicates_back_from_a_group_of_three(qtbot, win, samples):

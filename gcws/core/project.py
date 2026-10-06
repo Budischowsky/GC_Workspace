@@ -83,11 +83,12 @@ def to_dict(ws, project_path: Path) -> dict:
     }
 
 
-def save(ws, path) -> Path:
+def save(ws, path, data: dict | None = None) -> Path:
+    """Write the project of ``ws`` (or ``data``, a :func:`to_dict` of it taken before) to ``path``."""
     path = Path(path)
     if path.suffix.lower() != SUFFIX:
         path = path.with_suffix(SUFFIX)
-    data = to_dict(ws, path)
+    data = to_dict(ws, path) if data is None else data
     tmp = path.with_suffix(SUFFIX + ".tmp")
     tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8")
     if path.exists():

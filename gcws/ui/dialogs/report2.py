@@ -1,5 +1,6 @@
 """Report² dialogs: the rules that decide "Control needed", a comment to an accept / reject, the reasons
-offered when a report is rejected, and the history of a report."""
+offered when a report is rejected, the history of a report, and the question when an accepted double
+determination has a name Report² lists already."""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
@@ -208,3 +209,35 @@ class HistoryDialog(QDialog):
         bb = QDialogButtonBox(QDialogButtonBox.Close)
         bb.rejected.connect(self.close)
         lay.addWidget(bb)
+
+
+def ask_name_clash(parent, name: str, batch: str, other, suggestion: str, taken) -> tuple | None:
+    """Report² lists a sample ``name`` in ``batch`` already (``other``): ``("rename", new name)``,
+    ``("overwrite", name)`` or None (cancelled). ``taken(text)`` tells whether a new name is listed too."""
+    from PySide6.QtWidgets import QInputDialog, QMessageBox
+    from gcws.automation import journal as J
+    from gcws.automation.manual import is_manual
+    whose = "accepted by hand" if is_manual(other) else "processed by a workflow"
+    box = QMessageBox(QMessageBox.Question, "Report²",
+                      f"Report² lists {other.group_name} in {batch} already ({whose}, "
+                      f"{J.STATE_LABELS.get(other.state, other.state).lower()}).", parent=parent)
+    box.setInformativeText("Rename this double determination, or overwrite the listed one? An overwritten "
+                           "report of a workflow is hidden (View > Show deleted reports brings it back).")
+    rename = box.addButton("Rename…", QMessageBox.AcceptRole)
+    overwrite = box.addButton("Overwrite", QMessageBox.DestructiveRole)
+    box.addButton(QMessageBox.Cancel)
+    box.setDefaultButton(rename)
+    box.exec()
+    if box.clickedButton() is overwrite:
+        return "overwrite", name
+    if box.clickedButton() is not rename:
+        return None
+    text = suggestion
+    while True:
+        text, ok = QInputDialog.getText(parent, "Rename", "Name in Report²:", text=text)
+        text = text.strip()
+        if not ok or not text:
+            return None
+        if not taken(text):
+            return "rename", text
+        QMessageBox.information(parent, "Rename", f"Report² lists {text} too. Choose another name.")

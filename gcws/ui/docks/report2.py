@@ -68,7 +68,10 @@ def can_reject(job: J.Job) -> bool:
 
 
 def can_reprocess(job: J.Job) -> bool:
-    return not job.deleted and not job.review_pending and job.state not in (J.QUEUED, J.PROCESSING)
+    """Process or report again: a workflow does it, so never an entry accepted by hand (accept it again in
+    Replicates instead)."""
+    return not job.deleted and not job.review_pending and job.state not in (J.QUEUED, J.PROCESSING) \
+        and job.workflow_id != J.MANUAL_WORKFLOW
 
 
 def delivered(job: J.Job) -> tuple[str, str]:
@@ -462,6 +465,8 @@ class Report2Dock(QWidget):
         self.workflow.addItem("All workflows", "")
         for w in W.list_workflows():
             self.workflow.addItem(w.name, w.id)
+        if self.journal.jobs(workflow_id=J.MANUAL_WORKFLOW):
+            self.workflow.addItem("Accepted by hand", J.MANUAL_WORKFLOW)
         self.workflow.setCurrentIndex(max(0, self.workflow.findData(cur_wf)))
         self.workflow.blockSignals(False)
         days = PERIODS[self.period.currentData() or "all"][1]
@@ -632,6 +637,9 @@ class Report2Dock(QWidget):
         it.setData(0, ROLE_KIND, "job")
         it.setData(0, Qt.UserRole, j.id)
         it.setToolTip(4, J.when(j.finished or j.created))
+        if j.workflow_id == J.MANUAL_WORKFLOW:
+            it.setToolTip(0, "Accepted by hand in Replicates (no workflow processed it)")
+            it.setToolTip(3, "Not delivered: no workflow delivers an entry accepted by hand")
         if j.deleted or j.state == J.REMOVED:
             for c in range(len(COLUMNS)):
                 it.setForeground(c, theme.status_color("neutral"))
@@ -709,6 +717,27 @@ class Report2Dock(QWidget):
         it = cur if cur in jobs else (jobs[-1] if jobs else None)
         self.current = it.data(0, Qt.UserRole) if it is not None else None
         self._show_detail(self.journal.job(self.current) if self.current else None)
+
+    def reveal(self, job_id: str):
+        """Show the report ``job_id``: To do or Archive as its batch is, the filters set so that it is in
+        the list, and selected."""
+        job = self.journal.job(job_id)
+        if job is None:
+            return
+        jobs = self.journal.jobs(batch_id=job.batch_id)
+        mode = "archive" if J.batch_closed(self.journal.batch_by_id(job.batch_id), jobs) else "todo"
+        if self.workflow.currentData() not in ("", job.workflow_id):
+            self.workflow.setCurrentIndex(0)
+        if self.filter != "all" and bucket(job) != self.filter:
+            self.filter = "all"
+        text = self.search.text().strip().casefold()
+        if text and text not in (job.group_name or "").casefold():
+            self.search.clear()
+        if mode != self.mode:
+            self.set_mode(mode)
+        else:
+            self.refresh()
+        self.select(job_id)
 
     def select(self, job_id: str):
         self.current = job_id
@@ -924,7 +953,7 @@ class Report2Dock(QWidget):
         self.a_reprocess.setEnabled(any(can_reprocess(j) for j in jobs))
         self.a_noblank.setEnabled(one is not None and one.state == J.NOT_PROCESSED and not one.deleted)
         self.a_remove.setEnabled(any(j.state in J.REMOVABLE for j in live))
-        self.a_export.setEnabled(one is not None and not one.deleted and
+        self.a_export.setEnabled(one is not None and not one.deleted and one.workflow_id != J.MANUAL_WORKFLOW and
                                  one.state in (J.CONTROL, J.ACCEPTED_AUTO, J.ACCEPTED_MANUAL))
         self.a_history.setEnabled(one is not None)
         self.a_folder.setEnabled(one is not None and bool(one.job_dir))
