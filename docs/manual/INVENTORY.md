@@ -1358,34 +1358,34 @@ Every text a user can see, by file and class. Dialogs and right-click menus only
 
 | Where | Call | Text | Line |
 |---|---|---|---|
-| PeakTable.__init__ | QAction | Delete peak(s) | 105 |
-| PeakTable.__init__ | addAction | Integrate | 113 |
-| PeakTable.__init__ | setToolTip | Re-integrate the active chromatogram with its method | 114 |
-| PeakTable.__init__ | addAction | Integrate all | 116 |
-| PeakTable.__init__ | setToolTip | Re-integrate all loaded chromatograms | 117 |
-| PeakTable.__init__ | addAction | Library search | 120 |
-| PeakTable.__init__ | setToolTip | Automatic library search of all peaks in your libraries | 121 |
-| PeakTable.__init__ | addAction | Export... | 124 |
-| PeakTable.__init__ | addAction | Columns... | 126 |
-| PeakTable.__init__ | setToolTip | Choose and order the table columns | 127 |
-| PeakTable.__init__ | addAction | Hide blank peaks | 129 |
-| PeakTable.__init__ | setToolTip | Hide peaks that are at blank level (sample area below the ratio limit x the blank peak's area) | 131 |
-| PeakTable.__init__ | setPlaceholderText | Filter... | 135 |
-| PeakTable.__init__ | QAction | Copy | 162 |
-| PeakTable._update_info | setText | {…} • {…} identified{…} | 207 |
-| PeakTable._build_source_switch | setToolTip | List the peaks of Chromatogram {…} | 225 |
-| PeakTable._sync_source | setText | Chromatogram {…} · {…} | 236 |
-| PeakTable._build_value_filter | QLabel | Show only peaks with | 246 |
-| PeakTable._build_value_filter | setToolTip | between: both limits included; outside: below the lower or above the upper | 253 |
-| PeakTable._build_value_filter | setPlaceholderText | value | 255 |
-| PeakTable._build_value_filter | QLabel | and | 257 |
-| PeakTable._build_value_filter | setPlaceholderText | value | 259 |
-| PeakTable._build_value_filter | setText | Clear | 262 |
-| PeakTable._build_value_filter | setToolTip | Show all peaks again | 263 |
-| PeakTable.build_menu | addAction | Copy | 391 |
-| PeakTable.build_menu | addAction | Clear identification | 393 |
-| PeakTable.build_menu | addMenu | Use library hit | 395 |
-| PeakTable._header_menu | addAction | Choose columns... | 532 |
+| PeakTable.__init__ | QAction | Delete peak(s) | 107 |
+| PeakTable.__init__ | addAction | Integrate | 115 |
+| PeakTable.__init__ | setToolTip | Re-integrate the active chromatogram with its method | 116 |
+| PeakTable.__init__ | addAction | Integrate all | 118 |
+| PeakTable.__init__ | setToolTip | Re-integrate all loaded chromatograms | 119 |
+| PeakTable.__init__ | addAction | Library search | 122 |
+| PeakTable.__init__ | setToolTip | Automatic library search of all peaks in your libraries | 123 |
+| PeakTable.__init__ | addAction | Export... | 126 |
+| PeakTable.__init__ | addAction | Columns... | 128 |
+| PeakTable.__init__ | setToolTip | Choose and order the table columns | 129 |
+| PeakTable.__init__ | addAction | Hide blank peaks | 131 |
+| PeakTable.__init__ | setToolTip | Hide peaks that are at blank level (sample area below the ratio limit x the blank peak's area) | 133 |
+| PeakTable.__init__ | setPlaceholderText | Filter... | 137 |
+| PeakTable.__init__ | QAction | Copy | 164 |
+| PeakTable._update_info | setText | {…} • {…} identified{…} | 209 |
+| PeakTable._build_source_switch | setToolTip | List the peaks of Chromatogram {…} | 237 |
+| PeakTable._sync_source | setText | Chromatogram {…} · {…} | 248 |
+| PeakTable._build_value_filter | QLabel | Show only peaks with | 258 |
+| PeakTable._build_value_filter | setToolTip | between: both limits included; outside: below the lower or above the upper | 265 |
+| PeakTable._build_value_filter | setPlaceholderText | value | 267 |
+| PeakTable._build_value_filter | QLabel | and | 269 |
+| PeakTable._build_value_filter | setPlaceholderText | value | 271 |
+| PeakTable._build_value_filter | setText | Clear | 274 |
+| PeakTable._build_value_filter | setToolTip | Show all peaks again | 275 |
+| PeakTable.build_menu | addAction | Copy | 403 |
+| PeakTable.build_menu | addAction | Clear identification | 405 |
+| PeakTable.build_menu | addMenu | Use library hit | 407 |
+| PeakTable._header_menu | addAction | Choose columns... | 544 |
 
 ### gcws/ui/docks/properties.py
 
@@ -1537,32 +1537,32 @@ Every text a user can see, by file and class. Dialogs and right-click menus only
 
 | Where | Call | Text | Line |
 |---|---|---|---|
-| StickPlot.__init__ | setToolTip | Click an ion to show its extracted ion chromatogram; drag to zoom, double-click resets | 105 |
-| SpectrumDock.__init__ | setToolTip | How the spectrum of a selected peak is formed | 392 |
-| SpectrumDock.__init__ | QCheckBox | subtract blank | 397 |
-| SpectrumDock.__init__ | QMenu | Own library selection and options | 400 |
-| SpectrumDock.__init__ | QAction | Whole scan range on the m/z axis | 420 |
-| SpectrumDock.__init__ | setToolTip | Show every spectrum on the run's whole scan range instead of fitting the m/z axis to the ions of the spectrum | 423 |
-| SpectrumDock.__init__ | QPushButton | Use these scans | 448 |
-| SpectrumDock.__init__ | setToolTip | Blue: scans averaged, red: background scans subtracted | 449 |
-| SpectrumDock.__init__ | QPushButton | Automatic | 451 |
-| SpectrumDock.__init__ | setToolTip | Selected peak: automatic scan choice again | 452 |
-| SpectrumDock.__init__ | hint | Drag the regions: blue averaged, red background scans | 458 |
-| SpectrumDock.__init__ | setHorizontalHeaderLabels | m/z | 467 |
-| SpectrumDock.__init__ | setHorizontalHeaderLabels | Abundance | 467 |
-| SpectrumDock.__init__ | setHorizontalHeaderLabels | Rel. % | 467 |
-| SpectrumDock.__init__ | setHorizontalHeaderLabels | Name | 472 |
-| SpectrumDock.__init__ | setHorizontalHeaderLabels | CAS | 472 |
-| SpectrumDock.__init__ | setHorizontalHeaderLabels | Score | 472 |
-| SpectrumDock.__init__ | setHorizontalHeaderLabels | Fwd | 472 |
-| SpectrumDock.__init__ | setHorizontalHeaderLabels | Rev | 472 |
-| SpectrumDock.__init__ | setHorizontalHeaderLabels | Library | 472 |
-| SpectrumDock.__init__ | addTab | Interpretation | 480 |
-| SpectrumDock.__init__ | addTab | Library hits | 481 |
-| SpectrumDock.__init__ | addTab | m/z table | 482 |
-| SpectrumDock.__init__ | addTab | Scans | 483 |
-| SpectrumDock._fill_own_menu | addAction | (no library - add one under Identify > Libraries...) | 1098 |
-| SpectrumDock._fill_own_menu | addAction | Options... | 1100 |
+| StickPlot.__init__ | setToolTip | Click an ion to show its extracted ion chromatogram; drag to zoom, double-click resets | 107 |
+| SpectrumDock.__init__ | setToolTip | How the spectrum of a selected peak is formed | 397 |
+| SpectrumDock.__init__ | QCheckBox | subtract blank | 402 |
+| SpectrumDock.__init__ | QMenu | Own library selection and options | 405 |
+| SpectrumDock.__init__ | QAction | Whole scan range on the m/z axis | 427 |
+| SpectrumDock.__init__ | setToolTip | Show every spectrum on the run's whole scan range instead of fitting the m/z axis to the ions of the spectrum | 430 |
+| SpectrumDock.__init__ | QPushButton | Use these scans | 455 |
+| SpectrumDock.__init__ | setToolTip | Blue: scans averaged, red: background scans subtracted | 456 |
+| SpectrumDock.__init__ | QPushButton | Automatic | 458 |
+| SpectrumDock.__init__ | setToolTip | Selected peak: automatic scan choice again | 459 |
+| SpectrumDock.__init__ | hint | Drag the regions: blue averaged, red background scans | 465 |
+| SpectrumDock.__init__ | setHorizontalHeaderLabels | m/z | 474 |
+| SpectrumDock.__init__ | setHorizontalHeaderLabels | Abundance | 474 |
+| SpectrumDock.__init__ | setHorizontalHeaderLabels | Rel. % | 474 |
+| SpectrumDock.__init__ | setHorizontalHeaderLabels | Name | 479 |
+| SpectrumDock.__init__ | setHorizontalHeaderLabels | CAS | 479 |
+| SpectrumDock.__init__ | setHorizontalHeaderLabels | Score | 479 |
+| SpectrumDock.__init__ | setHorizontalHeaderLabels | Fwd | 479 |
+| SpectrumDock.__init__ | setHorizontalHeaderLabels | Rev | 479 |
+| SpectrumDock.__init__ | setHorizontalHeaderLabels | Library | 479 |
+| SpectrumDock.__init__ | addTab | Interpretation | 487 |
+| SpectrumDock.__init__ | addTab | Library hits | 488 |
+| SpectrumDock.__init__ | addTab | m/z table | 489 |
+| SpectrumDock.__init__ | addTab | Scans | 490 |
+| SpectrumDock._fill_own_menu | addAction | (no library - add one under Identify > Libraries...) | 1105 |
+| SpectrumDock._fill_own_menu | addAction | Options... | 1107 |
 
 ### gcws/ui/layout/plot_menus.py
 
@@ -1722,26 +1722,26 @@ Every text a user can see, by file and class. Dialogs and right-click menus only
 
 | Where | Call | Text | Line |
 |---|---|---|---|
-| ChromPanel.__init__ | setToolTip | Drag to move the chromatogram left / right | 158 |
-| ChromPanel.__init__ | setToolTip | Drag: move up/down · right-drag or wheel: intensity (baseline stays) · double-click: fit | 160 |
-| ChromPanel.__init__ | setToolTip | Signal shown in this chromatogram | 188 |
-| ChromPanel.__init__ | QCheckBox | subtract blank | 191 |
-| ChromPanel.__init__ | setToolTip | Show and integrate this signal minus the assigned blank (settings: Quantify > Blank subtraction settings) | 193 |
-| ChromPanel.__init__ | QCheckBox | Solvent cut | 196 |
-| ChromPanel.__init__ | setToolTip | The peak table lists the peaks of this chromatogram | 200 |
-| ChromPanel.__init__ | QCheckBox | Overlay | 205 |
-| ChromPanel.__init__ | setToolTip | Show the other loaded chromatograms | 206 |
-| ChromPanel.__init__ | QCheckBox | Normalize | 208 |
-| ChromPanel.__init__ | setToolTip | Scale every trace to its own maximum (after the integration start) | 209 |
-| ChromPanel.__init__ | QCheckBox | Stack | 211 |
-| ChromPanel.__init__ | setToolTip | Offset the traces vertically | 212 |
-| ChromPanel.__init__ | addItems | Labels: RT | 218 |
-| ChromPanel.__init__ | addItems | Labels: # | 218 |
-| ChromPanel.__init__ | addItems | Labels: name | 218 |
-| ChromPanel.__init__ | addItems | Labels: off | 218 |
-| ChromPanel.__init__ | setText | Export... | 223 |
-| ChromPanel.__init__ | setToolTip | Save this chromatogram as a picture (PNG, SVG, PDF ...) | 224 |
-| ChromPanel.sync_header | setToolTip | Exclude solvent before {…} min ({…} time). Change the detector's end time under Chromatogramm. | 323 |
+| ChromPanel.__init__ | setToolTip | Drag to move the chromatogram left / right | 160 |
+| ChromPanel.__init__ | setToolTip | Drag: move up/down · right-drag or wheel: intensity (baseline stays) · double-click: fit | 162 |
+| ChromPanel.__init__ | setToolTip | Signal shown in this chromatogram | 190 |
+| ChromPanel.__init__ | QCheckBox | subtract blank | 193 |
+| ChromPanel.__init__ | setToolTip | Show and integrate this signal minus the assigned blank (settings: Quantify > Blank subtraction settings) | 195 |
+| ChromPanel.__init__ | QCheckBox | Solvent cut | 198 |
+| ChromPanel.__init__ | setToolTip | The peak table lists the peaks of this chromatogram | 202 |
+| ChromPanel.__init__ | QCheckBox | Overlay | 207 |
+| ChromPanel.__init__ | setToolTip | Show the other loaded chromatograms | 208 |
+| ChromPanel.__init__ | QCheckBox | Normalize | 210 |
+| ChromPanel.__init__ | setToolTip | Scale every trace to its own maximum (after the integration start) | 211 |
+| ChromPanel.__init__ | QCheckBox | Stack | 213 |
+| ChromPanel.__init__ | setToolTip | Offset the traces vertically | 214 |
+| ChromPanel.__init__ | addItems | Labels: RT | 220 |
+| ChromPanel.__init__ | addItems | Labels: # | 220 |
+| ChromPanel.__init__ | addItems | Labels: name | 220 |
+| ChromPanel.__init__ | addItems | Labels: off | 220 |
+| ChromPanel.__init__ | setText | Export... | 225 |
+| ChromPanel.__init__ | setToolTip | Save this chromatogram as a picture (PNG, SVG, PDF ...) | 226 |
+| ChromPanel.sync_header | setToolTip | Exclude solvent before {…} min ({…} time). Change the detector's end time under Chromatogramm. | 325 |
 
 ### gcws/ui/plot/overlay.py
 

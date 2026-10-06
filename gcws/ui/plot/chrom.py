@@ -147,6 +147,8 @@ class ChromPanel(QWidget):
         self.vb.on_reset = self.resetRequested.emit
         self.plot = pg.PlotWidget(viewBox=self.vb)
         self.plot.hideButtons()
+        from gcws.ui.widgets.empty_hint import EmptyHint
+        self.empty_hint = EmptyHint(self.plot.viewport(), "Double-click a run in Folders to load it")
         self.plot.getPlotItem().layout.setContentsMargins(0, 0, 0, 0)
         self.plot.getPlotItem().layout.setSpacing(0)
         self.plot.setLabel("bottom", "RT", units="min")
@@ -330,6 +332,7 @@ class ChromPanel(QWidget):
         if st is not None and self.run_key(st) != self.key:
             note = f"   (no blank for this run: {base_key(self.key)} shown)"
         self.title.setText((st.name + note) if st is not None else "no chromatogram loaded")
+        self.empty_hint.set_text("" if st is not None else "Double-click a run in Folders to load it")
         self._loading = False
         self.controls.reposition()
 

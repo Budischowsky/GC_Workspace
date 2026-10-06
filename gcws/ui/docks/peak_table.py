@@ -83,6 +83,8 @@ class PeakTable(QWidget):
         self.proxy = SortProxy(self)
         self.proxy.setSourceModel(self.model)
         self.view = QTableView()
+        from gcws.ui.widgets.empty_hint import EmptyHint
+        self.empty_hint = EmptyHint(self.view.viewport(), "No chromatogram loaded")
         self.view.setModel(self.proxy)
         self.view.setSortingEnabled(True)
         self.view.sortByColumn(1, Qt.AscendingOrder)
@@ -205,6 +207,16 @@ class PeakTable(QWidget):
         shown = self.proxy.rowCount()
         head = f"{shown} of {n} peaks shown" if shown != n else f"{n} peaks"
         self.info.setText(f"{head}  •  {idn} identified{extra}")
+        st = self.ws.active
+        if st is None:
+            hint = "No chromatogram loaded"
+        elif n == 0 and not st.processed:
+            hint = "Not integrated yet: Method ▸ Run Method (Ctrl+R) or Integrate (F5)"
+        elif n and not shown:
+            hint = "No peak matches the filter"
+        else:
+            hint = ""
+        self.empty_hint.set_text(hint)
         self.info.setToolTip("Unassigned identifications retained for review / undo:\n" + "\n".join(
             f"{i.apex_rt:.4f} min: {i.name or 'unnamed'} ({i.cas or 'no CAS'})"
             for i in self.model.orphans) if self.model.orphans else "")

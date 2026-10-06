@@ -639,3 +639,38 @@ def test_collapse_any_panel_to_its_side(qtbot, win):
         assert not other.sidebar.panels and not other.docks["props"].isHidden()
     finally:
         other.close()
+
+
+def test_empty_hints_tell_what_to_do(qtbot, win, samples):
+    from PySide6.QtWidgets import QApplication
+    QApplication.processEvents()
+    for panel in win.chroms:
+        assert panel.empty_hint.isVisible() and "Folders" in panel.empty_hint.text()
+    assert win.table.empty_hint.text() == "No chromatogram loaded"
+    assert win.spectrum.plot.empty_hint.isVisible()
+    _load(qtbot, win, samples, ["07_"], process=False)
+    QApplication.processEvents()
+    assert not win.chrom.empty_hint.isVisible()
+    assert win.table.empty_hint.text().startswith("Not integrated yet")
+    win.ws.process_runs()
+    qtbot.waitUntil(lambda: not win.table.empty_hint.isVisible(), timeout=60000)
+    win.table.filter.setText("no such peak name at all")
+    qtbot.waitUntil(lambda: win.table.empty_hint.text() == "No peak matches the filter", timeout=5000)
+    win.table.filter.setText("")
+
+
+def test_drop_band_uses_the_theme_colours(qtbot, win):
+    from PySide6.QtGui import QColor
+    from gcws.ui import theme
+    before = theme.MODE
+    band = win.overlay.band
+    band.resize(120, 60)
+    try:
+        for name in ("light", "dark"):
+            theme.set_theme(name)
+            img = band.grab().toImage()
+            edge = QColor(img.pixel(3, 30))
+            accent = QColor(theme.ACCENT)
+            assert abs(edge.hue() - accent.hue()) < 12, (name, edge.name(), accent.name())
+    finally:
+        theme.set_theme(before)

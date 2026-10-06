@@ -48,6 +48,7 @@ Two chromatogram panels with the same controls. They share one time axis.
 In the plot: the baseline and the start and end marks of each integrated peak, drop lines where peaks were
 split, peak labels, a cursor with the time and intensity under the mouse, and the regions used for the
 spectrum of the selected peak. A peak split by deconvolution is drawn as its fitted curve.
+With no chromatogram loaded, the plot says what to do: double-click a run in Folders.
 
 ## Peaks / substances
 
@@ -67,6 +68,8 @@ The peak table of one chromatogram.
 | **Show only peaks with** | A value filter: choose the column, a comparison (<, ≤, =, ≥, >, **between**, **outside**) and one or two values. **Clear** shows all peaks again. |
 
 The line below the table says how many peaks are shown and how many are identified.
+An empty table says why: no chromatogram loaded, the run is not integrated yet (Method ▸ Run Method or
+Integrate), or no peak matches the filter.
 
 Click a row to select the peak; both chromatograms zoom to it. **Name** and **CAS** can be typed into
 directly. Click a column header to sort; right-click it for **Choose columns...**.
@@ -133,6 +136,7 @@ Columns marked * are shown unless you change it.
 The plot shows the spectrum as sticks with m/z labels on the strongest ions. The caption names the source:
 peak, scan or range, and what was subtracted. When a library hit is chosen, its reference spectrum is drawn
 downwards below the measured one.
+Without a spectrum, the plot says how to get one: click a peak, or right-click a chromatogram.
 
 The tabs below the spectrum:
 

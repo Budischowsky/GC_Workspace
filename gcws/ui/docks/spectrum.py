@@ -90,6 +90,8 @@ class StickPlot(pg.PlotWidget):
     """
     ionClicked = QtSignal(int)                  # m/z of the stick clicked
     contextRequested = QtSignal(object)        # global screen position
+    EMPTY_TEXT = "Click a peak, or right-click a chromatogram, to see a spectrum"
+    empty_hint = None                          # set on the Mass spectrum panel's plot
 
     LABEL_GAP = 3                               # px between labels, and between a label and its stick
     CLICK_PX = 6                                # a click this close to a stick picks its ion
@@ -167,7 +169,10 @@ class StickPlot(pg.PlotWidget):
         self._rel = np.zeros(0)
         self._ref = None
         self._marks = {}
-        if mz is None or len(mz) == 0 or ab is None or len(ab) == 0 or np.max(ab) <= 0:
+        empty = mz is None or len(mz) == 0 or ab is None or len(ab) == 0 or np.max(ab) <= 0
+        if self.empty_hint is not None:
+            self.empty_hint.set_text(self.EMPTY_TEXT if empty else "")
+        if empty:
             self._home_range = None
             self.setTitle(None if self.embedded_title else (title or "no spectrum"))
             return
@@ -415,6 +420,8 @@ class SpectrumDock(QWidget):
 
         from gcws.ui.plot.overlay import ElidedLabel
         self.plot = StickPlot(embedded_title=True)
+        from gcws.ui.widgets.empty_hint import EmptyHint
+        self.plot.empty_hint = EmptyHint(self.plot.viewport(), StickPlot.EMPTY_TEXT)
         self.plot.range_provider = self.mz_axis_range
         self.plot.full_range = QSettings().value("spectrum/full_mz_range", False, type=bool)
         self.full_range_action = QAction("Whole scan range on the m/z axis", self)
