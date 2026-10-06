@@ -1,6 +1,6 @@
 """Automation workflows: a process chart of nodes and arrows.
 
-Watched folder -> Method -> Report² -> Report -> Target folder. Each arrow may carry a filter;
+Watched folder (-> Local copy) -> Method -> Report² -> Report -> Target folder. Each arrow may carry a filter;
 only what passes it goes on (e.g. only the Word report to folder B). Workflows are JSON files
 in ``<data>/automation/workflows``; the watcher reads them, the chart editor writes them.
 """
@@ -23,15 +23,16 @@ VERSION = 1
 
 NODE_TYPES = {
     "source": "Watched folder",
+    "copy": "Local copy",
     "method": "Method",
     "report2": "Report²",
     "report": "Report",
     "folder": "Target folder",
 }
 #: position of each node type in the chain; arrows only go to a later step
-RANK = {"source": 0, "method": 1, "report2": 2, "report": 3, "folder": 4}
-ALLOWED = {("source", "method"), ("method", "report2"), ("method", "report"), ("report2", "report"),
-           ("report", "folder")}
+RANK = {"source": 0, "copy": 1, "method": 2, "report2": 3, "report": 4, "folder": 5}
+ALLOWED = {("source", "method"), ("source", "copy"), ("copy", "method"), ("method", "report2"),
+           ("method", "report"), ("report2", "report"), ("report", "folder")}
 
 REPORT_KINDS = {"nias": "NIAS Report", "fingerprint": "Fingerprint Report",
                 "total_extraction": "Total Extraction Report", "hs_screening": "HS-Screening Report"}
@@ -70,6 +71,7 @@ OVERWRITE = {"version": "Keep both (add _2, _3 ...)", "overwrite": "Replace", "s
 DEFAULT_PARAMS = {
     "source": {"folder": "", "depth": 1, "pattern": "*", "interval_min": 5, "quiet_min": 30,
                "stable_scans": 2, "min_age_min": 2, "process_existing": False, "ignore_older_days": 14},
+    "copy": {"folder": ""},
     "method": {"method": "", "search": True, "istd_detect": True, "min_confidence": "high",
                "require_blank": "auto", "timeout_min": 30},
     "report2": {"rules": None, "auto_accept": True, "notify": True},
@@ -167,6 +169,20 @@ class Workflow:
         self.nodes.append(n)
         return n
 
+    def insert_copy(self, x: float = 0.0, y: float = 0.0, **params) -> Node:
+        """Adds a Local copy step between the watched folder and the methods it feeds (the filters of
+        those arrows stay on the arrows into the methods)."""
+        first = not self.by_type("copy")
+        cp = self.add_node("copy", x, y, **params)
+        src = self.source
+        if first and src is not None:
+            moved = [e for e in self.outgoing(src.id) if self._type(e.dst) == "method"]
+            for e in moved:
+                e.src = cp.id
+            if moved:
+                self.connect(src.id, cp.id)
+        return cp
+
     def connect(self, src: str, dst: str, **filt) -> Edge:
         e = Edge(new_id("e"), src, dst, {k: v for k, v in filt.items() if v not in (None, "", [])})
         self.edges.append(e)
@@ -218,6 +234,25 @@ class Workflow:
 
     def source_edge(self, method_id: str) -> Optional[Edge]:
         return next((e for e in self.incoming(method_id) if self._type(e.src) == "source"), None)
+
+    def feed(self, method_id: str) -> tuple[Optional[Node], list[Edge]]:
+        """How the runs reach the method: the Local copy step on the way (None: straight from the
+        watched folder) and the arrows from the watched folder to the method."""
+        direct = self.source_edge(method_id)
+        if direct is not None:
+            return None, [direct]
+        for e in self.incoming(method_id):
+            cp = self.node(e.src)
+            if cp is not None and cp.type == "copy":
+                first = next((e0 for e0 in self.incoming(cp.id) if self._type(e0.src) == "source"), None)
+                return cp, [x for x in (first, e) if x is not None]
+        return None, []
+
+    @property
+    def copy_step(self) -> Optional[Node]:
+        """The Local copy step (one per workflow), if any."""
+        found = self.by_type("copy")
+        return found[0] if found else None
 
     def _type(self, node_id: str) -> str:
         n = self.node(node_id)
@@ -348,6 +383,8 @@ def summary(node: Node) -> str:
     if t == "source":
         folder = node.p("folder") or "(no folder)"
         return f"{folder}\nevery {node.p('interval_min')} min"
+    if t == "copy":
+        return f"{node.p('folder') or '(no folder)'}\nthe copies are kept"
     if t == "method":
         extra = []
         if node.p("search"):
@@ -447,7 +484,26 @@ def validate(wf: Workflow, *, method_names: Optional[list] = None, check_paths: 
             err(src.id, "The check interval must be a number of minutes.")
         if not wf.outgoing(src.id):
             err(src.id, "Connect the watched folder to a method.")
+    copies = wf.by_type("copy")
+    for c in copies[1:]:
+        err(c.id, "A workflow makes one local copy.")
+    for c in copies[:1]:
+        local = (c.p("folder") or "").strip()
+        if not local:
+            err(c.id, "Choose the local folder for the copies.")
+        else:
+            if src_folder and store.is_inside(local, src_folder):
+                err(c.id, "The local folder lies inside the watched folder: the copies would be watched as new "
+                          "data. Choose a folder outside it.")
+            elif check_paths and not os.path.isdir(local):
+                warn(c.id, f"The folder does not exist yet and will be created: {local}")
+            if store.is_network(local):
+                warn(c.id, "The local folder is on a network drive: processing from it is not faster.")
+        if not any(wf._type(e.dst) == "method" for e in wf.outgoing(c.id)):
+            warn(c.id, "The local copy passes to no method: the runs are only copied.")
     for m in wf.by_type("method"):
+        if wf.source_edge(m.id) is not None and any(wf._type(e.src) == "copy" for e in wf.incoming(m.id)):
+            err(m.id, "A method takes its runs from the watched folder or from the local copy, not from both.")
         name = (m.p("method") or "").strip()
         if not name:
             err(m.id, "Choose the processing method.")

@@ -64,10 +64,11 @@ CREATE TABLE IF NOT EXISTS watcher(id INTEGER PRIMARY KEY CHECK (id = 1), pid IN
 CREATE TABLE IF NOT EXISTS batches(id INTEGER PRIMARY KEY, workflow_id TEXT, folder TEXT, folder_key TEXT,
     name TEXT, first_seen REAL, last_change REAL, has_log INTEGER DEFAULT 0, seq_completed INTEGER DEFAULT 0,
     state TEXT DEFAULT 'open', plan_json TEXT, deleted INTEGER DEFAULT 0, reopened REAL DEFAULT 0,
-    UNIQUE(workflow_id, folder_key));
+    local_folder TEXT, copied_extras TEXT, UNIQUE(workflow_id, folder_key));
 CREATE TABLE IF NOT EXISTS runs(id INTEGER PRIMARY KEY, batch_id INTEGER, path TEXT, stem TEXT, role TEXT,
     fingerprint TEXT, stable_count INTEGER DEFAULT 0, first_seen REAL, last_change REAL, state TEXT,
-    marker INTEGER DEFAULT 0, baseline INTEGER DEFAULT 0, UNIQUE(batch_id, stem));
+    marker INTEGER DEFAULT 0, baseline INTEGER DEFAULT 0, copied_fp TEXT, copy_error TEXT,
+    UNIQUE(batch_id, stem));
 CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, workflow_id TEXT, method_node TEXT, batch_id INTEGER,
     group_key TEXT, group_name TEXT, revision INTEGER DEFAULT 1, members_json TEXT, blanks_json TEXT,
     input_fp TEXT, state TEXT, reason TEXT, attempts INTEGER DEFAULT 0, not_before REAL DEFAULT 0,
@@ -104,18 +105,6 @@ def _user() -> str:
     return current_user()
 
 
-def _network(path: Path) -> bool:
-    p = str(path)
-    if p.startswith("\\\\"):
-        return True
-    try:
-        import ctypes
-        drive = os.path.splitdrive(os.path.abspath(p))[0] + "\\"
-        return ctypes.windll.kernel32.GetDriveTypeW(drive) == 4          # DRIVE_REMOTE
-    except Exception:  # noqa: BLE001
-        return False
-
-
 @dataclass
 class Job:
     """One row of ``jobs`` with its JSON columns decoded."""
@@ -150,7 +139,7 @@ class Journal:
                                    check_same_thread=False)
         self.con.row_factory = sqlite3.Row
         self.con.execute(f"PRAGMA busy_timeout={int(timeout * 1000)}")
-        mode = "DELETE" if _network(self.path) else "WAL"
+        mode = "DELETE" if store.is_network(self.path) else "WAL"
         try:
             self.con.execute(f"PRAGMA journal_mode={mode}")
         except sqlite3.OperationalError:
@@ -172,6 +161,13 @@ class Journal:
             self.con.execute("ALTER TABLE batches ADD COLUMN deleted INTEGER DEFAULT 0")
         if "reopened" not in columns:
             self.con.execute("ALTER TABLE batches ADD COLUMN reopened REAL DEFAULT 0")
+        for col in ("local_folder", "copied_extras"):
+            if col not in columns:
+                self.con.execute(f"ALTER TABLE batches ADD COLUMN {col} TEXT")
+        columns = {r["name"] for r in self.con.execute("PRAGMA table_info(runs)")}
+        for col in ("copied_fp", "copy_error"):
+            if col not in columns:
+                self.con.execute(f"ALTER TABLE runs ADD COLUMN {col} TEXT")
         self.con.execute(f"PRAGMA user_version={SCHEMA}")
 
     def close(self):

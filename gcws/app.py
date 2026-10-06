@@ -19,6 +19,9 @@ def main(argv=None):
     if len(argv) > 2 and argv[1] in ("--process-job", "--batch-report"):
         from gcws.automation.child import main as job_main
         job_main(argv)                         # a job process of the watcher; never returns
+    if len(argv) > 2 and argv[1] == "--copy-runs":
+        from gcws.automation.localcopy import main as copy_main
+        copy_main(argv)                        # the watcher's copy process; never returns
     if len(argv) > 1 and argv[1] == "--watch":
         from gcws.automation.watcher import main as watch_main
         return watch_main(argv)                # the watcher: tray icon, no main window
