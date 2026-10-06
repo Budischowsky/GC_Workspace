@@ -67,8 +67,8 @@ paste, `Ctrl+D` copies a value down. A changed cell is written in italics with a
 spreadsheet), so it is never mistaken for a yellow row; its tooltip shows the old value. Every edit is one undo
 step and is written to the audit trail.
 
-**Reset row** takes back your changes of the selected substance, **Reset all** every change of this double
-determination.
+**Reset row** in the right-click menu takes back your changes of a substance; **⋯ > Reset all** every change
+of this double determination.
 
 ## The limit
 
@@ -78,13 +78,14 @@ changes the report too.
 
 ## Report
 
-**NIAS report - preview** shows the report of this pair with exactly the rows that have the **Report** box
-ticked and the values set here. The other report buttons are at the top of the panel and in the **Report**
-menu. **Export...** writes the list as a worksheet.
+**Report preview** shows the report of this pair (NIAS, or HS-Screening when the quantification uses the
+TIC) with exactly the rows that have the **Report** box ticked and the values set here. The arrow beside it
+offers the other reports and **Export worksheet...**, which writes the list as a worksheet. The reports are
+also in the **Report** menu.
 
 ## Settings
 
-**Settings…** opens the pairing, gap filling and naming parameters. They are explained, with their defaults,
+**⋯ > Settings…** opens the pairing, gap filling and naming parameters. They are explained, with their defaults,
 in [How the double determination works](double-determination.md#settings). **Pairing: Classic** switches back
 to the pairing by name and retention time of earlier versions.
 
@@ -99,6 +100,6 @@ The **Groups (N-fold)** tab is for triplicates and more.
 | **Members...** | Ticks the determinations of the group and puts them in order: the first is A, the second B ... |
 | **Delete** | Removes the group (not the runs). |
 | **A peak counts as valid when** | **Found in all determinations**, **Found in the majority** or **Found in at least one**. |
-| **Export worksheet...** | Writes the averaged results of the group. |
+| **Report preview** | The report of the group; its arrow offers the other reports and **Export worksheet...** (the averaged results of the group). |
 
 A right-click on a group offers **Rename...**, **Members...** and **Delete**.

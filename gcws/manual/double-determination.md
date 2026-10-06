@@ -175,8 +175,8 @@ Every substance gets a colour, so that you only have to look at the exceptions.
 The limit is **Accept a difference up to** at the top of the tab (30 % unless changed). It is the same number
 as the report parameter *Duplicate difference limit*: changing it here changes the report too.
 
-**Only red** and `F3` (next red row) lead you through the decisions. **Only red and yellow** adds the rows
-for a quick look.
+The **Red** chip and `F3` (next open red row) lead you through the decisions. **To check** adds the yellow
+rows for a quick look and the rows you changed.
 
 ## What is changed automatically, and how to take it back
 
@@ -186,13 +186,13 @@ of step 3 and the names of step 4 by itself, as **one undo step**, and writes ea
 - `Ctrl+Z` takes all of them back at once.
 - An automatic change that you undo is **not made again** at the next **Compare**.
 - Right-click a row and choose **Remove the gap fill** to take out a single gap fill.
-- **Reset row** undoes your own changes to the selected substance, **Reset all** every change made in this
-  double determination.
+- **Reset row** (right-click a row) undoes your own changes to that substance, **⋯ > Reset all** every
+  change made in this double determination.
 - Boundaries (step 5) are never changed automatically in the panel, only by the automation.
 
 ## Settings
 
-**Settings...** in the **Double determination** tab. The settings are saved with a processing method
+**⋯ > Settings…** in the **Double determination** tab. The settings are saved with a processing method
 (**Method > Save current settings as Method...**).
 
 | Setting | Default | What it does | Change it when |

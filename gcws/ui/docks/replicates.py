@@ -81,16 +81,11 @@ class ReplicatesDock(QWidget):
         self.info = QLabel()
         self.info.setObjectName("hint")
         self.info.setWordWrap(True)
+        from gcws.ui.widgets.report_button import report_button
         buttons = QHBoxLayout()
-        for kind, label in (("nias", "NIAS report..."), ("fingerprint", "Fingerprint report..."),
-                            ("total_extraction", "Total extraction report..."), ("hs_screening", "HS-Screening report...")):
-            b = QPushButton(label)
-            b.clicked.connect(lambda _=False, k=kind: self._report(k))
-            buttons.addWidget(b)
-        exp = QPushButton("Export worksheet...")
-        exp.clicked.connect(self.export)
+        self.b_report = report_button(self, self._preview, self._report, self.export)
+        buttons.addWidget(self.b_report)
         buttons.addStretch(1)
-        buttons.addWidget(exp)
         right = QWidget()
         rl = QVBoxLayout(right)
         rl.setContentsMargins(0, 0, 0, 0)
@@ -328,3 +323,11 @@ class ReplicatesDock(QWidget):
         g = self.current_group()
         if g is not None:
             self.reportRequested.emit(kind, g["id"])
+
+    def _preview(self):
+        """The report that fits the quantification (HS-Screening on the TIC, else NIAS), as a preview."""
+        from gcws.quant.service import quant_detector
+        g = self.current_group()
+        if g is not None:
+            self.previewRequested.emit("hs_screening" if quant_detector(self.ws.quant) == "TIC" else "nias",
+                                       g["id"])

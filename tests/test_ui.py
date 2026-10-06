@@ -1587,3 +1587,20 @@ def test_double_determination_row_menu_always_has_actions(qtbot, win, samples, m
     assert "checked by hand" in QGuiApplication.clipboard().text()
     dict(page.row_actions(row()))[f"Show in {labels[1]}"]()
     assert ws.active_id == b
+
+
+def test_replicates_report_button_and_more_menu(qtbot, win, monkeypatch):
+    page = win.replicates.duplicate
+    kinds = ["NIAS report...", "Fingerprint report...", "Total extraction report...", "HS-Screening report..."]
+    for button in (page.b_report, win.replicates.b_report):
+        texts = [a.text() for a in button.menu().actions() if a.text()]
+        assert texts == kinds + ["Export worksheet..."] and button.text() == "Report preview"
+    calls = []
+    monkeypatch.setattr(page, "_report", lambda kind, preview=False: calls.append((kind, preview)))
+    page.b_report.click()
+    page.b_report.menu().actions()[1].trigger()
+    assert calls == [("nias", True), ("fingerprint", False)]
+    more = [a.text() for a in page.b_more.menu().actions() if a.text()]
+    assert more == ["Settings…", "3+ determinations…", "Reset all"]
+    page.b_more.menu().actions()[1].trigger()
+    assert win.replicates.tabs.currentIndex() == 1

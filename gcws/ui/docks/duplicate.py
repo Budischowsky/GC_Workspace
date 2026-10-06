@@ -108,10 +108,18 @@ class DuplicatePage(QWidget):
         self.b_report2 = QPushButton("Load from Report²…")
         self.b_report2.setToolTip("Switch to a processed double determination shown in Report²")
         self.b_report2.clicked.connect(self.report2Requested.emit)
-        more = QToolButton()
-        more.setText("3+ determinations…")
-        more.setToolTip("Triplicates and more: the Groups (N-fold) tab")
-        more.clicked.connect(self._to_groups_tab)
+        self.b_more = more = QToolButton()
+        more.setText("⋯")
+        more.setToolTip("Settings, three or more determinations, reset")
+        more.setPopupMode(QToolButton.InstantPopup)
+        menu = QMenu(more)
+        menu.addAction("Settings…", self.edit_settings).setToolTip(
+            "Pairing (features or classic), gap filling, consensus name")
+        menu.addAction("3+ determinations…", self._to_groups_tab)
+        menu.addSeparator()
+        menu.addAction("Reset all", self.reset_all).setToolTip("Undo every change made in this double determination")
+        menu.setToolTipsVisible(True)
+        more.setMenu(menu)
         # Compare and Report² first: they stay in view in a narrow dock (choosing A or B compares anyway)
         pick = QHBoxLayout()
         for w in (self.b_compare, self.b_report2, QLabel("A"), self.a, swap, QLabel("B"), self.b):
@@ -126,10 +134,6 @@ class DuplicatePage(QWidget):
         self.limit.setToolTip("Maximum relative difference |A−B| / mean. This is the report parameter "
                               "'Duplicate difference limit': changing it changes the report too.")
         self.limit.editingFinished.connect(self._limit_changed)
-        self.b_settings = QToolButton()
-        self.b_settings.setText("Settings…")
-        self.b_settings.setToolTip("Pairing (features or classic), gap filling, consensus name")
-        self.b_settings.clicked.connect(self.edit_settings)
         # the chips count the rows of each colour and filter the list (clicked again: all rows)
         self.filter = "all"
         self.counts: dict[str, int] = {}
@@ -147,7 +151,6 @@ class DuplicatePage(QWidget):
         lim.addWidget(QLabel("Accept a difference up to"))
         lim.addWidget(self.limit)
         lim.addWidget(theme.hint("(report parameter)", False))
-        lim.addWidget(self.b_settings)
 
         self.banner = ElidedLabel()               # one line; the whole text is its tooltip
         self.banner.setObjectName("chip")
@@ -216,34 +219,18 @@ class DuplicatePage(QWidget):
         split.addWidget(plots)
         split.setSizes([320, 220])
 
+        from gcws.ui.widgets.report_button import report_button
         buttons = QHBoxLayout()
-        prev = QPushButton("NIAS report - preview")
-        theme.set_primary(prev)
-        prev.setToolTip("The NIAS report of this double determination with the rows and values chosen here")
-        prev.clicked.connect(lambda: self._report("hs_screening" if self.quant_signal() == "TIC" else "nias", preview=True))
-        buttons.addWidget(prev)
-        for kind, label in (("nias", "NIAS report..."), ("fingerprint", "Fingerprint report..."),
-                            ("total_extraction", "Total extraction report..."), ("hs_screening", "HS-Screening report...")):
-            b = QPushButton(label)
-            b.clicked.connect(lambda _=False, k=kind: self._report(k))
-            buttons.addWidget(b)
+        self.b_report = report_button(
+            self, lambda: self._report("hs_screening" if self.quant_signal() == "TIC" else "nias", preview=True),
+            lambda kind: self._report(kind), lambda: self.export())
+        buttons.addWidget(self.b_report)
         buttons.addStretch(1)
         self.b_bounds = QPushButton("Harmonise boundaries")
         self.b_bounds.setToolTip("Take over every proposed integration boundary (one undo step)")
         self.b_bounds.clicked.connect(lambda: self.apply_boundaries(None))
         self.b_bounds.setVisible(False)
         buttons.addWidget(self.b_bounds)
-        reset_row = QPushButton("Reset row")
-        reset_row.setToolTip("Undo the analyst's changes of the selected substance")
-        reset_row.clicked.connect(self.reset_row)
-        reset_all = QPushButton("Reset all")
-        reset_all.setToolTip("Undo every change made in this double determination")
-        reset_all.clicked.connect(self.reset_all)
-        buttons.addWidget(reset_row)
-        buttons.addWidget(reset_all)
-        exp = QPushButton("Export...")
-        exp.clicked.connect(self.export)
-        buttons.addWidget(exp)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(4, 4, 4, 4)

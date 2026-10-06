@@ -228,17 +228,15 @@ Two tabs. Described in [Double determination](wf-double.md).
 | **A**, **B** boxes | The two determinations. |
 | **⇄** | Swaps A and B. |
 | **Compare** | Pairs the two determinations and fills the list. |
+| **⋯** | **Settings…** (pairing, gap filling, consensus name), **3+ determinations…** (the **Groups (N-fold)** tab) and **Reset all** (undoes every change made in this double determination). |
 | **Load from Report²…** | Switches to another processed A/B sample visible in Report², grouped by batch. Changes to the current pair are saved first. The empty menu says **No processed A/B pairs under the current Report² filters**. |
-| **3+ determinations…** | Goes to the **Groups (N-fold)** tab. |
 | **All**, **To check**, **Red**, **Yellow**, **Green**, **Grey** | Chips that count the substances of each colour. A click shows only those rows, a second click all rows again. **To check** is red and yellow plus the rows you changed. |
 | **Accept a difference up to** | The difference limit in percent (a report parameter). |
 | **?** | The keys of the list (Enter, Delete, F2, Ctrl+C / Ctrl+V, Ctrl+D). |
-| **Settings…** | Pairing, gap filling, consensus name. |
-| **NIAS report - preview** | The NIAS report of this pair. |
+| **Report preview** | The report of this pair (NIAS, or HS-Screening on the TIC). Its arrow offers **NIAS report...**, **Fingerprint report...**, **Total extraction report...**, **HS-Screening report...** and **Export worksheet...**. |
 | **Harmonise boundaries** | Takes over every proposed integration boundary. Shown when there are proposals. |
-| **Reset row** | Undoes your changes of the selected substance. |
-| **Reset all** | Undoes every change made in this double determination. |
-| **Export...** | Writes the list as a worksheet. |
+
+A right-click on a row offers **Reset row** and the other row actions (see [Double determination](wf-double.md#decide)).
 
 The line under the chips sums up the comparison in one line (the whole text is its tooltip); beside it,
 how many substances go into the report and how many you changed.
@@ -247,9 +245,8 @@ Below the list: the two chromatograms of the selected substance, A upwards and B
 spectra, mirrored the same way.
 
 **Groups (N-fold)** tab: **Suggest**, **New...**, **Members...**, **Delete**, the box
-**A peak counts as valid when**, the averaged results, and the buttons **NIAS report...**,
-**Fingerprint report...**, **Total extraction report...**, **HS-Screening report...** and
-**Export worksheet...**.
+**A peak counts as valid when**, the averaged results, and **Report preview** with the other reports and
+**Export worksheet...** under its arrow.
 
 ## Automation
 
