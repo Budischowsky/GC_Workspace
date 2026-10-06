@@ -156,3 +156,16 @@ def test_blank_level_is_not_reported_by_default():
     # the analyst can still report it
     keep, _ = DV.rows_for_report(rows, {"12.000": {"rt": 12.0, "report": True}}, 30.0, 0.01, 0.035)
     assert [r["rt"] for r in keep] == [10.0, 12.0]
+
+
+def test_deleted_row_leaves_the_report():
+    from gcws.quant import duplicate_view as DV
+    rows = [_pair(10.0, 0.10, 0.12), _pair(12.0, 0.05, None, status="Artefact: only determination 1")]
+    verdicts = [DV.plain_verdict(r, 30.0, 0.01) for r in rows]
+    edits = {"10.000": {"rt": 10.0, "deleted": True}, "12.001": {"rt": 12.001, "deleted": True, "report": True}}
+    out = DV.apply_edits(rows, verdicts, edits, 0.035)
+    assert [r["deleted"] for r in out] == [True, True] and not any(r["report"] for r in out)
+    assert [r["decided"] for r in out] == [False, True]                  # deleting answers a red row
+    keep, _ = DV.rows_for_report(rows, edits, 30.0, 0.01, 0.035)
+    assert keep == []
+    assert [r["deleted"] for r in DV.apply_edits(rows, verdicts, {}, 0.035)] == [False, False]

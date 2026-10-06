@@ -46,9 +46,9 @@ BASELINE_WINDOW = 1.0
 #: wider views (min) of the mirror plot scale to the substances without the internal standards
 WIDE_VIEW = 3.0
 WIDE_PERCENTILE = 90
-KEYS_NOTE = ("Enter: report · Delete: not reported · a click or Space: switch the Report box · type or F2: edit · "
-             "Ctrl+C / Ctrl+V · Ctrl+D or drag the small square of the marking: copy down. Changes are marked, "
-             "undoable and logged.")
+KEYS_NOTE = ("Enter: report · Backspace: not reported · a click or Space: switch the Report box · Delete: delete the "
+             "row (Restore under the Deleted chip) · type or F2: edit · Ctrl+C / Ctrl+V · Ctrl+D or drag the small "
+             "square of the marking: copy down. Changes are marked, undoable and logged.")
 ICON = {"ok": "✔", "warn": "⚠", "bad": "✖", "info": "ℹ", "neutral": "·", "decided": "◉"}
 #: icon cell: True on a red row that still waits for the analyst (F3 goes there)
 OPEN_ROLE = Qt.UserRole + 1
@@ -69,7 +69,9 @@ FILTERS = {"all": ("All", "info", "Every substance"),
                                  "large. F3: next open red row."),
            "yellow": ("Yellow", "warn", "Made consistent automatically: a quick look"),
            "green": ("Green", "ok", "Confirmed in both determinations"),
-           "grey": ("Grey", "neutral", "Not reported anyway: below the reporting limit or at blank level")}
+           "grey": ("Grey", "neutral", "Not reported anyway: below the reporting limit or at blank level"),
+           "deleted": ("Deleted", "neutral", "The rows you deleted: not in the list, the counts or the report. "
+                                             "Right-click: Restore row.")}
 FIELD_OF = {C_REPORT: "report", C_NAME: "name", C_CAS: "cas", C_A1: "a1", C_A2: "a2", C_C1: "c1", C_C2: "c2",
             C_MEAN: "mean", C_COMMENT: "comment"}
 
@@ -188,6 +190,7 @@ class DuplicatePage(QWidget):
         self.table.itemChanged.connect(self._cell_edited)
         self.table.markRequested.connect(self._mark_rows)
         self.table.toggleRequested.connect(self._toggle_rows)
+        self.table.deleteRequested.connect(self._delete_rows)
         self.table.bulkEdit.connect(self._bulk_edit)
         self.table.setAlternatingRowColors(True)
         self.table.setItemDelegate(EditedDelegate(self.table))     # changed cells: a corner mark
@@ -520,14 +523,24 @@ class DuplicatePage(QWidget):
         self._update_report_note()
 
     def _update_report_note(self):
-        n = sum(1 for r in self.rows if r.get("report"))
-        changed = sum(1 for r in self.rows if r.get("edited"))
-        text = f"{n} of {len(self.rows)} in the report"
+        rows = [r for r in self.rows if not r.get("deleted")]
+        n = sum(1 for r in rows if r.get("report"))
+        changed = sum(1 for r in rows if r.get("edited"))
+        deleted = len(self.rows) - len(rows)
+        text = f"{n} of {len(rows)} in the report"
         if changed:
             text += f" · {changed} changed"
+        if deleted:
+            text += f" · {deleted} deleted"
         self.edit_note.setText(text)
-        self.edit_note.setToolTip(f"{n} of {len(self.rows)} substances go into the report"
-                                  + (f"; {changed} changed by the analyst" if changed else ""))
+        self.edit_note.setToolTip(f"{n} of {len(rows)} substances go into the report"
+                                  + (f"; {changed} changed by the analyst" if changed else "")
+                                  + (f"; {deleted} deleted (the Deleted chip shows them)" if deleted else ""))
+
+    def _live(self):
+        """``(rows, verdicts)`` without the rows the analyst deleted."""
+        pairs = [(r, v) for r, v in zip(self.rows, self.verdicts) if not r.get("deleted")]
+        return [r for r, _ in pairs], [v for _, v in pairs]
 
     def _names(self) -> str:
         return " / ".join(self.ws.runs[m].name for m in self.members if m in self.ws.runs)
@@ -536,8 +549,8 @@ class DuplicatePage(QWidget):
         """Store (or with ``None`` remove) one analyst change of ``row`` in the replicate group."""
         self.set_edits([(row, field, value)])
 
-    def set_edits(self, changes: list) -> None:
-        """Several ``(row, field, value)`` changes as one undo step; each is logged."""
+    def set_edits(self, changes: list, label: str | None = None) -> None:
+        """Several ``(row, field, value)`` changes as one undo step (``label``: its text); each is logged."""
         from datetime import datetime
         from gcws.core.audit import current_user
         if not changes:
@@ -560,14 +573,17 @@ class DuplicatePage(QWidget):
             else:
                 e[field] = value
             e["by"], e["at"] = current_user(), datetime.now().isoformat(timespec="seconds")
-            if not any(k in e for k in DV.NUMERIC_EDITS + ("report", "comment")):
+            if not any(k in e for k in DV.NUMERIC_EDITS + DV.ROW_FLAGS):
                 edits.pop(key, None)
             name = row.get("name") or f"RT {row['rt']:.3f}"
-            logs.append((f"{name} (RT {row['rt']:.3f}): {field}", "" if before is None else str(before),
-                         "reset" if value is None else str(value)))
-        if len(changes) == 1:
+            if field == "deleted":
+                logs.append((f"{name} (RT {row['rt']:.3f})", "", "row deleted" if value else "row restored"))
+            else:
+                logs.append((f"{name} (RT {row['rt']:.3f}): {field}", "" if before is None else str(before),
+                             "reset" if value is None else str(value)))
+        if label is None and len(changes) == 1:
             label = f"double determination: {changes[0][1]} of {name}"
-        else:
+        elif label is None:
             label = f"double determination: {len(changes)} cells changed"
         _stale(tg)
         self.set_groups(groups, label)
@@ -650,7 +666,7 @@ class DuplicatePage(QWidget):
         return None if on == DV.default_report(self.base_rows[k], self.verdicts[k]) else on
 
     def _mark_rows(self, visual_rows: list, on: bool):
-        """Enter / Delete: the marked substances go into the report, or not."""
+        """Enter / Backspace: the marked substances go into the report, or not."""
         self._mark_keys([self._row_index(r) for r in visual_rows], on)
 
     def _mark_keys(self, keys: list, on: bool):
@@ -674,6 +690,27 @@ class DuplicatePage(QWidget):
         keys = [k for k in keys if k is not None and 0 <= k < len(self.rows)]
         if keys:
             self._mark_keys(keys, not all(self.rows[k].get("report") for k in keys))
+
+    def _delete_rows(self, visual_rows: list):
+        """Delete: the marked substances leave the list, the counts and the report (one undo step);
+        when all of them are deleted already, they are restored."""
+        keys = [k for k in dict.fromkeys(self._row_index(r) for r in visual_rows) if k is not None]
+        self.delete_keys(keys, not all(self.rows[k].get("deleted") for k in keys))
+
+    def delete_keys(self, keys: list, deleted: bool = True) -> int:
+        """Delete (or restore) the substances ``keys`` (indices into ``rows``); returns how many changed."""
+        rows = [self.rows[k] for k in keys if 0 <= k < len(self.rows) and bool(self.rows[k].get("deleted")) != deleted]
+        if not rows:
+            return 0
+        what = "deleted" if deleted else "restored"
+        one = rows[0].get("name") or f"RT {rows[0]['rt']:.3f}"
+        self.set_edits([(r, "deleted", True if deleted else None) for r in rows],
+                       f"double determination: {one} {what}" if len(rows) == 1 else
+                       f"double determination: {len(rows)} rows {what}")
+        n = len(rows)
+        self.ws.message.emit(f"{n} row{'s' if n != 1 else ''} {what}" +
+                             (" · Ctrl+Z undoes · the Deleted chip shows them" if deleted else ""))
+        return n
 
     def _report_clicked(self, index):
         """A click in a Report cell: switched once the click is over (the table is rebuilt then)."""
@@ -796,7 +833,8 @@ class DuplicatePage(QWidget):
 
     def _show_summary(self, rows, labels):
         """Chips and status line of the classic pairing."""
-        s = DV.summarize(rows, self.verdicts, DV.limits(self.ws)[0], labels)
+        live, verdicts = self._live()
+        s = DV.summarize(live, verdicts, DV.limits(self.ws)[0], labels)
         self._update_chips()
         if len(self.members) != 2:
             self.banner.setText("Single determination: choose a partner B to compare.")
@@ -814,8 +852,8 @@ class DuplicatePage(QWidget):
         self.banner.setProperty("level", level)
 
     def decision_counts(self) -> tuple[int, int]:
-        """(red rows still open, red rows the analyst has decided)."""
-        red = [r for r, v in zip(self.rows, self.verdicts) if v.level == "bad"]
+        """(red rows still open, red rows the analyst has decided); deleted rows do not count."""
+        red = [r for r, v in zip(self.rows, self.verdicts) if v.level == "bad" and not r.get("deleted")]
         decided = sum(1 for r in red if r.get("decided"))
         return len(red) - decided, decided
 
@@ -825,15 +863,17 @@ class DuplicatePage(QWidget):
         n = {key: sum(1 for r, v, lt in zip(self.rows, self.verdicts, lights) if self._passes(key, r, v, lt))
              for key in FILTERS}
         self.counts = n
+        if self.filter == "deleted" and not n["deleted"]:
+            self.filter = "all"                      # every deleted row restored: the whole list again
         n_open, n_decided = self.decision_counts()
         for key, (label, level, tip) in FILTERS.items():
             text = f"{label} {n[key]}"
             if key == "red" and n_decided:
                 text += f" · {n_open} open"
-            theme.set_chip(self.chips[key], text, level)
+            theme.set_chip(self.chips[key], text if key != "deleted" or n[key] else "", level)
             self.chips[key].setProperty("selected", key == self.filter)
             theme._repolish(self.chips[key])
-        lone = sum(1 for r, lt in zip(self.rows, lights) if lt == "red"
+        lone = sum(1 for r, lt in zip(self.rows, lights) if lt == "red" and not r.get("deleted")
                    and str(r.get("status", "")).startswith("Artefact"))
         self.chips["red"].setToolTip(FILTERS["red"][2] + (f" {lone} of them found in one determination only."
                                                           if lone else ""))
@@ -887,6 +927,8 @@ class DuplicatePage(QWidget):
 
     @staticmethod
     def _passes(key: str, row: dict, v, light: str | None = None) -> bool:
+        if row.get("deleted") or key == "deleted":
+            return bool(row.get("deleted")) and key == "deleted"   # deleted rows only under their chip
         light = light or DV.light_of(row, v)
         if key == "all":
             return True
@@ -903,6 +945,7 @@ class DuplicatePage(QWidget):
 
     def _show_lights(self, rows):
         """Chips and status line of the feature pairing: how many rows are green, yellow, red, grey."""
+        rows = [r for r in rows if not r.get("deleted")]
         n = {c: sum(1 for r in rows if r.get("light") == c) for c in ("green", "yellow", "red", "grey")}
         diffs = [r["reldiff"] for r in rows if r.get("reldiff") is not None and r.get("light") != "grey"]
         self._update_chips()
@@ -992,9 +1035,14 @@ class DuplicatePage(QWidget):
             n1 = ((row.get("source1") or {}).get("name") or "").strip()
             n2 = ((row.get("source2") or {}).get("name") or "").strip()
             hits_differ = feature_rows and n1 and n2 and n1.casefold() != n2.casefold()
+            deleted = bool(row.get("deleted"))
+            if deleted:
+                tip = "Deleted by the analyst: not in the counts or the report. Right-click: Restore row."
             for c, val in enumerate(vals):
                 it = _SeverityItem() if c in (C_ICON, C_REPORT) else QTableWidgetItem()
-                if c == C_REPORT:
+                if c == C_REPORT and deleted:
+                    it.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)      # no box: it is not reported
+                elif c == C_REPORT:
                     it.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                     it.setCheckState(Qt.Checked if row.get("report") else Qt.Unchecked)
                     it.setData(SORT_ROLE, (10000.0 if row.get("report") else 0.0) + float(row.get("rt") or 0.0))
@@ -1033,8 +1081,13 @@ class DuplicatePage(QWidget):
                     it.setToolTip(f"Changed by the analyst" + (f" (was {was:.4g})" if isinstance(was, float) else
                                                                (f" (was {'on' if was else 'off'})" if field == "report"
                                                                 else "")))
+                if deleted:
+                    font = it.font()
+                    font.setStrikeOut(True)
+                    it.setFont(font)
+                    it.setForeground(QBrush(QColor(theme.FAINT)))
                 self.table.setItem(r, c, it)
-            if not row.get("report"):
+            if not row.get("report") and not deleted:
                 for c in (C_RT, C_NAME, C_MEAN):
                     self.table.item(r, c).setForeground(QBrush(QColor(theme.FAINT)))
         self.table.resizeColumnsToContents()
@@ -1221,17 +1274,21 @@ class DuplicatePage(QWidget):
     def row_actions(self, row) -> list:
         """``[(text, callable)]`` of the right-click menu of ``row``; ``(None, None)`` is a separator."""
         labels = self.labels()
-        out = [("Report", lambda: self._mark_rows(self._marked_or(row), True)),
-               ("Not reported", lambda: self._mark_rows(self._marked_or(row), False))]
-        if row.get("edit_key") in self.edits():
-            out.append(("Reset row", lambda: self.reset_row(row)))
-        out.append(("Comment…", lambda: self.edit_comment(row)))
+        if row.get("deleted"):
+            out = [("Restore row", lambda: self._delete_rows(self._marked_or(row)))]
+        else:
+            out = [("Report", lambda: self._mark_rows(self._marked_or(row), True)),
+                   ("Not reported", lambda: self._mark_rows(self._marked_or(row), False)),
+                   ("Delete row", lambda: self._delete_rows(self._marked_or(row)))]
+            if row.get("edit_key") in self.edits():
+                out.append(("Reset row", lambda: self.reset_row(row)))
+            out.append(("Comment…", lambda: self.edit_comment(row)))
         for key, i in (("source1", 0), ("source2", 1)):
             if row.get(key) is not None and i < len(self.members):
                 out.append((f"Show in {labels[i]}", lambda b=bool(i): self._navigate(row, prefer_b=b)))
         out.append(("Copy row", lambda: self.copy_row(row)))
         f = self.feature_of(row)
-        if f is None:
+        if f is None or row.get("deleted"):
             return out
         out.append((None, None))
         ident = f.identity
@@ -1375,6 +1432,8 @@ class DuplicatePage(QWidget):
                 self._signed[i] = (tr[0], (1 if i == 0 else -1) * tr[1])
         istd = self._istd_times()
         for k, (row, v) in enumerate(zip(self.rows, self.verdicts)):
+            if row.get("deleted"):
+                continue
             color = theme.status_color(v.level)
             for sign, key, tr in ((1, "source1", traces[0] if traces else None),
                                   (-1, "source2", traces[1] if len(traces) > 1 else None)):
@@ -1604,7 +1663,7 @@ class DuplicatePage(QWidget):
         sh.append(["RT [min]", "Substance", "CAS", f"{labels[0]} [{unit}]", f"{labels[1]} [{unit}]",
                    f"Mean [{unit}]", "Diff. %", "Verdict", "Explanation", "Report", "Changed by analyst", "Comment"])
         fills = {lvl: PatternFill("solid", fgColor=theme.LEVELS[lvl][1].lstrip("#")) for lvl in theme.LEVELS}
-        for row, v in zip(self.rows, self.verdicts):
+        for row, v in zip(*self._live()):
             sh.append([excel_safe(x) for x in (
                 row.get("rt"), row.get("name"), row.get("cas"), row.get("c1"), row.get("c2"), row.get("mean"),
                 row.get("reldiff"), v.text, v.detail, "yes" if row.get("report") else "no",

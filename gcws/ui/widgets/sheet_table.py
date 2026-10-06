@@ -1,7 +1,8 @@
 """A QTableWidget that edits like a spreadsheet.
 
 * arrow keys move the current cell, Shift+arrows / mouse drag mark a range;
-* **Delete** / **Enter** emit ``markRequested(rows, False / True)`` (e.g. the Report box);
+* **Backspace** / **Enter** emit ``markRequested(rows, False / True)`` (e.g. the Report box);
+* **Delete** emits ``deleteRequested(rows)`` (the owner deletes or restores the rows);
 * **Space** on a check box emits ``toggleRequested(rows)``: the owner switches every marked row;
 * **Ctrl+C** copies the marked cells as tab-separated text, **Ctrl+V** pastes one value into
   every marked cell or a block from the current cell on;
@@ -25,6 +26,7 @@ HANDLE = 7          # px, the fill handle's size
 class SheetTable(QTableWidget):
     markRequested = QtSignal(list, bool)          # visual rows, on
     toggleRequested = QtSignal(list)              # visual rows: Space on a check box
+    deleteRequested = QtSignal(list)              # visual rows: Delete
     bulkEdit = QtSignal(list)                     # [(visual row, column, value)]
 
     def __init__(self, rows: int = 0, columns: int = 0, parent=None):
@@ -86,7 +88,9 @@ class SheetTable(QTableWidget):
             self.paste()
         elif ev.key() == Qt.Key_D and ev.modifiers() == Qt.ControlModifier:
             self.fill_down()
-        elif ev.key() in (Qt.Key_Delete, Qt.Key_Backspace) and not ev.modifiers():
+        elif ev.key() == Qt.Key_Delete and not ev.modifiers():
+            self.deleteRequested.emit(self.selected_rows())
+        elif ev.key() == Qt.Key_Backspace and not ev.modifiers():
             self.markRequested.emit(self.selected_rows(), False)
         elif ev.key() in (Qt.Key_Return, Qt.Key_Enter) and not (ev.modifiers() & ~Qt.KeypadModifier):
             self.markRequested.emit(self.selected_rows(), True)

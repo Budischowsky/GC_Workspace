@@ -16,7 +16,7 @@ Press **Compare**.
 ## Read the result
 
 The chips at the top count the rows of each colour - **All**, **To check**, **Red**, **Yellow**, **Green**,
-**Grey** - and the line below them sums it up, for example: *3 of 84 substances need your decision (red;
+**Grey** (and **Deleted** once you deleted a row) - and the line below them sums it up, for example: *3 of 84 substances need your decision (red;
 F3 = next); 9 were made consistent automatically (yellow), 72 are confirmed. Mean difference 6.2 %.* When the
 panel is narrow the line is shortened; its tooltip shows all of it.
 
@@ -63,6 +63,8 @@ Right-click a row:
 | Item | When it is offered | What it does |
 |---|---|---|
 | **Report** / **Not reported** | always | Puts the substance (or all marked rows, when it is one of them) into the report, or takes it out. |
+| **Delete row** | always | Deletes the substance (or all marked rows): it leaves the list, the counts and the report. A red row counts as decided. |
+| **Restore row** | under the chip **Deleted** | Brings the deleted substance (or all marked rows) back. |
 | **Reset row** | the row has your changes (not offered otherwise) | Takes back your changes of this substance. |
 | **Comment…** | always | A comment for the report. |
 | **Show in A** / **Show in B** | the substance is in that determination | Opens that determination with the peak selected. |
@@ -82,14 +84,21 @@ You can also edit the list directly, as in a spreadsheet:
 - the areas, the values of A and B, the mean and a comment can be changed.
 
 Move with the arrow keys, mark several cells with `Shift` or by dragging, type or press `F2` to edit.
-`Enter` puts the marked substances into the report and `Delete` takes them out; `Space` on a **Report** box
-switches all marked rows (into the report, or out of it when all are in already). `Ctrl+C` / `Ctrl+V` copy and
+`Enter` puts the marked substances into the report and `Backspace` takes them out; `Space` on a **Report** box
+switches all marked rows (into the report, or out of it when all are in already). `Delete` deletes the marked
+rows (see below). `Ctrl+C` / `Ctrl+V` copy and
 paste, `Ctrl+D` copies a value down. A changed cell is written in italics with a small triangle in its corner (as a comment in a
 spreadsheet), so it is never mistaken for a yellow row; its tooltip shows the old value. Every edit is one undo
 step and is written to the audit trail.
 
 **Reset row** in the right-click menu takes back your changes of a substance; **More > Reset all** every change
 of this double determination.
+
+**Delete row** (or `Delete`) takes substances you do not want out of the list altogether - a peak of the
+solvent or the column, for example. They no longer count on the chips or in the line above the list, `F3` skips
+them, and the report leaves them out. The chip **Deleted** shows them (struck through); **Restore row** there,
+or `Delete` again, brings them back, and `Ctrl+Z` undoes the deletion. Like every change it is saved in the
+project and written to the audit trail.
 
 ## Accept
 

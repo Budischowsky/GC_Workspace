@@ -1070,11 +1070,11 @@ def test_double_determination_sheet_keys_and_fill(qtbot, win, samples):
     rts = [page.rows[k_of(r0 + i)]["rt"] for i in range(3)]
     stack = page._stack()
     n0 = stack.count()
-    # Delete: two marked rows leave the report, as one undo step
+    # Backspace: two marked rows leave the report, as one undo step
     t.setFocus()
     t.setCurrentCell(r0, C_NAME)
     t.setRangeSelected(QTableWidgetSelectionRange(r0, C_NAME, r0 + 1, C_NAME), True)
-    QTest.keyClick(t, Qt.Key_Delete)
+    QTest.keyClick(t, Qt.Key_Backspace)
     r = rows_by_rt(rts[:2])
     assert all(not page.rows[k_of(x)]["report"] for x in r)
     assert stack.count() == n0 + 1
@@ -1899,3 +1899,62 @@ def test_double_determination_report_ticks(qtbot, win, samples):
     plain = next(r for r in page.rows if r.get("edit_key") not in page.edits())
     assert "Reset row" not in dict(page.row_actions(plain))
     assert "Reset row" in dict(page.row_actions(page.rows[k]))
+
+
+def test_double_determination_delete_rows(qtbot, win, samples):
+    """Delete: the marked rows leave the list, the counts and the report (one undo step); the Deleted
+    chip shows them and Restore row brings one back."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QTableWidgetSelectionRange
+    from gcws.ui.docks.duplicate import C_ICON, C_NAME, OPEN_ROLE
+    _load(qtbot, win, samples, ["07_", "11_"])
+    ws = win.ws
+    a = next(s.id for s in ws.states() if s.name.startswith("07_"))
+    b = next(s.id for s in ws.states() if s.name.startswith("11_"))
+    win.loaded_samples.pairRequested.emit(a, b)
+    page = win.replicates.duplicate
+    t = page.table
+
+    def k_at(r):
+        return t.item(r, 0).data(Qt.UserRole)
+
+    def shown():
+        return {k_at(r) for r in range(t.rowCount())}
+
+    reds = [r for r in range(t.rowCount()) if t.item(r, C_ICON).data(OPEN_ROLE)]
+    assert reds[:2] == [0, 1]                                  # the open red rows come first
+    keys = [k_at(0), k_at(1)]
+    n_all, (open0, _decided) = page.counts["all"], page.decision_counts()
+    assert page.chips["deleted"].isHidden()
+    stack = page._stack()
+    n0 = stack.count()
+    t.setFocus()
+    t.clearSelection()
+    t.setCurrentCell(0, C_NAME)
+    t.setRangeSelected(QTableWidgetSelectionRange(0, C_NAME, 1, C_NAME), True)
+    QTest.keyClick(t, Qt.Key_Delete)
+    assert stack.count() == n0 + 1 and "deleted" in stack.undoText()
+    assert all(page.rows[k]["deleted"] and not page.rows[k]["report"] for k in keys)
+    assert not shown() & set(keys)
+    assert page.counts["all"] == n_all - 2 and page.counts["deleted"] == 2 and not page.chips["deleted"].isHidden()
+    assert page.decision_counts()[0] == open0 - 2 and "2 deleted" in page.edit_note.text()
+    assert any(r.action == "Double determination changed" and r.after == "row deleted" for r in ws.audit.records)
+    # stored in the replicate group, so the report leaves them out
+    rts = {round(page.rows[k]["rt"], 3) for k in keys}
+    assert all(e.get("deleted") for e in page.group()["edits"].values() if round(e["rt"], 3) in rts)
+    # the Deleted chip shows them; Restore row brings one back
+    page.set_filter("deleted")
+    assert shown() == set(keys)
+    actions = dict(page.row_actions(page.rows[keys[0]]))
+    assert "Restore row" in actions and "Report" not in actions and "Delete row" not in actions
+    t.clearSelection()
+    actions["Restore row"]()
+    assert not page.rows[keys[0]]["deleted"] and page.rows[keys[1]]["deleted"] and shown() == {keys[1]}
+    # undo: deleted again, then not deleted at all; the list shows every row again
+    stack.undo()
+    assert page.rows[keys[0]]["deleted"]
+    stack.undo()
+    assert not any(page.rows[k]["deleted"] for k in keys)
+    assert page.filter == "all" and page.chips["deleted"].isHidden() and set(keys) <= shown()
+    assert "Delete row" in dict(page.row_actions(page.rows[keys[0]]))

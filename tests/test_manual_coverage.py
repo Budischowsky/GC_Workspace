@@ -154,7 +154,8 @@ def test_every_right_click_menu_item_is_explained(manual_text):
         v.visit(ast.parse(path.read_text(encoding="utf-8")))
         labels += [text for _scope, call, text, _line in v.rows
                    if call in ("addAction", "addMenu", "QAction", "QMenu") and text not in placeholders]
-    labels += ["Name: ...", "Remove the gap fill", "Harmonise the boundaries"]     # double determination rows
+    labels += ["Name: ...", "Remove the gap fill", "Harmonise the boundaries",      # double determination rows
+               "Delete row", "Restore row"]
     assert len(labels) > 80
     assert missing(labels, manual_text) == []
 

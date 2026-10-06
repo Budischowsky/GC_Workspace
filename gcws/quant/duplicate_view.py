@@ -300,12 +300,15 @@ def default_limit(ws) -> float:
 
 # -- analyst edits (double determination -> report) ----------------------------------------------
 #
-# The analyst can change the areas and concentrations of a pair, its mean, add a comment and decide
-# whether the substance goes into the report. The edits are kept in the replicate group
-# (``group["edits"]``) under the pair's mean RT and found again by RT after a re-integration.
-# Names and CAS are not kept here: they become the identification of both peaks.
+# The analyst can change the areas and concentrations of a pair, its mean, add a comment, decide
+# whether the substance goes into the report and delete the row (it leaves the list, the counts and
+# the report; it can be restored). The edits are kept in the replicate group (``group["edits"]``)
+# under the pair's mean RT and found again by RT after a re-integration. Names and CAS are not kept
+# here: they become the identification of both peaks.
 
 NUMERIC_EDITS = ("a1", "a2", "c1", "c2", "mean")
+#: the other fields of an edit; any of them (or a number) decides a red row
+ROW_FLAGS = ("report", "comment", "deleted")
 
 
 def default_report(row: dict, verdict: Verdict | None = None) -> bool:
@@ -347,8 +350,8 @@ def _mean(values):
 
 def apply_edits(rows: list[dict], verdicts: list, edits: dict, tol: float) -> list[dict]:
     """``rows`` with the analyst's changes applied. Every returned row carries ``a1``/``a2`` (areas),
-    ``report`` (bool), ``comment``, ``edited`` = {field: value before the change} and ``decided``
-    (a red row the analyst has answered).
+    ``report`` (bool), ``comment``, ``deleted``, ``edited`` = {field: value before the change} and
+    ``decided`` (a red row the analyst has answered). A deleted row is never reported.
 
     An edited area changes that determination's concentration in proportion (same factor and
     O/V); an edited concentration and the mean are taken as entered; the mean and the difference
@@ -366,6 +369,7 @@ def apply_edits(rows: list[dict], verdicts: list, edits: dict, tol: float) -> li
         r["comment"] = ""
         r["edited"] = {}
         r["decided"] = False
+        r["deleted"] = False
         if row.get("feature_id") in by_id:
             k = row["feature_id"]
         else:
@@ -404,9 +408,11 @@ def apply_edits(rows: list[dict], verdicts: list, edits: dict, tol: float) -> li
                 r["report"] = bool(e["report"])
             if e.get("comment"):
                 r["comment"] = str(e["comment"])
-            # a red row the analyst has answered (report box, comment or a value) is decided
+            if e.get("deleted"):
+                r["deleted"], r["report"] = True, False
+            # a red row the analyst has answered (report box, comment, a value or deleted) is decided
             r["decided"] = v.level == "bad" and any(e.get(f) is not None and e.get(f) != ""
-                                                    for f in NUMERIC_EDITS + ("report", "comment"))
+                                                    for f in NUMERIC_EDITS + ROW_FLAGS)
         if r["report"] and r.get("mean") is None:
             r["mean"] = _mean([r.get("c1"), r.get("c2")])      # a single determination the analyst keeps
         out.append(r)

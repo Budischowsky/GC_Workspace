@@ -239,13 +239,14 @@ The double-determination page:
 | **More** | **Settings…** (pairing, gap filling, consensus name), **3+ determinations…** (the worksheet of the first group of three or more) and **Reset all** (undoes every change made in this double determination). |
 | **Load from Report²…** | Switches to another processed A/B sample visible in Report², grouped by batch. Changes to the current pair are saved first. The empty menu says **No processed A/B pairs under the current Report² filters**. |
 | **All**, **To check**, **Red**, **Yellow**, **Green**, **Grey** | Chips that count the substances of each colour. A click shows only those rows, a second click all rows again. **To check** is red and yellow plus the rows you changed. |
+| **Deleted** | Shown once you deleted rows: a click shows them, to restore them (right-click **Restore row**). Deleted rows are not counted and not reported. |
 | **Difference limit** | The largest difference between A and B in percent. It is the report parameter *Duplicate difference limit*: the chip **report parameter** beside it says so, and shows the default when the value differs from it. Changing it changes every report of the project (the status bar says so). |
-| **?** | The keys of the list (Enter, Delete, Space on the **Report** box, F2, Ctrl+C / Ctrl+V, Ctrl+D). |
+| **?** | The keys of the list (Enter, Backspace, Space on the **Report** box, Delete, F2, Ctrl+C / Ctrl+V, Ctrl+D). |
 | **Report preview** | The report of this pair (NIAS, or HS-Screening on the TIC). Its arrow offers **NIAS report...**, **Fingerprint report...**, **Total extraction report...**, **HS-Screening report...** and **Export worksheet...**. |
 | **Harmonise boundaries** | Takes over every proposed integration boundary. Shown when there are proposals. |
 | **Accept double determination** | Possible when no red row is open. Saves who accepted it and when with the project, writes it to the audit trail and marks the pair ✔ in the list; when the pair is a Report² report (a workflow processed it) it is accepted there too, however the project was opened. The status bar says which. A later change reopens it (**Accept again**). |
 
-A right-click on a row offers **Reset row** and the other row actions (see [Double determination](wf-double.md#decide)).
+A right-click on a row offers **Delete row**, **Reset row** and the other row actions (see [Double determination](wf-double.md#decide)).
 
 The line under the chips sums up the comparison in one line (the whole text is its tooltip); beside it,
 how many substances go into the report and how many you changed. Right-click a column header to show or hide

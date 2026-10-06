@@ -143,8 +143,8 @@ class ReplicatesDock(QWidget):
         chips = QHBoxLayout()
         chips.setSpacing(4)
         for key, (label, level, tip) in FILTERS.items():
-            if key == "check":
-                continue                                    # nothing is changed by hand here
+            if key in ("check", "deleted"):
+                continue                                    # nothing is changed or deleted by hand here
             chip = Chip()
             chip.setToolTip(SHEET_TIPS.get(key, tip))
             chip.clicked.connect(lambda k=key: self.set_sheet_filter(k))
