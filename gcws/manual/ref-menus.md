@@ -165,6 +165,9 @@ See [Unattended processing](wf-automation.md).
 | **Light Mode**, **Dark Mode**, **Dark Mode - Neon** | | The look of the program. |
 | **Next theme** | `Ctrl+Shift+D` | Steps to the next look. |
 
+In every layout, Quantification, Replicates / results, Automation and Report² are tabs beside the peak table,
+where they have room; Integration method, Properties and Audit trail are tabs beside Folders.
+
 ## Help
 
 | Item | Key | What it does |

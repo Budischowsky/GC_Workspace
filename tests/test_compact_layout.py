@@ -294,3 +294,25 @@ def test_metadata_changes_do_not_recalculate_deconvolution(qtbot, win, samples, 
     ws.runChanged.emit(st.id)
     assert len(calls) == 1
     np.testing.assert_array_equal(sp.spec.ab, before)
+
+
+def test_presets_give_work_panels_room(qtbot, win):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
+    from gcws.ui.layout import presets
+    for name in presets.PRESETS:
+        win.apply_preset(name)
+        QApplication.processEvents()
+        left = [d for d in win.docks.values() if not d.isHidden() and not d.isFloating()
+                and win.dockWidgetArea(d) == Qt.LeftDockWidgetArea]
+        assert len(left) <= 4, (name, [d.windowTitle() for d in left])
+        if name.startswith("Dual"):
+            continue
+        group = win.tabifiedDockWidgets(win.docks["table"])
+        for key in ("quant", "replicates", "report2"):
+            assert win.docks[key] in group, (name, key)
+    win.apply_preset("Review")
+    QApplication.processEvents()
+    rep = win.docks["replicates"]
+    assert rep.isVisible() and rep.width() > 0.4 * win.width()
+    win.apply_preset("Chromatogram top")
