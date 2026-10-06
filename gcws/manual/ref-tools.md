@@ -101,6 +101,10 @@ From left to right:
 
 ## Panel title buttons
 
+Most panels carry their title and buttons in a bar on top. Chromatogram 1, Chromatogram 2 and Mass spectrum
+carry them in a narrow strip along the right edge, so the plots keep their height. When panels share a group
+of tabs, the name is on the tab and the bar above the panel is slim, with the buttons only.
+
 | Button | What it does |
 |---|---|
 | Maximize | Lets the panel fill the window; again to restore. The same as a double-click on the title. |

@@ -65,6 +65,7 @@ class DockTitleBar(QWidget):
         theme.notifier().changed.connect(self._theme_changed)      # dropped with this widget
         self.active = False
         self.maximized = False
+        self.tabbed = False
         self.setObjectName("dockTitle")
         self.setAttribute(Qt.WA_StyledBackground, True)
         lay = QVBoxLayout(self) if vertical else QHBoxLayout(self)
@@ -74,6 +75,8 @@ class DockTitleBar(QWidget):
         self.label.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.label.setObjectName("dockTitleText")
         lay.addWidget(self.label, 1)
+        if not vertical:
+            lay.addStretch(0)                 # keeps the buttons right when the name is hidden
         self.b_max = self._button(lambda: self.on_maximize(self.dock))
         self.b_float = self._button(self._toggle_float)
         self.b_close = self._button(self._close)
@@ -111,6 +114,19 @@ class DockTitleBar(QWidget):
             self.update_buttons()
         except RuntimeError:                  # the dock is already gone
             pass
+
+    def set_tabbed(self, on: bool) -> None:
+        """A tabbed panel's name is already on its tab: show only the buttons in a slim bar."""
+        on = bool(on) and not self.vertical
+        if on == self.tabbed:
+            return
+        self.tabbed = on
+        self.label.setVisible(not on)
+        self.layout().setContentsMargins(*(3, 0, 3, 0) if on else (10, 2, 3, 2))
+        self.setProperty("tabbed", on)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.updateGeometry()
 
     def set_maximized(self, on: bool) -> None:
         self.maximized = bool(on)
@@ -192,5 +208,7 @@ class DockTitleBar(QWidget):
     def sizeHint(self):
         if self.vertical:
             return QSize(30, 180)
+        if self.tabbed:
+            return QSize(super().sizeHint().width(), self.b_close.sizeHint().height())
         h = max(self.label.sizeHint().height(), 20) + 6
         return QSize(super().sizeHint().width(), h)

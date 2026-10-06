@@ -316,3 +316,23 @@ def test_presets_give_work_panels_room(qtbot, win):
     rep = win.docks["replicates"]
     assert rep.isVisible() and rep.width() > 0.4 * win.width()
     win.apply_preset("Chromatogram top")
+
+
+def test_tabbed_panels_show_a_slim_bar(qtbot, win):
+    from PySide6.QtWidgets import QApplication
+    from gcws.ui.layout.title_bar import title_bar
+    win.apply_preset("Chromatogram top")
+    QApplication.processEvents()
+    qtbot.wait(20)
+    table, spec = title_bar(win.docks["table"]), title_bar(win.docks["spectrum"])
+    props = title_bar(win.docks["props"])
+    assert table.tabbed and props.tabbed and not spec.tabbed          # the rail of a plot panel stays
+    assert table.label.isHidden() and table.b_close.isVisible() and table.b_max.isVisible()
+    normal = table.sizeHint().height()
+    win.docks["props"].setFloating(True)
+    QApplication.processEvents()
+    qtbot.wait(20)
+    assert not props.tabbed and not props.label.isHidden()
+    assert props.sizeHint().height() > normal
+    win.docks["props"].setFloating(False)
+    win.apply_preset("Chromatogram top")

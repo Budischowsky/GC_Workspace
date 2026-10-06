@@ -115,6 +115,10 @@ class MainWindow(QMainWindow):
                    "quant": self.quant, "replicates": self.replicates, "automation": self.automation,
                    "report2": self.report2}
         self.overlay = DropOverlay(self)
+        self._tab_sync = QTimer(self)
+        self._tab_sync.setSingleShot(True)
+        self._tab_sync.setInterval(0)
+        self._tab_sync.timeout.connect(self._sync_tabbed)
         for key, title in DOCKS:
             self._add_dock(key, title, widgets[key])
 
@@ -160,8 +164,19 @@ class MainWindow(QMainWindow):
             d.setWidget(widget)
             d.setTitleBarWidget(DockTitleBar(d, self.toggle_maximize))
         self.overlay.watch(d)
+        for sig in (d.dockLocationChanged, d.topLevelChanged, d.visibilityChanged):
+            sig.connect(lambda *_: self._tab_sync.start())
         self.docks[key] = d
         return d
+
+    def _sync_tabbed(self):
+        """Panels sharing a tab group show their name on the tab only: a slim bar with the buttons."""
+        from gcws.ui.layout.title_bar import title_bar
+        for d in self.docks.values():
+            bar = title_bar(d)
+            if hasattr(bar, "set_tabbed"):
+                bar.set_tabbed(not d.isFloating() and any(
+                    not o.isHidden() and not o.isFloating() for o in self.tabifiedDockWidgets(d)))
 
     def _action(self, text, slot=None, shortcut=None, ic=None, tip=None, checkable=False):
         a = QAction(text, self)
