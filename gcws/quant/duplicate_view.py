@@ -329,7 +329,8 @@ def _mean(values):
 
 def apply_edits(rows: list[dict], verdicts: list, edits: dict, tol: float) -> list[dict]:
     """``rows`` with the analyst's changes applied. Every returned row carries ``a1``/``a2`` (areas),
-    ``report`` (bool), ``comment`` and ``edited`` = {field: value before the change}.
+    ``report`` (bool), ``comment``, ``edited`` = {field: value before the change} and ``decided``
+    (a red row the analyst has answered).
 
     An edited area changes that determination's concentration in proportion (same factor and
     O/V); an edited concentration and the mean are taken as entered; the mean and the difference
@@ -346,6 +347,7 @@ def apply_edits(rows: list[dict], verdicts: list, edits: dict, tol: float) -> li
         r["report"] = default_report(row, v)
         r["comment"] = ""
         r["edited"] = {}
+        r["decided"] = False
         if row.get("feature_id") in by_id:
             k = row["feature_id"]
         else:
@@ -384,10 +386,18 @@ def apply_edits(rows: list[dict], verdicts: list, edits: dict, tol: float) -> li
                 r["report"] = bool(e["report"])
             if e.get("comment"):
                 r["comment"] = str(e["comment"])
+            # a red row the analyst has answered (report box, comment or a value) is decided
+            r["decided"] = v.level == "bad" and any(e.get(f) is not None and e.get(f) != ""
+                                                    for f in NUMERIC_EDITS + ("report", "comment"))
         if r["report"] and r.get("mean") is None:
             r["mean"] = _mean([r.get("c1"), r.get("c2")])      # a single determination the analyst keeps
         out.append(r)
     return out
+
+
+def is_open(row: dict, verdict: Verdict) -> bool:
+    """A red row that still waits for the analyst's decision."""
+    return verdict.level == "bad" and not row.get("decided")
 
 
 def rows_for_report(rows: list[dict], edits: dict, limit: float, reporting_limit: float, tol: float,

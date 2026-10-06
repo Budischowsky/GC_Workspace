@@ -26,7 +26,10 @@ were made consistent automatically (yellow), 72 are confirmed.*
 
 The column with the verdict says why a row has its colour, and the notes beside it give the evidence.
 
-- **Only red** shows just the rows to decide; `F3` jumps to the next red row.
+- **Only red** shows just the rows to decide; `F3` jumps to the next red row that is still open.
+- A red row you have answered (its **Report** box changed, a comment or a value) is **decided**: it gets the
+  mark ◉ and `F3` goes past it. The line above the list counts down, for example *Red: 7 → 2 open · 5
+  decided*, and says **All decisions made** when none is left. Undo makes the row open again.
 - **Only red and yellow** adds the rows for a quick look.
 - Click a row: both chromatograms below show that substance, A upwards and B downwards, and beside them the
   two spectra, mirrored the same way.

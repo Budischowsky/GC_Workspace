@@ -126,3 +126,19 @@ def test_analyst_edits_and_report_rows():
     # an edit is found again after a small RT shift (re-integration), but only within the tolerance
     assert DV.find_edit({"10.000": {"rt": 10.0}}, 10.02, 0.035) == "10.000"
     assert DV.find_edit({"10.000": {"rt": 10.0}}, 10.05, 0.035) is None
+
+
+def test_red_row_decided_by_the_analyst():
+    from gcws.quant import duplicate_view as DV
+    rows = [_pair(10.0, 0.10, 0.12), _pair(12.0, 0.05, None, status="Artefact: only determination 1"),
+            _pair(14.0, 0.07, None, status="Artefact: only determination 1")]
+    verdicts = [DV.plain_verdict(r, 30.0, 0.01) for r in rows]
+    plain = DV.apply_edits(rows, verdicts, {}, 0.035)
+    assert [DV.is_open(r, v) for r, v in zip(plain, verdicts)] == [False, True, True]
+    # the report box or a comment answers a red row; a green row is never "decided"
+    edits = {"12.001": {"rt": 12.001, "report": False}, "10.000": {"rt": 10.0, "comment": "fine"}}
+    out = DV.apply_edits(rows, verdicts, edits, 0.035)
+    assert [r["decided"] for r in out] == [False, True, False]
+    assert [DV.is_open(r, v) for r, v in zip(out, verdicts)] == [False, False, True]
+    edits["14.000"] = {"rt": 14.0, "comment": "checked the spectrum"}
+    assert all(not DV.is_open(r, v) for r, v in zip(DV.apply_edits(rows, verdicts, edits, 0.035), verdicts))

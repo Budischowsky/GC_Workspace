@@ -1469,6 +1469,20 @@ def test_double_determination_features_panel(qtbot, win, samples):
     page.table.setCurrentCell(0, 3)
     page.next_red()
     assert page.table.item(page.table.currentRow(), C_ICON).text() == ICON["bad"]
+    # the analyst answers that red row: it is decided, F3 goes past it and the open count drops
+    open0, decided0 = page.decision_counts()
+    r = page.table.currentRow()
+    k = page.table.item(r, 0).data(Qt.UserRole)
+    page._mark_rows([r], not page.rows[k]["report"])
+    assert page.rows[k]["decided"] and page.decision_counts() == (open0 - 1, decided0 + 1)
+    r = next(i for i in range(page.table.rowCount()) if page.table.item(i, 0).data(Qt.UserRole) == k)
+    assert page.table.item(r, C_ICON).text() == ICON["decided"]
+    page.table.setCurrentCell(r, 3)
+    page.next_red()
+    assert page.table.item(page.table.currentRow(), 0).data(Qt.UserRole) != k or open0 == 1
+    assert ("open" in page.banner.text() or "All decisions made" in page.banner.text())
+    win.a_undo.trigger()
+    assert page.decision_counts() == (open0, decided0)
     # the spectra of the selected substance
     k = next(i for i, r in enumerate(page.rows) if r.get("sim") is not None)
     r = next(i for i in range(page.table.rowCount()) if page.table.item(i, 0).data(Qt.UserRole) == k)

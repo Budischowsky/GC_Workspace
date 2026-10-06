@@ -46,7 +46,9 @@ WIDE_VIEW = 3.0
 WIDE_PERCENTILE = 90
 KEYS_NOTE = ("Enter: report · Delete: not reported · type or F2: edit · Ctrl+C / Ctrl+V · Ctrl+D or drag the "
              "small square of the marking: copy down. Changes are marked, undoable and logged.")
-ICON = {"ok": "✔", "warn": "⚠", "bad": "✖", "info": "ℹ", "neutral": "·"}
+ICON = {"ok": "✔", "warn": "⚠", "bad": "✖", "info": "ℹ", "neutral": "·", "decided": "◉"}
+#: icon cell: True on a red row that still waits for the analyst (F3 goes there)
+OPEN_ROLE = Qt.UserRole + 1
 #: table column -> edited field
 C_ICON, C_REPORT, C_RT, C_NAME, C_CAS, C_A1, C_A2, C_C1, C_C2, C_MEAN, C_DIFF, C_VERDICT, C_NOTES, C_COMMENT = range(14)
 #: feature pairing only (appended, so the columns above keep their places)
@@ -491,6 +493,11 @@ class DuplicatePage(QWidget):
         if not self.base_rows or self._filling:
             return
         self.rows = DV.apply_edits(self.base_rows, self.verdicts, self.edits(), self._tol())
+        if self.rows and self.rows[0].get("light"):
+            self._show_lights(self.rows)
+        elif self.rows:
+            self._show_summary(self.rows, self.labels())
+        theme._repolish(self.banner)
         self._fill_table()
         self._update_report_note()
 
@@ -711,7 +718,6 @@ class DuplicatePage(QWidget):
 
     def _show(self, rows, verdicts, problems):
         self.rows, self.verdicts = rows, verdicts
-        limit = DV.limits(self.ws)[0]
         labels = self.labels()
         if problems:
             for c in self.cards.values():
@@ -721,21 +727,40 @@ class DuplicatePage(QWidget):
         elif rows and rows[0].get("light"):
             self._show_lights(rows)
         else:
-            self._card_captions(labels)
-            s = DV.summarize(rows, verdicts, limit, labels)
-            self.cards["confirmed"].set(s.confirmed)
-            self.cards["deviating"].set(s.deviating)
-            self.cards["only_a"].set(s.only_a)
-            self.cards["only_b"].set(s.only_b)
-            self.cards["conflicts"].set(s.conflicts)
-            self.cards["mean"].set("–" if s.mean_reldiff is None else f"{s.mean_reldiff:.1f} %")
-            self.banner.setText(("✔  " if s.level == "ok" else "⚠  ") + s.text if len(self.members) == 2 else
-                                "Single determination: choose a partner B to compare.")
-            self.banner.setProperty("level", s.level if len(self.members) == 2 else "neutral")
+            self._show_summary(rows, labels)
         theme._repolish(self.banner)
         self._fill_table()
         self._update_report_note()
         self._draw_mirror()
+
+    def _show_summary(self, rows, labels):
+        """Cards and banner of the classic pairing."""
+        self._card_captions(labels)
+        s = DV.summarize(rows, self.verdicts, DV.limits(self.ws)[0], labels)
+        self.cards["confirmed"].set(s.confirmed)
+        self.cards["deviating"].set(s.deviating)
+        self.cards["only_a"].set(s.only_a)
+        self.cards["only_b"].set(s.only_b)
+        self.cards["conflicts"].set(s.conflicts)
+        self.cards["mean"].set("–" if s.mean_reldiff is None else f"{s.mean_reldiff:.1f} %")
+        if len(self.members) != 2:
+            self.banner.setText("Single determination: choose a partner B to compare.")
+            self.banner.setProperty("level", "neutral")
+            return
+        level, text = s.level, s.text
+        n_open, n_decided = self.decision_counts()
+        if n_decided and not n_open:
+            level, text = "ok", f"All decisions made ({n_decided} red decided by you): preview the report. " + text
+        elif n_decided:
+            text = f"Red: {n_open + n_decided} → {n_open} open · {n_decided} decided. " + text
+        self.banner.setText(("✔  " if level == "ok" else "⚠  ") + text)
+        self.banner.setProperty("level", level)
+
+    def decision_counts(self) -> tuple[int, int]:
+        """(red rows still open, red rows the analyst has decided)."""
+        red = [r for r, v in zip(self.rows, self.verdicts) if v.level == "bad"]
+        decided = sum(1 for r in red if r.get("decided"))
+        return len(red) - decided, decided
 
     def _card_captions(self, labels, lights: bool = False):
         caps = ({"confirmed": LIGHT_TEXT["green"], "deviating": LIGHT_TEXT["yellow"], "only_a": LIGHT_TEXT["red"],
@@ -761,10 +786,19 @@ class DuplicatePage(QWidget):
         self.cards["mean"].set(f"{sum(diffs) / len(diffs):.1f} %" if diffs else "–")
         notes = list(getattr(self.table_features, "notes", []) or [])
         auto = sum(1 for r in rows if r.get("gapfill"))
-        if n["red"]:
+        n_open, n_decided = self.decision_counts()
+        if n_open and n_decided:
+            text = (f"Red: {n['red']} → {n_open} open · {n_decided} decided (F3 = next open); "
+                    f"{n['yellow']} were made consistent automatically (yellow), {n['green']} are confirmed.")
+            level = "bad"
+        elif n_open:
             text = (f"{n['red']} of {len(rows)} substances need your decision (red; F3 = next); "
                     f"{n['yellow']} were made consistent automatically (yellow), {n['green']} are confirmed.")
             level = "bad"
+        elif n_decided:
+            text = (f"All decisions made ({n_decided} red decided by you): preview the report. "
+                    f"{n['yellow']} made consistent automatically, {n['green']} confirmed.")
+            level = "ok"
         elif n["yellow"]:
             text = f"Nothing to decide: {n['yellow']} made consistent automatically (yellow, a quick look), " \
                    f"{n['green']} confirmed."
@@ -827,6 +861,10 @@ class DuplicatePage(QWidget):
                 vals += [row.get("feature_id", ""), row.get("sim"),
                          s1.get("name", "") if s1 else "", s2.get("name", "") if s2 else ""]
             edited = row.get("edited") or {}
+            level, tip = v.level, v.detail
+            if v.level == "bad" and row.get("decided"):
+                level, vals[C_ICON] = "info", ICON["decided"]
+                tip = "Decided by the analyst: " + (v.detail or v.text)
             for c, val in enumerate(vals):
                 it = QTableWidgetItem()
                 if c == C_REPORT:
@@ -843,10 +881,12 @@ class DuplicatePage(QWidget):
                 if c not in editable and c != C_REPORT:
                     it.setFlags(it.flags() & ~Qt.ItemIsEditable)
                 it.setData(Qt.UserRole, k)
-                it.setToolTip(v.detail)
+                it.setToolTip(tip)
+                if c == C_ICON:
+                    it.setData(OPEN_ROLE, DV.is_open(row, v))
                 if c in (C_ICON, C_VERDICT):
-                    it.setBackground(theme.status_brush(v.level))
-                    it.setForeground(QBrush(theme.status_color(v.level)))
+                    it.setBackground(theme.status_brush(level))
+                    it.setForeground(QBrush(theme.status_color(level)))
                 field = FIELD_OF.get(c)
                 if field in edited or (c == C_COMMENT and row.get("comment")):
                     font = QFont()
@@ -914,10 +954,9 @@ class DuplicatePage(QWidget):
         self.compare(sync=False)
 
     def next_red(self):
-        """F3: the next red row after the current one (from the top at the end)."""
+        """F3: the next red row still open after the current one (from the top at the end)."""
         rows = [r for r in range(self.table.rowCount())
-                if self.table.item(r, C_VERDICT) is not None
-                and self.table.item(r, C_ICON).text() == ICON["bad"]]
+                if self.table.item(r, C_ICON) is not None and self.table.item(r, C_ICON).data(OPEN_ROLE)]
         if not rows:
             return
         cur = self.table.currentRow()
