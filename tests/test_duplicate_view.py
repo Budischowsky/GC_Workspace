@@ -142,3 +142,17 @@ def test_red_row_decided_by_the_analyst():
     assert [DV.is_open(r, v) for r, v in zip(out, verdicts)] == [False, False, True]
     edits["14.000"] = {"rt": 14.0, "comment": "checked the spectrum"}
     assert all(not DV.is_open(r, v) for r, v in zip(DV.apply_edits(rows, verdicts, edits, 0.035), verdicts))
+
+
+def test_blank_level_is_not_reported_by_default():
+    """A feature row at blank level (grey) is "not reported anyway": unticked, and left out of the report."""
+    from gcws.quant import duplicate_view as DV
+    rows = [dict(_pair(10.0, 0.10, 0.12), light="green", verdict="Confirmed"),
+            dict(_pair(12.0, 0.05, 0.06), light="grey", verdict="Blank level")]
+    verdicts = [DV.plain_verdict(r, 30.0, 0.01) for r in rows]
+    assert [r["report"] for r in DV.apply_edits(rows, verdicts, {}, 0.035)] == [True, False]
+    keep, _ = DV.rows_for_report(rows, {}, 30.0, 0.01, 0.035)
+    assert [r["rt"] for r in keep] == [10.0]
+    # the analyst can still report it
+    keep, _ = DV.rows_for_report(rows, {"12.000": {"rt": 12.0, "report": True}}, 30.0, 0.01, 0.035)
+    assert [r["rt"] for r in keep] == [10.0, 12.0]

@@ -2,6 +2,7 @@
 
 * arrow keys move the current cell, Shift+arrows / mouse drag mark a range;
 * **Delete** / **Enter** emit ``markRequested(rows, False / True)`` (e.g. the Report box);
+* **Space** on a check box emits ``toggleRequested(rows)``: the owner switches every marked row;
 * **Ctrl+C** copies the marked cells as tab-separated text, **Ctrl+V** pastes one value into
   every marked cell or a block from the current cell on;
 * **Ctrl+D** fills the marked cells of each column with the value of its top cell;
@@ -23,6 +24,7 @@ HANDLE = 7          # px, the fill handle's size
 
 class SheetTable(QTableWidget):
     markRequested = QtSignal(list, bool)          # visual rows, on
+    toggleRequested = QtSignal(list)              # visual rows: Space on a check box
     bulkEdit = QtSignal(list)                     # [(visual row, column, value)]
 
     def __init__(self, rows: int = 0, columns: int = 0, parent=None):
@@ -88,6 +90,8 @@ class SheetTable(QTableWidget):
             self.markRequested.emit(self.selected_rows(), False)
         elif ev.key() in (Qt.Key_Return, Qt.Key_Enter) and not (ev.modifiers() & ~Qt.KeypadModifier):
             self.markRequested.emit(self.selected_rows(), True)
+        elif ev.key() == Qt.Key_Space and not ev.modifiers() and self.is_check(self.currentItem()):
+            self.toggleRequested.emit(self.selected_rows())
         else:
             super().keyPressEvent(ev)
             return

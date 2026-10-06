@@ -1815,3 +1815,87 @@ def test_double_determination_accept_in_report2(qtbot, win, samples, tmp_path):
     finally:
         win._report2_job = None                             # closing must not try to save a Report² project
         ws.dirty = False
+
+
+def test_double_determination_report_ticks(qtbot, win, samples):
+    """The Report box: one click anywhere in the cell, the row stays where it is, the view does not
+    scroll, a red row stays decided when ticked back, Space switches every marked row."""
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QTableWidgetSelectionRange
+    from gcws.ui.docks.duplicate import C_ICON, C_REPORT, ICON, OPEN_ROLE
+    _load(qtbot, win, samples, ["07_", "11_"])
+    ws = win.ws
+    a = next(s.id for s in ws.states() if s.name.startswith("07_"))
+    b = next(s.id for s in ws.states() if s.name.startswith("11_"))
+    win.loaded_samples.pairRequested.emit(a, b)
+    page = win.replicates.duplicate
+    t = page.table
+
+    def k_at(r):
+        return t.item(r, 0).data(Qt.UserRole)
+
+    def row_of(k):
+        return next(r for r in range(t.rowCount()) if k_at(r) == k)
+
+    def click_tick(r, double=False):
+        rect = t.visualItemRect(t.item(r, C_REPORT))
+        pos = QPoint(rect.right() - 2, rect.center().y())          # beside the box, still in the cell
+        QTest.mouseClick(t.viewport(), Qt.LeftButton, pos=pos)
+        if double:                    # as the system sends it: press, release, double-click, release
+            QTest.mouseDClick(t.viewport(), Qt.LeftButton, pos=pos)
+            QTest.mouseRelease(t.viewport(), Qt.LeftButton, pos=pos)
+
+    reds = [r for r in range(t.rowCount()) if t.item(r, C_ICON).data(OPEN_ROLE)]
+    assert len(reds) >= 2
+    k = k_at(reds[0])
+    was = bool(page.rows[k]["report"])
+    stack = page._stack()
+    n0 = stack.count()
+    # a click: the red row is decided and stays in its place (no jump below the open rows)
+    click_tick(reds[0])
+    qtbot.waitUntil(lambda: page.rows[k]["decided"], timeout=5000)
+    assert page.rows[k]["report"] is (not was) and row_of(k) == reds[0]
+    assert t.item(reds[0], C_ICON).text() == ICON["decided"] and stack.count() == n0 + 1
+    # ticked back to the default: still the analyst's decision
+    click_tick(reds[0])
+    qtbot.waitUntil(lambda: page.rows[k]["report"] is was, timeout=5000)
+    assert page.rows[k]["decided"] and row_of(k) == reds[0]
+    # a double-click switches once
+    n1 = stack.count()
+    click_tick(reds[0], double=True)
+    qtbot.waitUntil(lambda: stack.count() > n1, timeout=5000)
+    qtbot.wait(50)
+    assert stack.count() == n1 + 1 and page.rows[k]["report"] is (not was)
+    # the view keeps its scroll position
+    t.scrollToBottom()
+    sb = t.verticalScrollBar()
+    value = sb.value()
+    last = t.rowCount() - 1
+    k_last = k_at(last)
+    before = bool(page.rows[k_last]["report"])
+    click_tick(last)
+    qtbot.waitUntil(lambda: bool(page.rows[k_last]["report"]) is not before, timeout=5000)
+    assert sb.value() == value
+    # Space: every marked row of the Report column, as one undo step
+    t.scrollToTop()
+    rows = [r for r in range(t.rowCount()) if not t.item(r, C_ICON).data(OPEN_ROLE)][:2]
+    keys = [k_at(r) for r in rows]
+    t.setFocus()
+    t.clearSelection()
+    t.setCurrentCell(rows[0], C_REPORT)
+    for r in rows:
+        t.setRangeSelected(QTableWidgetSelectionRange(r, C_REPORT, r, C_REPORT), True)
+    on = not all(page.rows[x]["report"] for x in keys)
+    n2 = stack.count()
+    QTest.keyClick(t, Qt.Key_Space)
+    qtbot.waitUntil(lambda: all(bool(page.rows[x]["report"]) is on for x in keys), timeout=5000)
+    assert stack.count() == n2 + 1
+    # a click on the Report header sorts by the box
+    t.sortItems(C_REPORT)
+    ticks = [t.item(r, C_REPORT).checkState() == Qt.Checked for r in range(t.rowCount())]
+    assert ticks == sorted(ticks)
+    # Reset row only where there is something to reset
+    plain = next(r for r in page.rows if r.get("edit_key") not in page.edits())
+    assert "Reset row" not in dict(page.row_actions(plain))
+    assert "Reset row" in dict(page.row_actions(page.rows[k]))

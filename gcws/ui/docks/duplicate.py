@@ -38,7 +38,7 @@ from gcws.core.model import FID
 from gcws.quant import duplicate_view as DV
 from gcws.ui import theme, workers
 from gcws.ui.icons import color_chip
-from gcws.ui.widgets.cell_marks import EDITED_ROLE, LEVEL_ROLE, DiffGaugeDelegate, EditedDelegate
+from gcws.ui.widgets.cell_marks import EDITED_ROLE, LEVEL_ROLE, CheckDelegate, DiffGaugeDelegate, EditedDelegate
 from gcws.ui.widgets.chips import Chip, ElidedLabel
 
 #: SNIP window (min) of the baseline removed from the mirror plot's traces: wider than any peak
@@ -46,8 +46,9 @@ BASELINE_WINDOW = 1.0
 #: wider views (min) of the mirror plot scale to the substances without the internal standards
 WIDE_VIEW = 3.0
 WIDE_PERCENTILE = 90
-KEYS_NOTE = ("Enter: report · Delete: not reported · type or F2: edit · Ctrl+C / Ctrl+V · Ctrl+D or drag the "
-             "small square of the marking: copy down. Changes are marked, undoable and logged.")
+KEYS_NOTE = ("Enter: report · Delete: not reported · a click or Space: switch the Report box · type or F2: edit · "
+             "Ctrl+C / Ctrl+V · Ctrl+D or drag the small square of the marking: copy down. Changes are marked, "
+             "undoable and logged.")
 ICON = {"ok": "✔", "warn": "⚠", "bad": "✖", "info": "ℹ", "neutral": "·", "decided": "◉"}
 #: icon cell: True on a red row that still waits for the analyst (F3 goes there)
 OPEN_ROLE = Qt.UserRole + 1
@@ -87,7 +88,8 @@ def _stale(group: dict) -> None:
 
 
 class _SeverityItem(QTableWidgetItem):
-    """The icon cell: sorts by ``SORT_ROLE`` (severity, then RT) instead of its glyph."""
+    """A cell that sorts by ``SORT_ROLE`` instead of its text: the icon by severity, the Report box
+    by its state, each then by RT."""
 
     def __lt__(self, other):
         a, b = self.data(SORT_ROLE), other.data(SORT_ROLE)
@@ -185,11 +187,15 @@ class DuplicatePage(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.itemChanged.connect(self._cell_edited)
         self.table.markRequested.connect(self._mark_rows)
+        self.table.toggleRequested.connect(self._toggle_rows)
         self.table.bulkEdit.connect(self._bulk_edit)
         self.table.setAlternatingRowColors(True)
         self.table.setItemDelegate(EditedDelegate(self.table))     # changed cells: a corner mark
         self.table.setItemDelegateForColumn(C_DIFF, DiffGaugeDelegate(lambda: DV.limits(self.ws)[0], self.table))
+        self.table.setItemDelegateForColumn(C_REPORT, CheckDelegate(self._report_clicked, self.table))
         self._sort = (C_ICON, Qt.AscendingOrder)                   # most severe first, until a header is clicked
+        # the severity order as of the last Compare, chip or header click: an edited row keeps its place
+        self._frozen: dict | None = None
         hh = self.table.horizontalHeader()
         hh.sortIndicatorChanged.connect(self._sort_changed)
         hh.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -547,7 +553,7 @@ class DuplicatePage(QWidget):
         for row, field, value in changes:
             key = row.get("edit_key") or DV.edit_key(row["rt"])
             e = edits.setdefault(key, {"rt": float(row["rt"])})
-            before = row.get(field) if field not in ("a1", "a2", "c1", "c2", "mean", "report") else \
+            before = row.get(field) if field not in DV.NUMERIC_EDITS else \
                 row.get("edited", {}).get(field, row.get(field))
             if value is None:
                 e.pop(field, None)
@@ -637,17 +643,43 @@ class DuplicatePage(QWidget):
         return k if k is not None and 0 <= k < len(self.rows) else None
 
     def _report_value(self, k: int, on: bool):
-        """The stored report edit: None where ``on`` is what the default rule gives anyway."""
+        """The stored report edit: on a red row always the analyst's answer (it decides the row);
+        elsewhere None where ``on`` is what the default rule gives anyway."""
+        if self.verdicts[k].level == "bad":
+            return on
         return None if on == DV.default_report(self.base_rows[k], self.verdicts[k]) else on
 
     def _mark_rows(self, visual_rows: list, on: bool):
         """Enter / Delete: the marked substances go into the report, or not."""
+        self._mark_keys([self._row_index(r) for r in visual_rows], on)
+
+    def _mark_keys(self, keys: list, on: bool):
+        """The substances ``keys`` (indices into ``rows``) go into the report, or not (one undo step);
+        an open red row is decided even where ``on`` is already its value."""
         changes = []
-        for r in visual_rows:
-            k = self._row_index(r)
-            if k is not None and bool(self.rows[k].get("report")) != on:
-                changes.append((self.rows[k], "report", self._report_value(k, on)))
+        for k in dict.fromkeys(keys):
+            if k is None or not 0 <= k < len(self.rows):
+                continue
+            row = self.rows[k]
+            if bool(row.get("report")) != on or DV.is_open(row, self.verdicts[k]):
+                changes.append((row, "report", self._report_value(k, on)))
         self.set_edits(changes)
+
+    def _toggle_rows(self, visual_rows: list):
+        """Space on the Report box: every marked row switches."""
+        self._toggle_keys([self._row_index(r) for r in visual_rows])
+
+    def _toggle_keys(self, keys: list):
+        """Into the report, unless every one of ``keys`` is reported already: then out of it."""
+        keys = [k for k in keys if k is not None and 0 <= k < len(self.rows)]
+        if keys:
+            self._mark_keys(keys, not all(self.rows[k].get("report") for k in keys))
+
+    def _report_clicked(self, index):
+        """A click in a Report cell: switched once the click is over (the table is rebuilt then)."""
+        k = index.data(Qt.UserRole)
+        if k is not None:
+            QTimer.singleShot(0, lambda: self._toggle_keys([k]))
 
     def _bulk_edit(self, cells: list):
         """Paste, Ctrl+D and the fill handle: many cells as one undo step."""
@@ -696,9 +728,7 @@ class DuplicatePage(QWidget):
             return
         row = self.rows[k]
         if field == "report":
-            on = item.checkState() == Qt.Checked
-            base = DV.default_report(self.base_rows[k], self.verdicts[k])
-            self.set_edit(row, "report", None if on == base else on)
+            self.set_edit(row, "report", self._report_value(k, item.checkState() == Qt.Checked))
             return
         text = item.text().strip()
         if field in ("name", "cas"):
@@ -724,8 +754,8 @@ class DuplicatePage(QWidget):
 
     def reset_row(self, row=None):
         row = row if row is not None else self._current_row()
-        if row is None or not row.get("edit_key"):
-            return
+        if row is None or row.get("edit_key") not in self.edits():
+            return                               # nothing the analyst changed: nothing to reset
         self._sync_group(self.members)
         g = self.group()
         groups = copy.deepcopy(self.ws.replicate_groups)
@@ -759,6 +789,7 @@ class DuplicatePage(QWidget):
             self._show_summary(rows, labels)
         theme._repolish(self.banner)
         self.spec.setVisible(self.table_features is not None)      # classic pairing: no spectra to mirror
+        self._frozen = None                                         # compared again: sorted afresh
         self._fill_table()
         self._update_report_note()
         self._draw_mirror()
@@ -867,6 +898,7 @@ class DuplicatePage(QWidget):
         """Show only the rows of one chip; the chip clicked again shows all rows."""
         self.filter = "all" if key == self.filter or key not in FILTERS else key
         self._update_chips()
+        self._frozen = None
         self._fill_table()
 
     def _show_lights(self, rows):
@@ -925,6 +957,8 @@ class DuplicatePage(QWidget):
         cur = self.table.currentItem()
         keep_cur = (cur.data(Qt.UserRole), cur.column()) if cur is not None else None
         keep_sel = {(i.data(Qt.UserRole), i.column()) for i in self.table.selectedItems()}
+        scroll = (self.table.verticalScrollBar().value(), self.table.horizontalScrollBar().value())
+        frozen = self._frozen if self._frozen is not None else {}
         self._filling = True
         self.table.setSortingEnabled(False)
         self.table.clear()
@@ -959,10 +993,11 @@ class DuplicatePage(QWidget):
             n2 = ((row.get("source2") or {}).get("name") or "").strip()
             hits_differ = feature_rows and n1 and n2 and n1.casefold() != n2.casefold()
             for c, val in enumerate(vals):
-                it = _SeverityItem() if c == C_ICON else QTableWidgetItem()
+                it = _SeverityItem() if c in (C_ICON, C_REPORT) else QTableWidgetItem()
                 if c == C_REPORT:
                     it.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                     it.setCheckState(Qt.Checked if row.get("report") else Qt.Unchecked)
+                    it.setData(SORT_ROLE, (10000.0 if row.get("report") else 0.0) + float(row.get("rt") or 0.0))
                 elif isinstance(val, float):
                     if c in (C_A1, C_A2):
                         it.setData(Qt.DisplayRole, int(round(val)))          # areas: whole counts
@@ -978,7 +1013,7 @@ class DuplicatePage(QWidget):
                 if c == C_ICON:
                     it.setData(OPEN_ROLE, DV.is_open(row, v))
                     sev = SEVERITY["decided"] if row.get("decided") and v.level == "bad" else SEVERITY.get(v.level, 4)
-                    it.setData(SORT_ROLE, sev * 10000.0 + float(row.get("rt") or 0.0))
+                    it.setData(SORT_ROLE, frozen.setdefault(k, sev * 10000.0 + float(row.get("rt") or 0.0)))
                 if c == C_DIFF:
                     it.setData(LEVEL_ROLE, level)
                 if c == C_NAME and hits_differ:
@@ -1012,7 +1047,10 @@ class DuplicatePage(QWidget):
             self.table.setColumnHidden(c, c in hidden)
         self.table.setSortingEnabled(True)
         self.table.sortItems(*self._sort)
+        self._frozen = frozen
         self._restore_selection(keep_cur, keep_sel)
+        self.table.verticalScrollBar().setValue(scroll[0])          # an edit does not move the view
+        self.table.horizontalScrollBar().setValue(scroll[1])
         self._filling = False
 
     # -- columns --------------------------------------------------------------------------------
@@ -1020,6 +1058,9 @@ class DuplicatePage(QWidget):
     def _sort_changed(self, column: int, order) -> None:
         if not self._filling:
             self._sort = (column, order)
+            if column == C_ICON and self._frozen:                 # sorted by severity again: as it is now
+                self._frozen = None
+                QTimer.singleShot(0, self._fill_table)
 
     @staticmethod
     def hidden_columns() -> set[int]:
@@ -1182,7 +1223,7 @@ class DuplicatePage(QWidget):
         labels = self.labels()
         out = [("Report", lambda: self._mark_rows(self._marked_or(row), True)),
                ("Not reported", lambda: self._mark_rows(self._marked_or(row), False))]
-        if row.get("edit_key"):
+        if row.get("edit_key") in self.edits():
             out.append(("Reset row", lambda: self.reset_row(row)))
         out.append(("Comment…", lambda: self.edit_comment(row)))
         for key, i in (("source1", 0), ("source2", 1)):

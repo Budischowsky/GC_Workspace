@@ -42,9 +42,12 @@ The column with the verdict says why a row has its colour; its tooltip gives the
 
 - Click a chip to see only its rows; click it again for all rows. **Red** shows just the rows to decide;
   `F3` jumps to the next red row that is still open.
-- A red row you have answered (its **Report** box changed, a comment or a value) is **decided**: it gets the
-  mark ◉ and `F3` goes past it. The line above the list counts down, for example *Red: 7 → 2 open · 5
-  decided*, and says **All decisions made** when none is left. Undo makes the row open again.
+- A red row you have answered (its **Report** box clicked, a comment or a value) is **decided**: it gets the
+  mark ◉ and `F3` goes past it. It stays decided when you tick the box back. The line above the list counts
+  down, for example *Red: 7 → 2 open · 5 decided*, and says **All decisions made** when none is left. Undo
+  (or **Reset row**) makes the row open again.
+- A decided row stays where it is in the list, so the next click hits the row you expect. The list is sorted
+  again at the next **Compare**, chip or header click.
 - **To check** shows the red and yellow rows and the rows you changed.
 - Click a row: both chromatograms below show that substance, A upwards and B downwards, and beside them the
   two spectra, mirrored the same way (feature pairing only). The integrated peak of the substance is shaded
@@ -60,7 +63,7 @@ Right-click a row:
 | Item | When it is offered | What it does |
 |---|---|---|
 | **Report** / **Not reported** | always | Puts the substance (or all marked rows, when it is one of them) into the report, or takes it out. |
-| **Reset row** | the row has your changes | Takes back your changes of this substance. |
+| **Reset row** | the row has your changes (not offered otherwise) | Takes back your changes of this substance. |
 | **Comment…** | always | A comment for the report. |
 | **Show in A** / **Show in B** | the substance is in that determination | Opens that determination with the peak selected. |
 | **Copy row** | always | Copies the visible cells of the row as text. |
@@ -72,13 +75,15 @@ Right-click a row:
 
 You can also edit the list directly, as in a spreadsheet:
 
-- the **Report** box of a substance decides whether it goes into the report. By default, substances found in
-  one determination only and values below the reporting limit are not reported;
+- the **Report** box of a substance decides whether it goes into the report. One click anywhere in the cell
+  switches it; the list does not scroll. By default, substances found in one determination only, values
+  below the reporting limit and (feature pairing) substances at blank level are not reported;
 - **Substance** and **CAS** become the name of the peak in both determinations;
 - the areas, the values of A and B, the mean and a comment can be changed.
 
 Move with the arrow keys, mark several cells with `Shift` or by dragging, type or press `F2` to edit.
-`Enter` puts the marked substances into the report and `Delete` takes them out. `Ctrl+C` / `Ctrl+V` copy and
+`Enter` puts the marked substances into the report and `Delete` takes them out; `Space` on a **Report** box
+switches all marked rows (into the report, or out of it when all are in already). `Ctrl+C` / `Ctrl+V` copy and
 paste, `Ctrl+D` copies a value down. A changed cell is written in italics with a small triangle in its corner (as a comment in a
 spreadsheet), so it is never mistaken for a yellow row; its tooltip shows the old value. Every edit is one undo
 step and is written to the audit trail.

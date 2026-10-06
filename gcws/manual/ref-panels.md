@@ -240,7 +240,7 @@ The double-determination page:
 | **Load from Report²…** | Switches to another processed A/B sample visible in Report², grouped by batch. Changes to the current pair are saved first. The empty menu says **No processed A/B pairs under the current Report² filters**. |
 | **All**, **To check**, **Red**, **Yellow**, **Green**, **Grey** | Chips that count the substances of each colour. A click shows only those rows, a second click all rows again. **To check** is red and yellow plus the rows you changed. |
 | **Difference limit** | The largest difference between A and B in percent. It is the report parameter *Duplicate difference limit*: the chip **report parameter** beside it says so, and shows the default when the value differs from it. Changing it changes every report of the project (the status bar says so). |
-| **?** | The keys of the list (Enter, Delete, F2, Ctrl+C / Ctrl+V, Ctrl+D). |
+| **?** | The keys of the list (Enter, Delete, Space on the **Report** box, F2, Ctrl+C / Ctrl+V, Ctrl+D). |
 | **Report preview** | The report of this pair (NIAS, or HS-Screening on the TIC). Its arrow offers **NIAS report...**, **Fingerprint report...**, **Total extraction report...**, **HS-Screening report...** and **Export worksheet...**. |
 | **Harmonise boundaries** | Takes over every proposed integration boundary. Shown when there are proposals. |
 | **Accept double determination** | Possible when no red row is open. Saves who accepted it and when with the project, writes it to the audit trail and marks the pair ✔ in the list; when the pair is a Report² report (a workflow processed it) it is accepted there too, however the project was opened. The status bar says which. A later change reopens it (**Accept again**). |

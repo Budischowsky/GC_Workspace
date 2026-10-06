@@ -310,11 +310,12 @@ NUMERIC_EDITS = ("a1", "a2", "c1", "c2", "mean")
 
 def default_report(row: dict, verdict: Verdict | None = None) -> bool:
     """AutoLib's rule: artefacts (found in one determination only) and substances below the
-    reporting limit are not reported; everything else is."""
+    reporting limit are not reported; everything else is. The feature pairing's grey rows at
+    blank level are not reported either."""
     status = row.get("status") or ""
     if status.startswith("Artefact"):
         return False
-    if verdict is not None and verdict.text.startswith("Below reporting limit"):
+    if verdict is not None and verdict.text.startswith(("Below reporting limit", "Blank level")):
         return False
     return True
 
