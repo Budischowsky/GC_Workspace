@@ -171,12 +171,77 @@ class MainWindow(QMainWindow):
 
     def _sync_tabbed(self):
         """Panels sharing a tab group show their name on the tab only: a slim bar with the buttons."""
+        from PySide6.QtWidgets import QTabBar
         from gcws.ui.layout.title_bar import title_bar
         for d in self.docks.values():
             bar = title_bar(d)
             if hasattr(bar, "set_tabbed"):
                 bar.set_tabbed(not d.isFloating() and any(
                     not o.isHidden() and not o.isFloating() for o in self.tabifiedDockWidgets(d)))
+        for tabs in self.findChildren(QTabBar, options=Qt.FindDirectChildrenOnly):   # Qt's tabs of dock groups
+            if not tabs.property("panelMenu"):
+                tabs.setProperty("panelMenu", True)
+                tabs.installEventFilter(self)
+
+    def eventFilter(self, obj, ev):
+        from PySide6.QtCore import QEvent
+        from PySide6.QtWidgets import QTabBar
+        if ev.type() == QEvent.ContextMenu and isinstance(obj, QTabBar) and obj.property("panelMenu"):
+            dock = self.dock_of_tab(obj, obj.tabAt(ev.pos()))
+            if dock is not None:
+                self.panel_menu(dock).exec(ev.globalPos())
+                return True
+        return super().eventFilter(obj, ev)
+
+    def dock_of_tab(self, tabs, index):
+        if index < 0:
+            return None
+        title = tabs.tabText(index)
+        return next((d for d in self.docks.values() if d.windowTitle() == title), None)
+
+    def panel_menu(self, dock) -> QMenu:
+        """Right-click on a panel's title or tab: maximize, detach (also straight onto another screen), close."""
+        from PySide6.QtGui import QGuiApplication
+        m = QMenu(self)
+        maximized = self._maximized is not None and self._maximized[0] is dock
+        if maximized:
+            m.addAction("Restore the layout", lambda: self.toggle_maximize(dock))
+        else:
+            m.addAction("Maximize", lambda: self.toggle_maximize(dock))
+        if dock.features() & QDockWidget.DockWidgetFloatable:
+            if dock.isFloating():
+                m.addAction("Dock back", lambda: self.detach_panel(dock, floating=False))
+            else:
+                m.addAction("Detach", lambda: self.detach_panel(dock))
+            screens = QGuiApplication.screens()
+            if len(screens) > 1:
+                here = dock.screen() if dock.isFloating() else self.screen()
+                for i, screen in enumerate(screens, 1):
+                    if screen is not here:
+                        m.addAction(f"Detach to screen {i}", lambda s=screen: self.detach_panel(dock, s))
+        if dock.features() & QDockWidget.DockWidgetClosable:
+            m.addSeparator()
+            m.addAction("Close", lambda: (self.restore_maximized(), dock.close()))
+        return m
+
+    def detach_panel(self, dock, screen=None, floating=True):
+        """Detach a panel (onto ``screen``, centred and sized to fit it) or dock it back."""
+        self.restore_maximized()
+        if not floating:
+            dock.setFloating(False)
+            dock.show()
+            dock.raise_()
+            return
+        size = dock.size()
+        dock.setFloating(True)
+        if screen is not None:
+            g = screen.availableGeometry()
+            w = min(max(size.width(), 600), g.width() - 80)
+            h = min(max(size.height(), 400), g.height() - 80)
+            dock.setGeometry(g.x() + (g.width() - w) // 2, g.y() + (g.height() - h) // 2, w, h)
+        dock.show()
+        dock.raise_()
+        dock.activateWindow()
 
     def _action(self, text, slot=None, shortcut=None, ic=None, tip=None, checkable=False):
         a = QAction(text, self)

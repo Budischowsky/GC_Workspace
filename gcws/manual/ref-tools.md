@@ -105,6 +105,15 @@ Most panels carry their title and buttons in a bar on top. Chromatogram 1, Chrom
 carry them in a narrow strip along the right edge, so the plots keep their height. When panels share a group
 of tabs, the name is on the tab and the bar above the panel is slim, with the buttons only.
 
+Right-click the title bar of a panel, its strip on the right edge, or its tab:
+
+| Item | What it does |
+|---|---|
+| **Maximize** / **Restore the layout** | The same as the maximize button. |
+| **Detach** / **Dock back** | Makes the panel a window of its own, or puts it back into the main window. |
+| **Detach to screen 2** (3, ...) | Only with more than one screen: detaches the panel straight onto that screen, centred and sized to fit it. |
+| **Close** | Hides the panel. |
+
 | Button | What it does |
 |---|---|
 | Maximize | Lets the panel fill the window; again to restore. The same as a double-click on the title. |

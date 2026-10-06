@@ -464,3 +464,53 @@ def test_collapsed_folders_show_loaded_samples_as_squares(qtbot, win, samples, m
     win.loaded_samples.closeRequested.emit(blank.run_id)
     assert list(rail.squares) == [order[0].run_id]
     win.sidebar.expand()
+
+
+def test_right_click_on_panel_title_or_tab_detaches(qtbot, win, monkeypatch):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QContextMenuEvent
+    from PySide6.QtWidgets import QApplication, QMenu, QTabBar
+    from gcws.ui import main_window
+    from gcws.ui.layout.title_bar import title_bar
+    shown = []
+
+    class Menu(QMenu):
+        def exec(self, *_):
+            shown.append(self)
+
+    def pick(text):
+        return next(a for a in shown[-1].actions() if a.text() == text)
+    monkeypatch.setattr(main_window, "QMenu", Menu)
+    win.apply_preset("Chromatogram top")
+    QApplication.processEvents()
+    qtbot.wait(20)
+    table = win.docks["table"]
+    bar = title_bar(table)
+    QApplication.sendEvent(bar, QContextMenuEvent(QContextMenuEvent.Mouse, QPoint(5, 5), bar.mapToGlobal(QPoint(5, 5))))
+    assert {"Maximize", "Detach", "Close"} <= {a.text() for a in shown[-1].actions()}
+    pick("Detach").trigger()
+    assert table.isFloating() and table.isVisible()
+    QApplication.sendEvent(bar, QContextMenuEvent(QContextMenuEvent.Mouse, QPoint(5, 5), bar.mapToGlobal(QPoint(5, 5))))
+    pick("Dock back").trigger()
+    assert not table.isFloating()
+    # the right-edge strip of a plot panel has the same menu
+    rail = title_bar(win.docks["chrom"])
+    QApplication.sendEvent(rail, QContextMenuEvent(QContextMenuEvent.Mouse, QPoint(5, 5), rail.mapToGlobal(QPoint(5, 5))))
+    assert "Detach" in {a.text() for a in shown[-1].actions()}
+    # a tab of a tab group: the menu of that tab's panel
+    win.apply_preset("Chromatogram top")
+    QApplication.processEvents()
+    qtbot.wait(20)
+    tabs = next(t for t in win.findChildren(QTabBar) if t.property("panelMenu")
+                and "Quantification" in [t.tabText(i) for i in range(t.count())])
+    i = [tabs.tabText(k) for k in range(tabs.count())].index("Quantification")
+    pos = tabs.tabRect(i).center()
+    QApplication.sendEvent(tabs, QContextMenuEvent(QContextMenuEvent.Mouse, pos, tabs.mapToGlobal(pos)))
+    pick("Detach").trigger()
+    assert win.docks["quant"].isFloating()
+    # onto a given screen: centred there and no bigger than it
+    screen = win.screen()
+    win.detach_panel(win.docks["audit"], screen)
+    g, frame = screen.availableGeometry(), win.docks["audit"].geometry()
+    assert win.docks["audit"].isFloating() and g.contains(frame.center()) and frame.width() <= g.width()
+    win.apply_preset("Chromatogram top")

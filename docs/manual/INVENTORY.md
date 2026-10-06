@@ -1566,110 +1566,116 @@ Every text a user can see, by file and class. Dialogs and right-click menus only
 |---|---|---|---|
 | MainWindow.__init__ | setWindowTitle | GC Workspace | 59 |
 | MainWindow.__init__ | QLabel | Loaded samples | 89 |
-| MainWindow._build_actions | A | Open folder... | 197 |
-| MainWindow._build_actions | A | Show a folder in the tree | 197 |
-| MainWindow._build_actions | A | Load chromatograms... | 199 |
-| MainWindow._build_actions | A | Open project... | 200 |
-| MainWindow._build_actions | A | Save project | 201 |
-| MainWindow._build_actions | A | Save project as... | 202 |
-| MainWindow._build_actions | A | Close all chromatograms | 203 |
-| MainWindow._build_actions | A | Exit | 204 |
-| MainWindow._build_actions | A | Undo | 205 |
-| MainWindow._build_actions | A | Redo | 207 |
-| MainWindow._build_actions | A | Integrate | 217 |
-| MainWindow._build_actions | A | Re-integrate the active chromatogram | 217 |
-| MainWindow._build_actions | A | Integrate all | 219 |
-| MainWindow._build_actions | A | Re-integrate all loaded chromatograms | 219 |
-| MainWindow._build_actions | A | Library search... | 221 |
-| MainWindow._build_actions | A | Automatic library search of all integrated peaks (your libraries) | 221 |
-| MainWindow._build_actions | A | Search methods... | 223 |
-| MainWindow._build_actions | A | Run Method | 224 |
-| MainWindow._build_actions | A | Process the loaded runs with the loaded method: integration, blank subtraction, library search, ISTDs, quantification | 224 |
-| MainWindow._build_actions | A | Subtract baseline | 227 |
-| MainWindow._build_actions | A | Mass spectrum minus a baseline scan: click, then right-click the apex and then the baseline in a chromatogram (Escape clears) | 227 |
-| MainWindow._build_actions | A | Cancel baseline subtraction | 230 |
-| MainWindow._build_actions | A | Library hit list (selected peak) | 235 |
-| MainWindow._build_actions | A | Libraries... | 236 |
-| MainWindow._build_actions | A | Search selected peak in NIST | 237 |
-| MainWindow._build_actions | A | Investigate selected peak in SpectrAtlas... | 238 |
-| MainWindow._build_actions | A | Extracted ion chromatogram... | 239 |
-| MainWindow._build_actions | QMenu | Set selected peak as ISTD | 240 |
-| MainWindow._build_actions | A | Register selected peak as unknown... | 244 |
-| MainWindow._build_actions | A | Deconvolution... | 245 |
-| MainWindow._build_actions | A | Split the selected FID or TIC peak into its deconvoluted components, or list the components of the visible range or the whole run | 245 |
-| MainWindow._build_actions | A | Split by deconvolution... | 248 |
-| MainWindow._build_actions | A | Fit the deconvoluted components to the peak and split it into them | 248 |
-| MainWindow._build_actions | A | Keep unsplit (no automatic deconvolution split) | 250 |
-| MainWindow._build_actions | A | Integrate the selected peak as one peak although the integration method splits co-eluted peaks automatically | 250 |
-| MainWindow._build_actions | A | Allow automatic deconvolution split | 253 |
-| MainWindow._build_actions | A | Remove the Keep unsplit mark of the selected peak | 253 |
-| MainWindow._build_actions | A | {…} [{…}] | 259 |
-| MainWindow._build_menus | addMenu | File | 292 |
-| MainWindow._build_menus | addAction | Load Shimadzu QGD files... | 295 |
-| MainWindow._build_menus | addMenu | Recent projects | 299 |
-| MainWindow._build_menus | addAction | Recover autosave... | 301 |
-| MainWindow._build_menus | addAction | Export peak table... | 303 |
-| MainWindow._build_menus | addAction | Export chromatogram... | 304 |
-| MainWindow._build_menus | addMenu | Edit | 309 |
-| MainWindow._build_menus | addAction | Preferences... | 313 |
-| MainWindow._build_menus | addMenu | Method | 315 |
-| MainWindow._build_menus | addAction | Save current settings as Method... | 316 |
-| MainWindow._build_menus | addAction | Load Method... | 317 |
-| MainWindow._build_menus | addMenu | Mass Spectrum | 333 |
-| MainWindow._build_menus | addMenu | Integration | 336 |
-| MainWindow._build_menus | addAction | Integration method panel | 343 |
-| MainWindow._build_menus | addAction | Solvent cut... | 344 |
-| MainWindow._build_menus | addMenu | Identify | 346 |
-| MainWindow._build_menus | addAction | Own library search options... | 350 |
-| MainWindow._build_menus | addAction | Unknown register... | 357 |
-| MainWindow._build_menus | addAction | Edit library... | 358 |
-| MainWindow._build_menus | addAction | Add current spectrum to library... | 359 |
-| MainWindow._build_menus | addAction | Retention index (alkane ladder)... | 361 |
-| MainWindow._build_menus | addAction | Deconvolution of the whole run... | 363 |
-| MainWindow._build_menus | addMenu | Quantify | 366 |
-| MainWindow._build_menus | addMenu | Role of active chromatogram | 367 |
-| MainWindow._build_menus | addAction | Assign blanks... | 370 |
-| MainWindow._build_menus | addAction | Blank subtraction settings... | 371 |
-| MainWindow._build_menus | addAction | Detect internal standards... | 373 |
-| MainWindow._build_menus | addAction | Quantification panel | 376 |
-| MainWindow._build_menus | addAction | Double determination... | 377 |
-| MainWindow._build_menus | addAction | Replicate groups (N-fold) | 378 |
-| MainWindow._build_menus | addMenu | Report | 381 |
-| MainWindow._build_menus | addAction | ... | 384 |
-| MainWindow._build_menus | addAction | - preview | 385 |
-| MainWindow._build_menus | addAction | Batch report of this folder... | 387 |
-| MainWindow._build_menus | addAction | Keep intermediate workbook | 389 |
-| MainWindow._build_menus | addMenu | Automation | 395 |
-| MainWindow._build_menus | addAction | Automation panel | 396 |
-| MainWindow._build_menus | addAction | Report² | 397 |
-| MainWindow._build_menus | addMenu | New workflow | 398 |
-| MainWindow._build_menus | addAction | Start the watcher | 403 |
-| MainWindow._build_menus | addAction | Pause / resume the watcher | 404 |
-| MainWindow._build_menus | addAction | Stop the watcher | 405 |
-| MainWindow._build_menus | addMenu | Layout | 407 |
-| MainWindow._build_menus | addAction | Reset layout | 417 |
-| MainWindow._build_menus | setStatusTip | Arranges the panels again as in the ticked layout | 418 |
-| MainWindow._build_menus | addAction | Save layout... | 419 |
-| MainWindow._build_menus | addAction | Update saved layout | 420 |
-| MainWindow._build_menus | setStatusTip | Stores the present arrangement under the ticked saved layout | 421 |
-| MainWindow._build_menus | addMenu | Saved layouts | 422 |
-| MainWindow._build_menus | addMenu | Delete saved layout | 424 |
-| MainWindow._build_menus | addAction | Suggest docking position when dragging panels | 428 |
-| MainWindow._build_menus | addAction | Lock panels | 434 |
-| MainWindow._build_menus | addAction | Next theme | 450 |
-| MainWindow._build_menus | addMenu | Help | 453 |
-| MainWindow._build_menus | addAction | User manual | 454 |
-| MainWindow._build_menus | setStatusTip | Every function, button and setting explained; how the library search and the double determination work | 456 |
-| MainWindow._build_menus | addAction | Keyboard shortcuts | 458 |
-| MainWindow._build_menus | addAction | About GC Workspace | 459 |
-| MainWindow._build_status | QPushButton | Cancel | 473 |
-| MainWindow._build_status | setToolTip | The processing method loaded or saved last (Method menu) | 483 |
-| MainWindow._tool_changed | setText | Tool: {…} | 574 |
-| MainWindow._fill_istd_menu | setToolTip | now bound to {…} min | 1325 |
-| MainWindow._fill_istd_menu | addAction | No internal standards defined | 1329 |
-| MainWindow._show_report2_pair_menu | addAction | No processed A/B pairs under the current Report² filters | 1444 |
-| MainWindow.save_project | setWindowTitle | GC Workspace - {…} | 1738 |
-| MainWindow._finish_project_load | setWindowTitle | GC Workspace - {…} | 1833 |
+| MainWindow.panel_menu | addAction | Restore the layout | 208 |
+| MainWindow.panel_menu | addAction | Maximize | 210 |
+| MainWindow.panel_menu | addAction | Dock back | 213 |
+| MainWindow.panel_menu | addAction | Detach | 215 |
+| MainWindow.panel_menu | addAction | Detach to screen {…} | 221 |
+| MainWindow.panel_menu | addAction | Close | 224 |
+| MainWindow._build_actions | A | Open folder... | 262 |
+| MainWindow._build_actions | A | Show a folder in the tree | 262 |
+| MainWindow._build_actions | A | Load chromatograms... | 264 |
+| MainWindow._build_actions | A | Open project... | 265 |
+| MainWindow._build_actions | A | Save project | 266 |
+| MainWindow._build_actions | A | Save project as... | 267 |
+| MainWindow._build_actions | A | Close all chromatograms | 268 |
+| MainWindow._build_actions | A | Exit | 269 |
+| MainWindow._build_actions | A | Undo | 270 |
+| MainWindow._build_actions | A | Redo | 272 |
+| MainWindow._build_actions | A | Integrate | 282 |
+| MainWindow._build_actions | A | Re-integrate the active chromatogram | 282 |
+| MainWindow._build_actions | A | Integrate all | 284 |
+| MainWindow._build_actions | A | Re-integrate all loaded chromatograms | 284 |
+| MainWindow._build_actions | A | Library search... | 286 |
+| MainWindow._build_actions | A | Automatic library search of all integrated peaks (your libraries) | 286 |
+| MainWindow._build_actions | A | Search methods... | 288 |
+| MainWindow._build_actions | A | Run Method | 289 |
+| MainWindow._build_actions | A | Process the loaded runs with the loaded method: integration, blank subtraction, library search, ISTDs, quantification | 289 |
+| MainWindow._build_actions | A | Subtract baseline | 292 |
+| MainWindow._build_actions | A | Mass spectrum minus a baseline scan: click, then right-click the apex and then the baseline in a chromatogram (Escape clears) | 292 |
+| MainWindow._build_actions | A | Cancel baseline subtraction | 295 |
+| MainWindow._build_actions | A | Library hit list (selected peak) | 300 |
+| MainWindow._build_actions | A | Libraries... | 301 |
+| MainWindow._build_actions | A | Search selected peak in NIST | 302 |
+| MainWindow._build_actions | A | Investigate selected peak in SpectrAtlas... | 303 |
+| MainWindow._build_actions | A | Extracted ion chromatogram... | 304 |
+| MainWindow._build_actions | QMenu | Set selected peak as ISTD | 305 |
+| MainWindow._build_actions | A | Register selected peak as unknown... | 309 |
+| MainWindow._build_actions | A | Deconvolution... | 310 |
+| MainWindow._build_actions | A | Split the selected FID or TIC peak into its deconvoluted components, or list the components of the visible range or the whole run | 310 |
+| MainWindow._build_actions | A | Split by deconvolution... | 313 |
+| MainWindow._build_actions | A | Fit the deconvoluted components to the peak and split it into them | 313 |
+| MainWindow._build_actions | A | Keep unsplit (no automatic deconvolution split) | 315 |
+| MainWindow._build_actions | A | Integrate the selected peak as one peak although the integration method splits co-eluted peaks automatically | 315 |
+| MainWindow._build_actions | A | Allow automatic deconvolution split | 318 |
+| MainWindow._build_actions | A | Remove the Keep unsplit mark of the selected peak | 318 |
+| MainWindow._build_actions | A | {…} [{…}] | 324 |
+| MainWindow._build_menus | addMenu | File | 357 |
+| MainWindow._build_menus | addAction | Load Shimadzu QGD files... | 360 |
+| MainWindow._build_menus | addMenu | Recent projects | 364 |
+| MainWindow._build_menus | addAction | Recover autosave... | 366 |
+| MainWindow._build_menus | addAction | Export peak table... | 368 |
+| MainWindow._build_menus | addAction | Export chromatogram... | 369 |
+| MainWindow._build_menus | addMenu | Edit | 374 |
+| MainWindow._build_menus | addAction | Preferences... | 378 |
+| MainWindow._build_menus | addMenu | Method | 380 |
+| MainWindow._build_menus | addAction | Save current settings as Method... | 381 |
+| MainWindow._build_menus | addAction | Load Method... | 382 |
+| MainWindow._build_menus | addMenu | Mass Spectrum | 398 |
+| MainWindow._build_menus | addMenu | Integration | 401 |
+| MainWindow._build_menus | addAction | Integration method panel | 408 |
+| MainWindow._build_menus | addAction | Solvent cut... | 409 |
+| MainWindow._build_menus | addMenu | Identify | 411 |
+| MainWindow._build_menus | addAction | Own library search options... | 415 |
+| MainWindow._build_menus | addAction | Unknown register... | 422 |
+| MainWindow._build_menus | addAction | Edit library... | 423 |
+| MainWindow._build_menus | addAction | Add current spectrum to library... | 424 |
+| MainWindow._build_menus | addAction | Retention index (alkane ladder)... | 426 |
+| MainWindow._build_menus | addAction | Deconvolution of the whole run... | 428 |
+| MainWindow._build_menus | addMenu | Quantify | 431 |
+| MainWindow._build_menus | addMenu | Role of active chromatogram | 432 |
+| MainWindow._build_menus | addAction | Assign blanks... | 435 |
+| MainWindow._build_menus | addAction | Blank subtraction settings... | 436 |
+| MainWindow._build_menus | addAction | Detect internal standards... | 438 |
+| MainWindow._build_menus | addAction | Quantification panel | 441 |
+| MainWindow._build_menus | addAction | Double determination... | 442 |
+| MainWindow._build_menus | addAction | Replicate groups (N-fold) | 443 |
+| MainWindow._build_menus | addMenu | Report | 446 |
+| MainWindow._build_menus | addAction | ... | 449 |
+| MainWindow._build_menus | addAction | - preview | 450 |
+| MainWindow._build_menus | addAction | Batch report of this folder... | 452 |
+| MainWindow._build_menus | addAction | Keep intermediate workbook | 454 |
+| MainWindow._build_menus | addMenu | Automation | 460 |
+| MainWindow._build_menus | addAction | Automation panel | 461 |
+| MainWindow._build_menus | addAction | Report² | 462 |
+| MainWindow._build_menus | addMenu | New workflow | 463 |
+| MainWindow._build_menus | addAction | Start the watcher | 468 |
+| MainWindow._build_menus | addAction | Pause / resume the watcher | 469 |
+| MainWindow._build_menus | addAction | Stop the watcher | 470 |
+| MainWindow._build_menus | addMenu | Layout | 472 |
+| MainWindow._build_menus | addAction | Reset layout | 482 |
+| MainWindow._build_menus | setStatusTip | Arranges the panels again as in the ticked layout | 483 |
+| MainWindow._build_menus | addAction | Save layout... | 484 |
+| MainWindow._build_menus | addAction | Update saved layout | 485 |
+| MainWindow._build_menus | setStatusTip | Stores the present arrangement under the ticked saved layout | 486 |
+| MainWindow._build_menus | addMenu | Saved layouts | 487 |
+| MainWindow._build_menus | addMenu | Delete saved layout | 489 |
+| MainWindow._build_menus | addAction | Suggest docking position when dragging panels | 493 |
+| MainWindow._build_menus | addAction | Lock panels | 499 |
+| MainWindow._build_menus | addAction | Next theme | 515 |
+| MainWindow._build_menus | addMenu | Help | 518 |
+| MainWindow._build_menus | addAction | User manual | 519 |
+| MainWindow._build_menus | setStatusTip | Every function, button and setting explained; how the library search and the double determination work | 521 |
+| MainWindow._build_menus | addAction | Keyboard shortcuts | 523 |
+| MainWindow._build_menus | addAction | About GC Workspace | 524 |
+| MainWindow._build_status | QPushButton | Cancel | 538 |
+| MainWindow._build_status | setToolTip | The processing method loaded or saved last (Method menu) | 548 |
+| MainWindow._tool_changed | setText | Tool: {…} | 639 |
+| MainWindow._fill_istd_menu | setToolTip | now bound to {…} min | 1390 |
+| MainWindow._fill_istd_menu | addAction | No internal standards defined | 1394 |
+| MainWindow._show_report2_pair_menu | addAction | No processed A/B pairs under the current Report² filters | 1509 |
+| MainWindow.save_project | setWindowTitle | GC Workspace - {…} | 1803 |
+| MainWindow._finish_project_load | setWindowTitle | GC Workspace - {…} | 1898 |
 
 ### gcws/ui/plot/chrom.py
 

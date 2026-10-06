@@ -162,6 +162,14 @@ class DockTitleBar(QWidget):
             self.on_maximize(self.dock)
         self.dock.close()
 
+    def contextMenuEvent(self, ev):
+        win = self.dock.parentWidget()                # also the parent of a detached panel
+        if hasattr(win, "panel_menu"):
+            ev.accept()
+            win.panel_menu(self.dock).exec(ev.globalPos())
+            return
+        super().contextMenuEvent(ev)
+
     def mouseDoubleClickEvent(self, ev):
         self._press = None
         self._drag_offset = None
