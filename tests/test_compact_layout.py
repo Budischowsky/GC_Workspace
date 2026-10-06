@@ -552,3 +552,46 @@ def test_move_to_close_other_tabs_and_revealing_a_panel(qtbot, win, monkeypatch)
     win._show_dock("props")
     assert win._maximized is None and win.docks["chrom"].isVisible() and win.docks["props"].isVisible()
     win.apply_preset("Chromatogram top")
+
+
+def test_go_to_panel_keys_and_switcher(qtbot, win):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    win.apply_preset("Chromatogram top")
+    QApplication.processEvents()
+    acts = win.goto_actions
+    assert acts["table"].shortcut().toString() == "Ctrl+3" and acts["events"].shortcut().toString() == "Ctrl+9"
+    assert acts["props"].shortcut().isEmpty()
+    assert all(a.shortcutContext() == Qt.ApplicationShortcut for a in list(acts.values())[:9])
+    # Ctrl+3: the peak table's list gets the keys
+    acts["table"].trigger()
+    assert win.focusWidget() is win.table.view
+    # a closed panel is shown by its key, never hidden by it
+    win.docks["quant"].close()
+    acts["quant"].trigger()
+    assert win.docks["quant"].isVisible()
+    acts["quant"].trigger()
+    assert win.docks["quant"].isVisible()
+    assert win.panel_order()[:2] == ["quant", "table"]
+    # quick Ctrl+Tab (Ctrl not held): straight back to the panel before
+    win.switcher.open(1, held=False)
+    assert not win.switcher.isVisible() and win.panel_order()[0] == "table"
+    # held: the list stays open, Tab steps, releasing Ctrl goes there
+    win.switcher.open(1, held=True)
+    assert win.switcher.isVisible() and win.switcher.list.currentItem().data(Qt.UserRole) == "quant"
+    QTest.keyClick(win.switcher, Qt.Key_Tab, Qt.ControlModifier)
+    target = win.switcher.list.currentItem().data(Qt.UserRole)
+    QTest.keyRelease(win.switcher, Qt.Key_Control)
+    assert not win.switcher.isVisible() and win.panel_order()[0] == target
+    # Esc: nothing changes
+    win.switcher.open(1, held=True)
+    QTest.keyClick(win.switcher, Qt.Key_Escape)
+    assert not win.switcher.isVisible() and win.panel_order()[0] == target
+    closed = win.docks["audit"]
+    closed.close()
+    win.switcher.open(1, held=True)
+    texts = [win.switcher.list.item(i).text() for i in range(win.switcher.list.count())]
+    assert "Audit trail   (closed)" in texts and len(texts) == len(win.docks)
+    QTest.keyClick(win.switcher, Qt.Key_Escape)
+    win.apply_preset("Chromatogram top")

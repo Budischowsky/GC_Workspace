@@ -38,6 +38,9 @@ DOCKS = [  # key, title
     ("props", "Properties"), ("audit", "Audit trail"), ("quant", "Quantification"),
     ("replicates", "Replicates / results"), ("automation", "Automation"), ("report2", "Report²"),
 ]
+#: View > Go to panel: the first nine get Ctrl+1 ... Ctrl+9
+GOTO_ORDER = ("chrom", "zoom", "table", "spectrum", "tree", "quant", "replicates", "report2", "events",
+              "props", "audit", "automation")
 
 
 _REPORT_RUN_FIELDS = ("id", "name", "role", "blanks", "blanks_istd", "blanks_manual", "methods", "manual",
@@ -124,6 +127,10 @@ class MainWindow(QMainWindow):
 
         from gcws.ui.layout.sidebar import SidebarController
         self.sidebar = SidebarController(self)
+        from gcws.ui.layout.switcher import PanelSwitcher
+        self.switcher = PanelSwitcher(self)
+        self._panel_mru: list[str] = []
+        QApplication.instance().focusChanged.connect(self._focus_moved)
         self._build_actions()
         self._build_toolbars()
         self._build_menus()
@@ -232,6 +239,38 @@ class MainWindow(QMainWindow):
             m.addSeparator()
             m.addAction("Close", lambda: (self.restore_maximized(), dock.close()))
         return m
+
+    def focus_panel(self, key):
+        """Ctrl+1 ... 9 and the switcher: show the panel, bring it to the front and put the keys into it."""
+        from PySide6.QtWidgets import QWidget
+        self._show_dock(key)
+        dock = self.docks[key]
+        body = dock.widget()
+        candidates = [w for w in [body] + body.findChildren(QWidget)
+                      if w.focusPolicy() & Qt.TabFocus and w.isVisibleTo(dock) and w.isEnabled()]
+        target = max(candidates, key=lambda w: w.width() * w.height(), default=body)   # the table, plot, tree
+        if dock.isFloating():
+            dock.activateWindow()
+        target.setFocus(Qt.ShortcutFocusReason)
+        self._note_panel(key)
+
+    def _note_panel(self, key):
+        if key in self._panel_mru:
+            self._panel_mru.remove(key)
+        self._panel_mru.insert(0, key)
+
+    def _focus_moved(self, _old, new):
+        from PySide6.QtWidgets import QDockWidget as Dock
+        w = new
+        while w is not None and not isinstance(w, Dock):
+            w = w.parentWidget()
+        key = next((k for k, d in self.docks.items() if d is w), None)
+        if key is not None:
+            self._note_panel(key)
+
+    def panel_order(self) -> list[str]:
+        """The panels for the switcher: the most recently used first, then the rest in menu order."""
+        return self._panel_mru + [k for k in GOTO_ORDER if k not in self._panel_mru]
 
     def move_panel(self, dock, area):
         """Right-click > Move to: dock the panel along one whole side of the window."""
@@ -410,6 +449,21 @@ class MainWindow(QMainWindow):
         mb.addMenu(self.view_menu)
         for key, d in self.docks.items():
             self.view_menu.addAction(d.toggleViewAction())
+        go = self.view_menu.addMenu("Go to panel")      # a key never hides a panel, unlike the ticks
+        self.goto_actions = {}
+        for i, key in enumerate(GOTO_ORDER):
+            a = go.addAction(self.docks[key].windowTitle(), lambda k=key: self.focus_panel(k))
+            if i < 9:
+                a.setShortcut(QKeySequence(f"Ctrl+{i + 1}"))
+                a.setShortcutContext(Qt.ApplicationShortcut)     # also from a detached panel
+            self.goto_actions[key] = a
+        go.addSeparator()
+        a = go.addAction("Switch panels", lambda: self.switcher.open(1))
+        a.setShortcut(QKeySequence("Ctrl+Tab"))
+        a.setShortcutContext(Qt.ApplicationShortcut)
+        from PySide6.QtGui import QShortcut
+        for seq in ("Ctrl+Shift+Tab", "Ctrl+Shift+Backtab"):
+            QShortcut(QKeySequence(seq), self, lambda: self.switcher.open(-1), context=Qt.ApplicationShortcut)
         self.view_menu.addSeparator()
         self.view_menu.addAction(self.a_eic)
 
@@ -2144,7 +2198,9 @@ class MainWindow(QMainWindow):
                   "Ctrl+E   Library hit list", "Ctrl+N   NIST search", "Ctrl+I   Extracted ion chromatogram",
                   "Ctrl+K   Deconvolution: split the selected peak into its components",
                   "Ctrl+Z / Ctrl+Y   Undo / Redo",
-                  "Ctrl+Shift+D   Next theme (Light / Dark / Neon)", "",
+                  "Ctrl+Shift+D   Next theme (Light / Dark / Neon)",
+                  "Ctrl+1 ... Ctrl+9   Go to a panel (View > Go to panel)",
+                  "Ctrl+Tab / Ctrl+Shift+Tab   Switch panels (hold Ctrl, Tab steps)", "",
                   "Mouse in a chromatogram:",
                   "  right-click              mass spectrum at that time",
                   "  right-drag               mean spectrum over the range",

@@ -66,6 +66,8 @@ From left to right:
 | `Ctrl+O` / `Ctrl+S` / `Ctrl+Shift+S` | Open / save / save as project |
 | `Ctrl+L` / `Ctrl+Shift+O` | Load chromatograms / open folder |
 | `Ctrl+Shift+D` | Next theme |
+| `Ctrl+1` ... `Ctrl+9` | Go to a panel: 1 Chromatogram 1, 2 Chromatogram 2, 3 Peaks / substances, 4 Mass spectrum, 5 Folders, 6 Quantification, 7 Replicates / results, 8 Report², 9 Integration method |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Switch panels: a quick press goes back to the panel used before; hold `Ctrl` to see the list, `Tab` steps, releasing `Ctrl` goes there, `Esc` cancels |
 | `Ctrl+Q` | Exit |
 | `Z` `H` `B` `S` `D` `A` `M` `G` `K` `N` `R` | The integration tools |
 | `Delete` (in the peak table) | Delete the marked peaks |

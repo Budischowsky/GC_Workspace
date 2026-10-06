@@ -46,6 +46,8 @@ stays open while you tick; click elsewhere to close it.
 
 | Item | Key | What it does |
 |---|---|---|
+| **Go to panel** ▸ one item per panel | `Ctrl+1` ... `Ctrl+9` | Shows the panel, brings it to the front and puts the keys into it; a key never hides a panel. |
+| **Go to panel** ▸ **Switch panels** | `Ctrl+Tab` | A list of the panels, the one used last first; see [Keys](ref-tools.md#keys). |
 | **Extracted ion chromatogram...** | `Ctrl+I` | Asks for m/z values and shows their chromatogram in the MS chromatogram panel. |
 
 ## Chromatogramm
