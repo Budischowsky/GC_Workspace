@@ -233,6 +233,8 @@ QMainWindow::separator:hover {{ background: {ACCENT_SOFT2}; }}
 QWidget#dockTitle {{ background: {ACCENT_SOFT}; border-left: 3px solid {ACCENT_SOFT2}; }}
 QWidget#dockTitle[active="true"] {{ background: {ACCENT}; border-left: 3px solid {ACCENT_PRESSED}; }}
 QWidget#dockTitle[tabbed="true"] {{ border-left: none; }}
+QWidget#dockTitle[flash="true"] {{ background: {ACCENT}; }}
+QWidget#dockTitle[flash="true"] QLabel#dockTitleText {{ color: {ON_ACCENT}; }}
 QLabel#dockTitleText {{ color: {ACCENT_TEXT}; font-weight: 600; background: transparent; }}
 QWidget#dockTitle[active="true"] QLabel#dockTitleText {{ color: {ON_ACCENT}; }}
 QToolButton#dockButton {{ border: 1px solid transparent; border-radius: 4px; padding: 2px; margin: 0;

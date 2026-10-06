@@ -112,7 +112,12 @@ Right-click the title bar of a panel, its strip on the right edge, or its tab:
 | **Maximize** / **Restore the layout** | The same as the maximize button. |
 | **Detach** / **Dock back** | Makes the panel a window of its own, or puts it back into the main window. |
 | **Detach to screen 2** (3, ...) | Only with more than one screen: detaches the panel straight onto that screen, centred and sized to fit it. |
+| **Move to** ▸ **Left side**, **Right side**, **Top**, **Bottom** | Docks the panel along that whole side of the window. |
+| **Close other tabs** | Only for a panel in a group of tabs: hides the other panels of the group. |
 | **Close** | Hides the panel. |
+
+When a menu command brings a closed panel, or one behind another tab, to the front, its title lights up for a
+moment.
 
 | Button | What it does |
 |---|---|

@@ -514,3 +514,41 @@ def test_right_click_on_panel_title_or_tab_detaches(qtbot, win, monkeypatch):
     g, frame = screen.availableGeometry(), win.docks["audit"].geometry()
     assert win.docks["audit"].isFloating() and g.contains(frame.center()) and frame.width() <= g.width()
     win.apply_preset("Chromatogram top")
+
+
+def test_move_to_close_other_tabs_and_revealing_a_panel(qtbot, win, monkeypatch):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication, QMenu
+    from gcws.ui import main_window
+    from gcws.ui.layout.title_bar import title_bar
+    shown = []
+
+    class Menu(QMenu):
+        def exec(self, *_):
+            shown.append(self)
+    monkeypatch.setattr(main_window, "QMenu", Menu)
+    win.apply_preset("Chromatogram top")
+    QApplication.processEvents()
+    table, quant, spec = win.docks["table"], win.docks["quant"], win.docks["spectrum"]
+    labels = {a.text(): a for a in win.panel_menu(table).actions()}
+    assert "Close other tabs" in labels and "Move to" in labels
+    labels["Close other tabs"].trigger()
+    assert table.isVisible() and quant.isHidden() and win.docks["report2"].isHidden()
+    move = {a.text(): a for a in labels["Move to"].menu().actions()}
+    assert list(move) == ["Left side", "Right side", "Top", "Bottom"]
+    move["Bottom"].trigger()
+    assert win.dockWidgetArea(table) == Qt.BottomDockWidgetArea and not table.isFloating()
+    assert "Close other tabs" not in {a.text() for a in win.panel_menu(spec).actions()}
+    # a menu command reveals a closed panel: it lights up briefly
+    win._show_dock("quant")
+    bar = title_bar(quant)
+    assert quant.isVisible() and bar.property("flash")
+    qtbot.waitUntil(lambda: not bar.property("flash"), timeout=2000)
+    win._show_dock("quant")                     # already in front: no flash
+    assert not bar.property("flash")
+    # while another panel is maximized, the layout comes back first
+    win.toggle_maximize(spec)
+    assert win.docks["chrom"].isHidden()
+    win._show_dock("props")
+    assert win._maximized is None and win.docks["chrom"].isVisible() and win.docks["props"].isVisible()
+    win.apply_preset("Chromatogram top")

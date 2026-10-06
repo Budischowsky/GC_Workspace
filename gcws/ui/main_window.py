@@ -219,10 +219,31 @@ class MainWindow(QMainWindow):
                 for i, screen in enumerate(screens, 1):
                     if screen is not here:
                         m.addAction(f"Detach to screen {i}", lambda s=screen: self.detach_panel(dock, s))
+        if dock.features() & QDockWidget.DockWidgetMovable:
+            move = m.addMenu("Move to")
+            for label, area in (("Left side", Qt.LeftDockWidgetArea), ("Right side", Qt.RightDockWidgetArea),
+                                ("Top", Qt.TopDockWidgetArea), ("Bottom", Qt.BottomDockWidgetArea)):
+                move.addAction(label, lambda a=area: self.move_panel(dock, a))
+        others = [] if dock.isFloating() else [o for o in self.tabifiedDockWidgets(dock)
+                                                if not o.isHidden() and not o.isFloating()]
+        if others and dock.features() & QDockWidget.DockWidgetClosable:
+            m.addAction("Close other tabs", lambda: [o.close() for o in others])
         if dock.features() & QDockWidget.DockWidgetClosable:
             m.addSeparator()
             m.addAction("Close", lambda: (self.restore_maximized(), dock.close()))
         return m
+
+    def move_panel(self, dock, area):
+        """Right-click > Move to: dock the panel along one whole side of the window."""
+        from gcws.ui.layout.drop_overlay import AREA_NAMES
+        self.restore_maximized()
+        dock.setFloating(False)
+        self.addDockWidget(area, dock, Qt.Vertical if area in (Qt.LeftDockWidgetArea, Qt.RightDockWidgetArea)
+                           else Qt.Horizontal)
+        dock.show()
+        dock.raise_()
+        self.statusBar().showMessage(f"{dock.windowTitle()} docked at the {AREA_NAMES[area]} side "
+                                     f"(Layout ▸ Save layout... to keep it)", 6000)
 
     def detach_panel(self, dock, screen=None, floating=True):
         """Detach a panel (onto ``screen``, centred and sized to fit it) or dock it back."""
@@ -629,10 +650,18 @@ class MainWindow(QMainWindow):
 
     def _show_dock(self, key):
         d = self.docks[key]
+        if self._maximized is not None and self._maximized[0] is not d:
+            self.restore_maximized()            # else the panel would appear beside the maximized one
         if self.sidebar.contains(d):
             self.sidebar.expand()
+        hidden = not d.isVisible()              # closed, or behind another tab
         d.show()
         d.raise_()
+        if hidden:
+            from gcws.ui.layout.title_bar import title_bar
+            bar = title_bar(d)
+            if hasattr(bar, "flash"):
+                bar.flash()
 
     def _tool_changed(self, name):
         label = next((t[1] for t in TOOLS if t[0] == name), name)

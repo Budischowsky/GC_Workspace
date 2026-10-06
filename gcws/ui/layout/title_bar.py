@@ -9,7 +9,7 @@ panel from it.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import QApplication, QDockWidget, QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
 
@@ -127,6 +127,20 @@ class DockTitleBar(QWidget):
         self.style().unpolish(self)
         self.style().polish(self)
         self.updateGeometry()
+
+    def flash(self, ms: int = 700) -> None:
+        """Light the bar up briefly: a panel a command just brought to the front is easy to find."""
+        self._set_flash(True)
+        QTimer.singleShot(ms, lambda: self._set_flash(False))
+
+    def _set_flash(self, on: bool) -> None:
+        try:
+            self.setProperty("flash", on)
+            for w in (self, self.label):
+                w.style().unpolish(w)
+                w.style().polish(w)
+        except RuntimeError:                  # the panel is already gone
+            pass
 
     def set_maximized(self, on: bool) -> None:
         self.maximized = bool(on)
