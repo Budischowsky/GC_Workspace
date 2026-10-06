@@ -49,7 +49,8 @@ _REPORT_RUN_FIELDS = ("id", "name", "role", "blanks", "blanks_istd", "blanks_man
 
 def _report_inputs(data: dict) -> dict:
     """Project values that can change a generated report; omit display state and audit timestamps."""
-    inputs = {"quant": data.get("quant") or {}, "replicate_groups": data.get("replicate_groups") or [],
+    groups = [{k: v for k, v in g.items() if k != "signoff"} for g in data.get("replicate_groups") or []]
+    inputs = {"quant": data.get("quant") or {}, "replicate_groups": groups,           # who accepted: no report change
               "runs": [{key: run.get(key) for key in _REPORT_RUN_FIELDS} for run in data.get("runs") or []]}
     return json.loads(json.dumps(inputs, sort_keys=True, default=str))
 
@@ -1578,20 +1579,77 @@ class MainWindow(QMainWindow):
         if run_id:
             self.replicates.show_pair(run_id, partner)
 
+    def _report2_job_of(self, group: dict):
+        """The Report² report of this pair: the one loaded from Report², else a processed pair of this
+        project file with the same two runs (the project was opened another way), else None."""
+        names = sorted(self.ws.runs[m].run.path.name.casefold() for m in group["members"] if m in self.ws.runs)
+
+        def same(job) -> bool:
+            return job is not None and not job.deleted and \
+                sorted(str(n).casefold() for n in job.members or []) == names
+
+        if self._report2_job:
+            job = self.report2.journal.job(self._report2_job[0])
+            return job if same(job) else None
+        if not self.ws.project_path or len(names) != 2:
+            return None
+        try:
+            here = Path(self.ws.project_path).resolve()
+            jobs = self.report2.journal.jobs(include_batch=False)
+        except Exception:  # noqa: BLE001 - no journal: no Report² report
+            return None
+        found = []
+        for job in jobs:
+            try:
+                if job.project_path and same(job) and Path(job.project_path).resolve() == here:
+                    found.append(job)
+            except OSError:
+                continue
+        return found[-1] if found else None              # the newest, in the order they were created
+
     def _accept_pair(self, group_id: str) -> bool:
-        """The analyst accepted a double determination: when it is the Report² pair loaded here, its report
-        is accepted in Report² as well (saving the project first, with the usual undo bar)."""
-        if not self._report2_job:
-            return False
-        jid = self._report2_job[0]
-        job = self.report2.journal.job(jid)
+        """The analyst accepted a double determination. When it is a Report² report, it is accepted there
+        too (the project is saved first, with Report²'s undo bar); the status bar always says what happened."""
+        from gcws.automation import journal as J
+        from gcws.ui.docks.report2 import can_accept
         g = next((g for g in self.ws.replicate_groups if g["id"] == group_id), None)
-        if job is None or g is None:
+        if g is None:
             return False
-        names = sorted(self.ws.runs[m].run.path.name.casefold() for m in g["members"] if m in self.ws.runs)
-        if names != sorted(str(n).casefold() for n in job.members or []):
+        who = (g.get("signoff") or {}).get("by", "")
+        job = self._report2_job_of(g)
+        if job is None:
+            self.ws.message.emit(f"Double determination {g['name']} accepted by {who}: saved with the project "
+                                 "(save it to keep it). It is no Report² report - Report² lists the samples a "
+                                 "workflow processed.")
             return False
-        return self.report2.review(True, job_ids=[jid])
+        if not self._report2_job:                       # opened another way: bind it as "Open in Replicates" does
+            try:
+                data = P.read(job.project_path)
+            except Exception as exc:  # noqa: BLE001
+                self.ws.message.emit(f"Accepted here, not in Report²: its project could not be read ({exc}).")
+                return False
+            self._report2_job = (job.id, job.revision, Path(job.project_path))
+            self._report2_baseline = _report_inputs(data)
+        if not self._save_report2_project(job.id):       # changes since the report: saved, back to control
+            self.ws.message.emit("Accepted here; the project could not be saved for Report².")
+            return False
+        job = self.report2.journal.job(job.id) or job
+        if not can_accept(job):
+            state = "being made again" if job.review_pending else J.STATE_LABELS.get(job.state, job.state)
+            self.ws.message.emit(f"Accepted here; in Report² {job.group_name} is {state.lower()}, so it was "
+                                 "left as it is.")
+            return False
+        ok = self.report2.review(True, job_ids=[job.id])
+        if ok:
+            after = self.report2.journal.job(job.id)
+            again = after is not None and after.state == J.QUEUED
+            self.ws.message.emit(f"Accepted in Report² too: {job.group_name}"
+                                 + (" - your changes are saved and the report is made again." if again else
+                                    ". Undo in Report² for a few seconds."))
+        else:
+            self.ws.message.emit(f"Accepted here; Report² could not accept {job.group_name} (it changed "
+                                 "meanwhile) - look at it in Report².")
+        return ok
 
     def _show_report2_pair_menu(self):
         """Choose any processed pair currently visible in Report², grouped by batch."""

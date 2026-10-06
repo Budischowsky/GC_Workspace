@@ -90,8 +90,14 @@ of this double determination.
 
 When no red row is open any more, **Accept double determination** below the list can be pressed. It saves
 your name and the time with the project, writes them to the audit trail, and the pair gets a ✔ in the list
-**Determinations**. When the pair was opened from Report², its report is accepted in Report² as well (with
-the usual few seconds to undo it there). `Ctrl+Z` takes the acceptance back.
+**Determinations**. `Ctrl+Z` takes the acceptance back. The status bar says what happened:
+
+- When the pair is a sample a workflow processed (it is listed in Report²), its report in Report² is
+  accepted too - also when you opened the project by hand rather than from Report². Changes you made are
+  saved first, and the report is then made again; without changes it is accepted as it is, with the usual
+  few seconds to undo it in Report².
+- Otherwise the acceptance is saved with the project only (save the project to keep it). Report² does not
+  list pairs that no workflow processed.
 
 A change after that - a value, a **Report** box, a comment, a name - reopens the pair: the button then reads
 **Accept again** and its tooltip says who accepted it before.

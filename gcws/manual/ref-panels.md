@@ -242,7 +242,7 @@ The double-determination page:
 | **?** | The keys of the list (Enter, Delete, F2, Ctrl+C / Ctrl+V, Ctrl+D). |
 | **Report preview** | The report of this pair (NIAS, or HS-Screening on the TIC). Its arrow offers **NIAS report...**, **Fingerprint report...**, **Total extraction report...**, **HS-Screening report...** and **Export worksheet...**. |
 | **Harmonise boundaries** | Takes over every proposed integration boundary. Shown when there are proposals. |
-| **Accept double determination** | Possible when no red row is open. Saves who accepted it and when with the project, writes it to the audit trail and marks the pair ✔ in the list; a pair opened from Report² is accepted there too. A later change reopens it (**Accept again**). |
+| **Accept double determination** | Possible when no red row is open. Saves who accepted it and when with the project, writes it to the audit trail and marks the pair ✔ in the list; when the pair is a Report² report (a workflow processed it) it is accepted there too, however the project was opened. The status bar says which. A later change reopens it (**Accept again**). |
 
 A right-click on a row offers **Reset row** and the other row actions (see [Double determination](wf-double.md#decide)).
 

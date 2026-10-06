@@ -1718,9 +1718,7 @@ def test_replicates_list_of_determinations(qtbot, win, samples):
     assert dock.stack.currentIndex() == 1
 
 
-def test_double_determination_accept(qtbot, win, samples, monkeypatch):
-    from types import SimpleNamespace
-    from PySide6.QtCore import Qt
+def test_double_determination_accept(qtbot, win, samples):
     from gcws.quant import duplicate_view as DV
     _load(qtbot, win, samples, ["07_", "11_"])
     ws = win.ws
@@ -1749,16 +1747,10 @@ def test_double_determination_accept(qtbot, win, samples, monkeypatch):
     page.set_edit(page.rows[k], "comment", "changed after the acceptance")
     assert page.group()["signoff"]["stale"] and page.b_accept.text() == "Accept again"
     assert not dock._item_for(("group", g["id"])).text(0).startswith("✔")
-    # the pair loaded from Report²: its report is accepted there as well
-    job = SimpleNamespace(members=[ws.runs[a].run.path.name, ws.runs[b].run.path.name])
-    monkeypatch.setattr(win.report2.journal, "job", lambda jid: job if jid == "job1" else None)
-    reviewed = []
-    monkeypatch.setattr(win.report2, "review", lambda accept, comment="", job_ids=None: reviewed.append(
-        (accept, job_ids)) or True)
-    monkeypatch.setattr(win, "_report2_job", ("job1", 1, None))
-    page.b_accept.click()
-    assert reviewed == [(True, ["job1"])]
-    monkeypatch.setattr(win, "_report2_job", None)        # closing must not try to save a Report² project
+    said = []
+    ws.message.connect(said.append)
+    page.b_accept.click()                                   # not a Report² report: the status bar says so
+    assert any("no Report² report" in t for t in said)
 
 
 def test_replicates_back_from_a_group_of_three(qtbot, win, samples):
@@ -1788,3 +1780,38 @@ def test_replicates_back_from_a_group_of_three(qtbot, win, samples):
     dock.b_back.click()
     assert dock.stack.currentIndex() == 0 and dock.duplicate.members == [a, b]
     assert dock.list.currentItem() is dock._item_for(("group", pair["id"]))
+
+
+def test_double_determination_accept_in_report2(qtbot, win, samples, tmp_path):
+    """A pair that is a Report² report is accepted there too - also when its project was opened by hand."""
+    from gcws.automation import journal as J
+    from gcws.core import project as P
+    from gcws.quant import duplicate_view as DV
+    _load(qtbot, win, samples, ["07_", "11_"])
+    ws = win.ws
+    a = next(s.id for s in ws.states() if s.name.startswith("07_"))
+    b = next(s.id for s in ws.states() if s.name.startswith("11_"))
+    win.loaded_samples.pairRequested.emit(a, b)
+    page = win.replicates.duplicate
+    page.set_edits([(r, "comment", "checked") for r, v in zip(page.rows, page.verdicts) if DV.is_open(r, v)])
+    project = P.save(ws, tmp_path / "pair.gcws")
+    ws.project_path, ws.dirty = project, False
+    jr = J.Journal(tmp_path / "journal.sqlite")
+    batch = jr.batch("wf", tmp_path)
+    job = jr.ensure_job("wf", "method", batch["id"], "pair", "Pair",
+                        [ws.runs[a].run.path.name, ws.runs[b].run.path.name], {}, "fp", state=J.QUEUED)
+    jr.transition(job.id, J.QUEUED, J.PROCESSING)
+    jr.transition(job.id, J.PROCESSING, J.CONTROL, project_path=str(project))
+    win.report2._journal = jr
+    assert win._report2_job is None                         # opened by hand, not from Report²
+    said = []
+    ws.message.connect(said.append)
+    try:
+        page.b_accept.click()
+        after = jr.job(job.id)
+        # the acceptance itself is no report change: accepted as it is, not made again
+        assert after.state == J.ACCEPTED_MANUAL and not after.edited, (after.state, said)
+        assert any("Accepted in Report² too" in t for t in said)
+    finally:
+        win._report2_job = None                             # closing must not try to save a Report² project
+        ws.dirty = False
