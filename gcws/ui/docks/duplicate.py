@@ -38,6 +38,7 @@ from gcws.core.model import FID
 from gcws.quant import duplicate_view as DV
 from gcws.ui import theme, workers
 from gcws.ui.icons import color_chip
+from gcws.ui.widgets.cell_marks import EDITED_ROLE, EditedDelegate
 
 #: SNIP window (min) of the baseline removed from the mirror plot's traces: wider than any peak
 BASELINE_WINDOW = 1.0
@@ -183,6 +184,7 @@ class DuplicatePage(QWidget):
         self.table.markRequested.connect(self._mark_rows)
         self.table.bulkEdit.connect(self._bulk_edit)
         self.table.setAlternatingRowColors(True)
+        self.table.setItemDelegate(EditedDelegate(self.table))     # changed cells: a corner mark
         self._nav = QTimer(self)                 # arrow keys: jump to the peak once the cursor rests
         self._nav.setSingleShot(True)
         self._nav.setInterval(150)
@@ -892,7 +894,7 @@ class DuplicatePage(QWidget):
                     font = QFont()
                     font.setItalic(True)
                     it.setFont(font)
-                    it.setBackground(theme.status_brush("warn"))
+                    it.setData(EDITED_ROLE, True)
                     was = edited.get(field)
                     it.setToolTip(f"Changed by the analyst" + (f" (was {was:.4g})" if isinstance(was, float) else
                                                                (f" (was {'on' if was else 'off'})" if field == "report"

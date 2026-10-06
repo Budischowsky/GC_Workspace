@@ -987,6 +987,8 @@ def test_double_determination_cells_editable(qtbot, win, samples):
     k = min(range(len(page.rows)), key=lambda i: abs(page.rows[i]["rt"] - rt))
     assert page.rows[k]["mean"] == pytest.approx(0.777)
     assert cell(k, C_MEAN).font().italic() and "Changed by the analyst" in cell(k, C_MEAN).toolTip()
+    from gcws.ui.widgets.cell_marks import EDITED_ROLE
+    assert cell(k, C_MEAN).data(EDITED_ROLE) and cell(k, C_MEAN).background().style() == Qt.NoBrush
     g = page.group()
     e = next(iter(g["edits"].values()))
     assert e["report"] is False and e["mean"] == pytest.approx(0.777)

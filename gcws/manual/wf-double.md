@@ -55,7 +55,8 @@ You can also edit the list directly, as in a spreadsheet:
 
 Move with the arrow keys, mark several cells with `Shift` or by dragging, type or press `F2` to edit.
 `Enter` puts the marked substances into the report and `Delete` takes them out. `Ctrl+C` / `Ctrl+V` copy and
-paste, `Ctrl+D` copies a value down. A changed cell is marked and shows its old value. Every edit is one undo
+paste, `Ctrl+D` copies a value down. A changed cell is written in italics with a small triangle in its corner (as a comment in a
+spreadsheet), so it is never mistaken for a yellow row; its tooltip shows the old value. Every edit is one undo
 step and is written to the audit trail.
 
 **Reset row** takes back your changes of the selected substance, **Reset all** every change of this double
