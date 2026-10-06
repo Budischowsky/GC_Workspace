@@ -186,13 +186,13 @@ of step 3 and the names of step 4 by itself, as **one undo step**, and writes ea
 - `Ctrl+Z` takes all of them back at once.
 - An automatic change that you undo is **not made again** at the next **Compare**.
 - Right-click a row and choose **Remove the gap fill** to take out a single gap fill.
-- **Reset row** (right-click a row) undoes your own changes to that substance, **⋯ > Reset all** every
+- **Reset row** (right-click a row) undoes your own changes to that substance, **More > Reset all** every
   change made in this double determination.
 - Boundaries (step 5) are never changed automatically in the panel, only by the automation.
 
 ## Settings
 
-**⋯ > Settings…** in the **Double determination** tab. The settings are saved with a processing method
+**More > Settings…** in the **Double determination** tab. The settings are saved with a processing method
 (**Method > Save current settings as Method...**).
 
 | Setting | Default | What it does | Change it when |

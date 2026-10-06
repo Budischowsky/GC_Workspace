@@ -43,7 +43,7 @@ Two chromatogram panels with the same controls. They share one time axis.
 | **Stack** | Offsets the traces vertically. |
 | Labels box | **Labels: RT**, **Labels: #**, **Labels: name** or **Labels: off**. |
 | **Export...** | Saves this chromatogram as a picture. |
-| **⋯** | More plot controls. |
+| **More** | More plot controls. |
 
 In the plot: the baseline and the start and end marks of each integrated peak, drop lines where peaks were
 split, peak labels, a cursor with the time and intensity under the mouse, and the regions used for the
@@ -131,7 +131,7 @@ Columns marked * are shown unless you change it.
 |---|---|
 | Mode box | How the spectrum of a selected peak is formed. See [Identify the peaks](wf-identify.md#how-the-spectrum-of-a-peak-is-formed). |
 | **subtract blank** | Subtracts the blank's spectrum at the same time. |
-| **⋯** | More plot controls. |
+| **More** | More plot controls. |
 
 The plot shows the spectrum as sticks with m/z labels on the strongest ions. The caption names the source:
 peak, scan or range, and what was subtracted. When a library hit is chosen, its reference spectrum is drawn
@@ -228,7 +228,7 @@ Two tabs. Described in [Double determination](wf-double.md).
 | **A**, **B** boxes | The two determinations. |
 | **⇄** | Swaps A and B. |
 | **Compare** | Pairs the two determinations and fills the list. |
-| **⋯** | **Settings…** (pairing, gap filling, consensus name), **3+ determinations…** (the **Groups (N-fold)** tab) and **Reset all** (undoes every change made in this double determination). |
+| **More** | **Settings…** (pairing, gap filling, consensus name), **3+ determinations…** (the **Groups (N-fold)** tab) and **Reset all** (undoes every change made in this double determination). |
 | **Load from Report²…** | Switches to another processed A/B sample visible in Report², grouped by batch. Changes to the current pair are saved first. The empty menu says **No processed A/B pairs under the current Report² filters**. |
 | **All**, **To check**, **Red**, **Yellow**, **Green**, **Grey** | Chips that count the substances of each colour. A click shows only those rows, a second click all rows again. **To check** is red and yellow plus the rows you changed. |
 | **Accept a difference up to** | The difference limit in percent (a report parameter). |
@@ -239,7 +239,8 @@ Two tabs. Described in [Double determination](wf-double.md).
 A right-click on a row offers **Reset row** and the other row actions (see [Double determination](wf-double.md#decide)).
 
 The line under the chips sums up the comparison in one line (the whole text is its tooltip); beside it,
-how many substances go into the report and how many you changed.
+how many substances go into the report and how many you changed. Right-click a column header to show or hide
+columns; **Diff. %** is a bar against the limit.
 
 Below the list: the two chromatograms of the selected substance, A upwards and B downwards, and the two
 spectra, mirrored the same way.

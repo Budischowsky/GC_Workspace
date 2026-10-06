@@ -30,4 +30,5 @@ def report_button(parent, preview: Callable[[], None], report: Callable[[str], N
     menu.addSeparator()
     menu.addAction(export_text, export)
     b.setMenu(menu)
+    b.setMinimumWidth(b.sizeHint().width() + 18)        # room for the arrow beside the text
     return b

@@ -1604,3 +1604,34 @@ def test_replicates_report_button_and_more_menu(qtbot, win, monkeypatch):
     assert more == ["Settings…", "3+ determinations…", "Reset all"]
     page.b_more.menu().actions()[1].trigger()
     assert win.replicates.tabs.currentIndex() == 1
+
+
+def test_double_determination_columns_gauge_and_severity(qtbot, win, samples):
+    from PySide6.QtCore import QSettings, Qt
+    from gcws.ui.docks.duplicate import C_A1, C_DIFF, C_ICON, C_NAME, C_RT, OPEN_ROLE
+    _load(qtbot, win, samples, ["07_", "11_"])
+    ws = win.ws
+    a = next(s.id for s in ws.states() if s.name.startswith("07_"))
+    b = next(s.id for s in ws.states() if s.name.startswith("11_"))
+    win.loaded_samples.pairRequested.emit(a, b)
+    page = win.replicates.duplicate
+    t = page.table
+    # the most severe rows first: an open red row on top, then by severity
+    assert t.item(0, C_ICON).data(OPEN_ROLE)
+    keys = [t.item(r, C_ICON).data(Qt.UserRole + 2) for r in range(t.rowCount())]
+    assert keys == sorted(keys)
+    # the areas are hidden until shown; the choice survives a refill and is remembered
+    assert t.isColumnHidden(C_A1) and not t.isColumnHidden(C_NAME)
+    page.set_column_hidden(C_A1, False)
+    page.set_column_hidden(C_NAME, True)                    # the substance can never be hidden
+    page._fill_table()
+    assert not t.isColumnHidden(C_A1) and not t.isColumnHidden(C_NAME)
+    assert str(C_A1) not in (QSettings().value("replicates/hidden_columns") or [])
+    # the gauge leaves the number as the cell's text
+    r = next(r for r in range(t.rowCount()) if t.item(r, C_DIFF).data(Qt.DisplayRole) is not None)
+    float(t.item(r, C_DIFF).text().replace(",", "."))
+    # a header click sorts by that column, and a refill keeps it
+    t.sortItems(C_RT)
+    page._fill_table()
+    rts = [float(t.item(r, C_RT).text().replace(",", ".")) for r in range(t.rowCount())]
+    assert rts == sorted(rts)

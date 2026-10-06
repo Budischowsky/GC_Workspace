@@ -31,14 +31,14 @@ import pyqtgraph as pg
 from PySide6.QtCore import QTimer, Qt, Signal as QtSignal
 from PySide6.QtGui import QBrush, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QFileDialog,
-                               QHBoxLayout, QHeaderView, QLabel, QMenu, QPushButton, QSplitter,
+                               QHBoxLayout, QHeaderView, QLabel, QMenu, QPushButton, QSplitter, QStyle,
                                QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 
 from gcws.core.model import FID
 from gcws.quant import duplicate_view as DV
 from gcws.ui import theme, workers
 from gcws.ui.icons import color_chip
-from gcws.ui.widgets.cell_marks import EDITED_ROLE, EditedDelegate
+from gcws.ui.widgets.cell_marks import EDITED_ROLE, LEVEL_ROLE, DiffGaugeDelegate, EditedDelegate
 from gcws.ui.widgets.chips import Chip, ElidedLabel
 
 #: SNIP window (min) of the baseline removed from the mirror plot's traces: wider than any peak
@@ -51,10 +51,16 @@ KEYS_NOTE = ("Enter: report · Delete: not reported · type or F2: edit · Ctrl+
 ICON = {"ok": "✔", "warn": "⚠", "bad": "✖", "info": "ℹ", "neutral": "·", "decided": "◉"}
 #: icon cell: True on a red row that still waits for the analyst (F3 goes there)
 OPEN_ROLE = Qt.UserRole + 1
+SORT_ROLE = Qt.UserRole + 2
+#: the order of the icon column: open red first, then decided, yellow, green, grey (then by RT)
+SEVERITY = {"bad": 0, "decided": 1, "warn": 2, "info": 2, "ok": 3, "neutral": 4}
 #: table column -> edited field
 C_ICON, C_REPORT, C_RT, C_NAME, C_CAS, C_A1, C_A2, C_C1, C_C2, C_MEAN, C_DIFF, C_VERDICT, C_NOTES, C_COMMENT = range(14)
 #: feature pairing only (appended, so the columns above keep their places)
 C_FEATURE, C_SIM, C_HIT_A, C_HIT_B = range(14, 18)
+#: columns that cannot be hidden, and the columns hidden until the analyst shows them
+FIXED_COLUMNS = {C_ICON, C_REPORT, C_NAME}
+HIDDEN_BY_DEFAULT = (C_A1, C_A2, C_NOTES, C_HIT_A, C_HIT_B)
 #: the filter chips: key -> (label, level, tooltip)
 FILTERS = {"all": ("All", "info", "Every substance"),
            "check": ("To check", "accent", "Red and yellow rows and the rows you changed"),
@@ -72,6 +78,16 @@ class _AbsAxis(pg.AxisItem):
 
     def tickStrings(self, values, scale, spacing):
         return super().tickStrings([abs(v) for v in values], scale, spacing)
+
+
+class _SeverityItem(QTableWidgetItem):
+    """The icon cell: sorts by ``SORT_ROLE`` (severity, then RT) instead of its glyph."""
+
+    def __lt__(self, other):
+        a, b = self.data(SORT_ROLE), other.data(SORT_ROLE)
+        if a is None or b is None:
+            return super().__lt__(other)
+        return a < b
 
 
 class DuplicatePage(QWidget):
@@ -109,7 +125,7 @@ class DuplicatePage(QWidget):
         self.b_report2.setToolTip("Switch to a processed double determination shown in Report²")
         self.b_report2.clicked.connect(self.report2Requested.emit)
         self.b_more = more = QToolButton()
-        more.setText("⋯")
+        more.setText("More")
         more.setToolTip("Settings, three or more determinations, reset")
         more.setPopupMode(QToolButton.InstantPopup)
         menu = QMenu(more)
@@ -163,6 +179,12 @@ class DuplicatePage(QWidget):
         self.table.bulkEdit.connect(self._bulk_edit)
         self.table.setAlternatingRowColors(True)
         self.table.setItemDelegate(EditedDelegate(self.table))     # changed cells: a corner mark
+        self.table.setItemDelegateForColumn(C_DIFF, DiffGaugeDelegate(lambda: DV.limits(self.ws)[0], self.table))
+        self._sort = (C_ICON, Qt.AscendingOrder)                   # most severe first, until a header is clicked
+        hh = self.table.horizontalHeader()
+        hh.sortIndicatorChanged.connect(self._sort_changed)
+        hh.setContextMenuPolicy(Qt.CustomContextMenu)
+        hh.customContextMenuRequested.connect(self._column_menu)
         self._nav = QTimer(self)                 # arrow keys: jump to the peak once the cursor rests
         self._nav.setSingleShot(True)
         self._nav.setInterval(150)
@@ -848,8 +870,11 @@ class DuplicatePage(QWidget):
             if v.level == "bad" and row.get("decided"):
                 level, vals[C_ICON] = "info", ICON["decided"]
                 tip = "Decided by the analyst: " + (v.detail or v.text)
+            n1 = ((row.get("source1") or {}).get("name") or "").strip()
+            n2 = ((row.get("source2") or {}).get("name") or "").strip()
+            hits_differ = feature_rows and n1 and n2 and n1.casefold() != n2.casefold()
             for c, val in enumerate(vals):
-                it = QTableWidgetItem()
+                it = _SeverityItem() if c == C_ICON else QTableWidgetItem()
                 if c == C_REPORT:
                     it.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
                     it.setCheckState(Qt.Checked if row.get("report") else Qt.Unchecked)
@@ -867,6 +892,14 @@ class DuplicatePage(QWidget):
                 it.setToolTip(tip)
                 if c == C_ICON:
                     it.setData(OPEN_ROLE, DV.is_open(row, v))
+                    sev = SEVERITY["decided"] if row.get("decided") and v.level == "bad" else SEVERITY.get(v.level, 4)
+                    it.setData(SORT_ROLE, sev * 10000.0 + float(row.get("rt") or 0.0))
+                if c == C_DIFF:
+                    it.setData(LEVEL_ROLE, level)
+                if c == C_NAME and hits_differ:
+                    it.setData(Qt.DecorationRole, self.style().standardIcon(QStyle.SP_MessageBoxWarning))
+                    it.setToolTip(f"The hits differ - {labels[0]}: {n1}  /  {labels[1]}: {n2}. Right-click for "
+                                  "the candidate names.")
                 if c in (C_ICON, C_VERDICT):
                     it.setBackground(theme.status_brush(level))
                     it.setForeground(QBrush(theme.status_color(level)))
@@ -889,9 +922,51 @@ class DuplicatePage(QWidget):
         hh.setSectionResizeMode(QHeaderView.Interactive)
         self.table.setColumnWidth(C_NAME, min(260, max(140, self.table.columnWidth(C_NAME))))
         hh.setStretchLastSection(True)
+        hidden = self.hidden_columns()
+        for c in range(self.table.columnCount()):
+            self.table.setColumnHidden(c, c in hidden)
         self.table.setSortingEnabled(True)
+        self.table.sortItems(*self._sort)
         self._restore_selection(keep_cur, keep_sel)
         self._filling = False
+
+    # -- columns --------------------------------------------------------------------------------
+
+    def _sort_changed(self, column: int, order) -> None:
+        if not self._filling:
+            self._sort = (column, order)
+
+    @staticmethod
+    def hidden_columns() -> set[int]:
+        from PySide6.QtCore import QSettings
+        value = QSettings().value("replicates/hidden_columns", None)
+        if value is None:
+            return set(HIDDEN_BY_DEFAULT)
+        if isinstance(value, str):
+            value = [value] if value else []
+        return {int(c) for c in value if str(c).lstrip("-").isdigit()} - FIXED_COLUMNS
+
+    def set_column_hidden(self, column: int, hidden: bool) -> None:
+        """Show or hide a column of the list; remembered for the next start."""
+        from PySide6.QtCore import QSettings
+        if column in FIXED_COLUMNS:
+            return
+        cols = self.hidden_columns()
+        cols = cols | {column} if hidden else cols - {column}
+        QSettings().setValue("replicates/hidden_columns", [str(c) for c in sorted(cols)] or "")
+        self.table.setColumnHidden(column, hidden)
+
+    def _column_menu(self, pos) -> None:
+        menu = QMenu(self)
+        hidden = self.hidden_columns()
+        for c in range(self.table.columnCount()):
+            if c in FIXED_COLUMNS:
+                continue
+            a = menu.addAction(self.table.horizontalHeaderItem(c).text() or "")
+            a.setCheckable(True)
+            a.setChecked(c not in hidden)
+            a.toggled.connect(lambda on, c=c: self.set_column_hidden(c, not on))
+        menu.exec(self.table.horizontalHeader().mapToGlobal(pos))
 
     def _restore_selection(self, cur, sel):
         """After a rebuild the same substances and columns are marked again (no navigation)."""

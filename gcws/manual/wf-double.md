@@ -26,7 +26,18 @@ panel is narrow the line is shortened; its tooltip shows all of it.
 | **Red** | Needs a decision - only in one determination, spectra differ, unclear pairing, difference too large. | decide. |
 | **Grey** | Not reported anyway - below the reporting limit or at blank level. | do nothing. |
 
-The column with the verdict says why a row has its colour, and the notes beside it give the evidence.
+The column with the verdict says why a row has its colour; its tooltip gives the evidence.
+
+- The list starts with the open red rows, then the decided ones, yellow, green and grey, each by retention
+  time. Click a column header to sort by that column instead; the list keeps it until the program is
+  closed.
+- **Diff. %** is drawn as a bar: the thin line is the limit, a full bar 1.5 times the limit. The colour is
+  the row's.
+- A ⚠ before the substance means the two determinations found different library hits; right-click the row
+  for the candidate names.
+- Right-click a column header to show or hide columns. **Area A**, **Area B**, **Notes** and the two hit
+  columns are hidden at first; the icon, **Report** and **Substance** always stay. The choice is
+  remembered.
 
 - Click a chip to see only its rows; click it again for all rows. **Red** shows just the rows to decide;
   `F3` jumps to the next red row that is still open.
@@ -67,7 +78,7 @@ paste, `Ctrl+D` copies a value down. A changed cell is written in italics with a
 spreadsheet), so it is never mistaken for a yellow row; its tooltip shows the old value. Every edit is one undo
 step and is written to the audit trail.
 
-**Reset row** in the right-click menu takes back your changes of a substance; **⋯ > Reset all** every change
+**Reset row** in the right-click menu takes back your changes of a substance; **More > Reset all** every change
 of this double determination.
 
 ## The limit
@@ -85,7 +96,7 @@ also in the **Report** menu.
 
 ## Settings
 
-**⋯ > Settings…** opens the pairing, gap filling and naming parameters. They are explained, with their defaults,
+**More > Settings…** opens the pairing, gap filling and naming parameters. They are explained, with their defaults,
 in [How the double determination works](double-determination.md#settings). **Pairing: Classic** switches back
 to the pairing by name and retention time of earlier versions.
 
