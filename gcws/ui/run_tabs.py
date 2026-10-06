@@ -76,9 +76,11 @@ class LoadedSamples(QListWidget):
 
     def _menu(self, pos):
         item = self.itemAt(pos)
-        if item is None:
-            return
-        rid = item.data(Qt.UserRole)
+        if item is not None:
+            self.run_menu(item.data(Qt.UserRole)).exec(self.viewport().mapToGlobal(pos))
+
+    def run_menu(self, rid) -> QMenu:
+        """The right-click menu of one loaded run (also used by the squares of the collapsed Folders strip)."""
         st = self.ws.runs[rid]
         m = QMenu(self)
         roles = m.addMenu("Role")
@@ -122,7 +124,7 @@ class LoadedSamples(QListWidget):
         others = [r for r in self.ws.order if r != rid]
         if others:
             m.addAction("Close others").triggered.connect(lambda: [self.closeRequested.emit(r) for r in others])
-        m.exec(self.viewport().mapToGlobal(pos))
+        return m
 
     def _visible(self, rid, on):
         self.ws.runs[rid].visible = on

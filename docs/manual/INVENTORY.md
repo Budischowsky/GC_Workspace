@@ -1552,7 +1552,7 @@ Every text a user can see, by file and class. Dialogs and right-click menus only
 | Where | Call | Text | Line |
 |---|---|---|---|
 | SidebarController.__init__ | setToolTip | Expand Folders | 32 |
-| SidebarController.__init__ | setToolTip | Collapse Folders | 39 |
+| SidebarController.__init__ | setToolTip | Collapse Folders | 42 |
 
 ### gcws/ui/layout/title_bar.py
 
@@ -1707,19 +1707,19 @@ Every text a user can see, by file and class. Dialogs and right-click menus only
 | Where | Call | Text | Line |
 |---|---|---|---|
 | LoadedSamples.sync | setToolTip | {…} {…} | 52 |
-| LoadedSamples._menu | addMenu | Role | 84 |
-| LoadedSamples._menu | addAction | Assign blanks... | 90 |
-| LoadedSamples._menu | addMenu | Double determination with | 93 |
-| LoadedSamples._menu | addAction | no other sample loaded | 101 |
-| LoadedSamples._menu | addAction | Double determination / replicates... | 102 |
-| LoadedSamples._menu | addMenu | Signal in Chromatogram 1 | 105 |
-| LoadedSamples._menu | addAction | Extracted ion (EIC)... | 112 |
-| LoadedSamples._menu | addAction | Show in overlay | 113 |
-| LoadedSamples._menu | addAction | Colour... | 117 |
-| LoadedSamples._menu | addAction | Rename sample... | 118 |
-| LoadedSamples._menu | addAction | Show in folder tree | 120 |
-| LoadedSamples._menu | addAction | Close | 121 |
-| LoadedSamples._menu | addAction | Close others | 124 |
+| LoadedSamples.run_menu | addMenu | Role | 86 |
+| LoadedSamples.run_menu | addAction | Assign blanks... | 92 |
+| LoadedSamples.run_menu | addMenu | Double determination with | 95 |
+| LoadedSamples.run_menu | addAction | no other sample loaded | 103 |
+| LoadedSamples.run_menu | addAction | Double determination / replicates... | 104 |
+| LoadedSamples.run_menu | addMenu | Signal in Chromatogram 1 | 107 |
+| LoadedSamples.run_menu | addAction | Extracted ion (EIC)... | 114 |
+| LoadedSamples.run_menu | addAction | Show in overlay | 115 |
+| LoadedSamples.run_menu | addAction | Colour... | 119 |
+| LoadedSamples.run_menu | addAction | Rename sample... | 120 |
+| LoadedSamples.run_menu | addAction | Show in folder tree | 122 |
+| LoadedSamples.run_menu | addAction | Close | 123 |
+| LoadedSamples.run_menu | addAction | Close others | 126 |
 
 ## 6 Settings and their defaults
 

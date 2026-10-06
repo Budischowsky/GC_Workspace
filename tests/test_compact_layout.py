@@ -429,3 +429,38 @@ def test_detached_panel_off_every_screen_comes_back(qtbot, win):
     assert any(frame.intersects(s.availableGeometry()) for s in QGuiApplication.screens())
     audit.setFloating(False)
     win.apply_preset("Chromatogram top")
+
+
+def test_sample_codes():
+    from gcws.ui.layout.sample_rail import sample_codes
+    assert sample_codes(["06_EtOH_ISTD.D", "07_26016606_130m_min_GIOSUN1635_A.D", "11_x_B.D"]) == ["06", "07", "11"]
+    assert sample_codes(["26012850_Sample1_A.qgd", "EtOH.D", "EtOH_2.D", "7-x.D", "07_y.D"]) == \
+        ["SA", "Et", "Etb", "07", "07b"]
+
+
+def test_collapsed_folders_show_loaded_samples_as_squares(qtbot, win, samples, monkeypatch):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtWidgets import QMenu
+    from gcws.ui import run_tabs
+    _load(qtbot, win, samples, ["08_", "07_"], process=False)
+    win.sidebar.collapse()
+    rail = win.sidebar.rail
+    assert rail.isVisible() and win.sidebar.strip.width() < 45
+    order = [rail.box.itemAt(i).widget() for i in range(rail.box.count() - 1)]
+    assert [s.text() for s in order] == ["07", "08"]
+    assert [s.run_id for s in order] == win.ws.order
+    blank = order[1]
+    assert blank.role == "blank" and "Blank" in blank.toolTip()
+    qtbot.mouseClick(blank, Qt.LeftButton)
+    assert win.ws.active_id == blank.run_id and blank.active and not order[0].active
+    shown = []
+
+    class Menu(QMenu):
+        def exec(self, *_):
+            shown.append({a.text() for a in self.actions()})
+    monkeypatch.setattr(run_tabs, "QMenu", Menu)
+    blank.customContextMenuRequested.emit(QPoint(5, 5))
+    assert shown and {"Role", "Close", "Rename sample..."} <= shown[0]
+    win.loaded_samples.closeRequested.emit(blank.run_id)
+    assert list(rail.squares) == [order[0].run_id]
+    win.sidebar.expand()

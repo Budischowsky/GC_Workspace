@@ -32,6 +32,9 @@ class SidebarController(QObject):
         self.restore_button.setToolTip("Expand Folders")
         self.restore_button.clicked.connect(self.expand)
         self.strip.addWidget(self.restore_button)
+        from gcws.ui.layout.sample_rail import SampleRail
+        self.rail = SampleRail(win.ws, win.loaded_samples.run_menu)     # loaded samples stay one click away
+        self.strip.addWidget(self.rail)
         win.addToolBar(Qt.LeftToolBarArea, self.strip)
         self.strip.hide()
         self.button = QToolButton()

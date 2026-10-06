@@ -13,7 +13,15 @@ The upper part is the folder tree, the lower part the **Loaded samples** list.
 | **↑** | Goes to the parent folder. |
 | **Choose the root folder...** | Picks the folder where the tree starts. |
 | **Load** | Loads the runs marked in the tree. A double-click on a run does the same. |
-| **◀** | Collapses the panel. |
+| **◀** | Collapses the panel to a narrow strip; **Folders ›** on the strip opens it again. |
+
+The collapsed strip still shows the loaded samples, one square each, in the order of the list. The square
+carries the injection number the data file starts with (`07_..._A.D` shows **07**); a run without one shows two
+letters of its name. The colour is the run's colour. A filled square is a sample. An outlined square is a
+blank, with a dot for a blank with ISTD. A mark in the top right corner means a standard, and a bar along the
+bottom an alkane ladder. A faded square is not shown in the overlay, and a ring marks the active
+chromatogram. Click a square to make it the active chromatogram; right-click it for the same menu as in
+**Loaded samples**. Pointing at a square shows the full name and the role.
 
 Right-click in the tree: **Load as** (with a role), **Load all runs in folder**, **Set as tree root**,
 **Open in Explorer**.
