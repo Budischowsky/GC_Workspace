@@ -700,6 +700,7 @@ class MainWindow(QMainWindow):
         self.report2.openDetermination.connect(self.open_report2_job)
         self.report2.prepare_review = self._save_report2_project
         self.replicates.report2Requested.connect(self._show_report2_pair_menu)
+        self.replicates.duplicate.acceptRequested.connect(self._accept_pair)
         self._tool_changed("select")
 
     # -- helpers -------------------------------------------------------------
@@ -1576,6 +1577,21 @@ class MainWindow(QMainWindow):
         run_id = run_id or self.ws.active_id
         if run_id:
             self.replicates.show_pair(run_id, partner)
+
+    def _accept_pair(self, group_id: str) -> bool:
+        """The analyst accepted a double determination: when it is the Report² pair loaded here, its report
+        is accepted in Report² as well (saving the project first, with the usual undo bar)."""
+        if not self._report2_job:
+            return False
+        jid = self._report2_job[0]
+        job = self.report2.journal.job(jid)
+        g = next((g for g in self.ws.replicate_groups if g["id"] == group_id), None)
+        if job is None or g is None:
+            return False
+        names = sorted(self.ws.runs[m].run.path.name.casefold() for m in g["members"] if m in self.ws.runs)
+        if names != sorted(str(n).casefold() for n in job.members or []):
+            return False
+        return self.report2.review(True, job_ids=[jid])
 
     def _show_report2_pair_menu(self):
         """Choose any processed pair currently visible in Report², grouped by batch."""

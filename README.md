@@ -340,7 +340,9 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
    2 = doppelt). The numbers start from the NIAS parameter table, and the report always uses the current
    parameters.
 9. **Double determination**: right-click a loaded sample and choose *Double determination with ▸* (the partner is
-   suggested), or use *Quantify > Double determination*.
+   suggested), use *Quantify > Double determination*, or select the pair in the list **Determinations** on the
+   left of *Replicates / results*. The list holds every replicate group (pairs the run names suggest in
+   italics) with the number of red rows still open; **Ctrl+F3** goes to the next group that needs you.
    - **Feature pairing** (default): *Compare* treats both injections as one data set.
      - It removes the drift between them and pairs the peaks by retention time *and* EI spectrum: only the ions
        that co-elute with the peak are compared, scored like mzmine's GC aligner.
@@ -363,21 +365,27 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
        different spectra at the same retention time; one peak here and two there; a difference above
        1.5× the limit);
      - **grey**: not reported (below the reporting limit or at blank level).
-   - *Only red* and **F3** (next red) lead you through the exceptions. The right-click menu chooses a
-     candidate name, removes a gap fill, or takes over the proposed integration boundaries (also *Harmonise
-     boundaries* for all of them). Boundaries are only proposed where the estimated area brings the two
+   - Chips (*All*, *To check*, *Red*, *Yellow*, *Green*, *Grey*) count and filter the rows; the list starts
+     with the open red rows. **F3** (next open red) leads you through the exceptions. A red row you have
+     answered (Report box, comment or value) is **decided** (◉) and the summary line counts down to
+     "All decisions made". The right-click menu has Report / Not reported, Reset row, Comment…, Show in A / B,
+     Copy row, and chooses a candidate name, removes a gap fill, or takes over the proposed integration
+     boundaries (also *Harmonise boundaries* for all of them). Boundaries are only proposed where the estimated area brings the two
      injections closer together.
    - The spectra of the selected substance are mirrored beside the chromatograms (A up, B down).
    - *Settings…* switches to the **classic** AutoLib pairing (name first, then retention time; the reports are
      as before) and sets the tolerances. The settings are part of processing methods. HS screening keeps the
      classic pairing.
    - `tools\duplicate_benchmark.py --lib-oracle` compares both pairings on a batch.
-   - With the classic pairing, summary cards count confirmed substances, differences above the limit, artefacts
-     found in only one determination, and differing identifications.
+   - The classic pairing gets the same colours and chips (confirmed green, deviation yellow, artefacts and
+     differing identifications red, below the reporting limit grey).
    - Every substance gets a plain-language verdict. The mirror plot shows A above and B below in FID signal
      units (baseline removed, solvent front left out); it fits the intensity to the visible time window, so a
      picked substance is shown full height. Wheel / drag: time; double-click: the whole run.
-   - The limit is the report parameter "Duplicate difference limit". Clicking a row opens the peak.
+   - *Difference limit* is the report parameter "Duplicate difference limit" (a chip says so and shows the
+     default when it differs). *Diff. %* is a bar against the limit. Clicking a row opens the peak and shades
+     its integrated area in A and B; clicking a dot in the plot selects its row; *Plots* hides the plots.
+     A right-click on the column header shows or hides columns.
    - **The analyst decides what goes out:**
      - the *Report* box of each substance (default: no artefacts, nothing below the reporting limit);
      - Substance and CAS: they become the identification of the peak in both determinations;
@@ -387,12 +395,16 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
      **Enter** puts the marked substances into the report, **Delete** takes them out; type or F2 to edit a
      cell; **Ctrl+C / Ctrl+V** copy and paste (one value goes into every marked cell); **Ctrl+D** or dragging
      the small square at the corner of the marking copies a name (or any value) down. Changed cells are
-     marked with the old value, every change - also a whole fill - is one undo step and is written to the
-     audit trail, and *Reset row* / *Reset all* take the changes back.
-   - The NIAS report of the pair (*NIAS report – preview* or *NIAS report...*) contains exactly the rows with the
-     Report box on, with the values set here.
-   - Triplicates and more are in the *Groups (N-fold)* tab. The report buttons are here and in the *Report*
-     menu, each with a preview.
+     marked with a corner triangle and the old value, every change - also a whole fill - is one undo step and
+     is written to the audit trail, and *Reset row* (right-click) / *More > Reset all* take the changes back.
+   - **Accept double determination** (when no red row is open) saves who accepted it and when with the
+     project and in the audit trail, marks the pair ✔ in the list, and accepts a pair opened from Report²
+     there too. A later change reopens it (*Accept again*).
+   - The NIAS report of the pair (*Report preview*, or the reports under its arrow) contains exactly the rows
+     with the Report box on, with the values set here.
+   - Triplicates and more: select the group in the list. Its worksheet has the same chips and severity order
+     and an overlay of all determinations (read only). The reports are under *Report preview* and in the
+     *Report* menu, each with a preview.
 
 10. **Unknown register** (*Identify > Unknown register...*): find unknowns by text (ID, name, CAS, note), by
     **sample name**, or by **m/z values** (e.g. `149 167 279`: every ion at least x % of the base peak, optionally

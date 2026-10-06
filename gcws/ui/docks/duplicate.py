@@ -80,6 +80,12 @@ class _AbsAxis(pg.AxisItem):
         return super().tickStrings([abs(v) for v in values], scale, spacing)
 
 
+def _stale(group: dict) -> None:
+    """An analyst change after the acceptance: the acceptance no longer holds (kept, to say who accepted)."""
+    if group.get("signoff"):
+        group["signoff"] = dict(group["signoff"], stale=True)
+
+
 class _SeverityItem(QTableWidgetItem):
     """The icon cell: sorts by ``SORT_ROLE`` (severity, then RT) instead of its glyph."""
 
@@ -95,6 +101,7 @@ class DuplicatePage(QWidget):
     previewRequested = QtSignal(str, str)       # kind, group id
     report2Requested = QtSignal()
     summaryChanged = QtSignal()                 # the counts of the rows changed (compared or edited)
+    acceptRequested = QtSignal(str)             # group id: the analyst accepted this double determination
 
     def __init__(self, ws, set_groups, parent=None):
         super().__init__(parent)
@@ -257,6 +264,11 @@ class DuplicatePage(QWidget):
         self.b_bounds.clicked.connect(lambda: self.apply_boundaries(None))
         self.b_bounds.setVisible(False)
         buttons.addWidget(self.b_bounds)
+        self.b_accept = QPushButton("Accept double determination")
+        theme.set_primary(self.b_accept)
+        self.b_accept.clicked.connect(self.accept)
+        self.b_accept.setEnabled(False)
+        buttons.addWidget(self.b_accept)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(4, 4, 4, 4)
@@ -551,6 +563,7 @@ class DuplicatePage(QWidget):
             label = f"double determination: {changes[0][1]} of {name}"
         else:
             label = f"double determination: {len(changes)} cells changed"
+        _stale(tg)
         self.set_groups(groups, label)
         for what, before, after in logs:
             self.ws.log("Double determination changed", self._names(), what, before, after)
@@ -601,7 +614,19 @@ class DuplicatePage(QWidget):
                     f"{name if name is not None else cas}"
         else:
             label = f"double determination: {len(changes)} names / CAS changed"
-        self._stack().push(MultiCommand(label, cmds))
+        g = self.group()
+        if g is None or not (g.get("signoff") and not g["signoff"].get("stale")):
+            self._stack().push(MultiCommand(label, cmds))
+            return
+        stack = self._stack()                    # the names change what was accepted: one undo step for both
+        stack.beginMacro(label)
+        try:
+            stack.push(MultiCommand(label, cmds))
+            groups = copy.deepcopy(self.ws.replicate_groups)
+            _stale(next(x for x in groups if x["id"] == g["id"]))
+            self.set_groups(groups, label)
+        finally:
+            stack.endMacro()
 
     def _stack(self):
         return self.ws.undo_group.activeStack() or self.ws.project_undo
@@ -706,6 +731,7 @@ class DuplicatePage(QWidget):
         groups = copy.deepcopy(self.ws.replicate_groups)
         tg = next(x for x in groups if x["id"] == g["id"])
         tg.get(self.edits_key(), {}).pop(row["edit_key"], None)
+        _stale(tg)
         self.set_groups(groups, f"double determination: reset {row.get('name') or row['rt']}")
         self.ws.log("Double determination changed", self._names(), f"{row.get('name')}: changes reset")
 
@@ -714,7 +740,9 @@ class DuplicatePage(QWidget):
         if g is None or not g.get(self.edits_key()):
             return
         groups = copy.deepcopy(self.ws.replicate_groups)
-        next(x for x in groups if x["id"] == g["id"])[self.edits_key()] = {}
+        tg = next(x for x in groups if x["id"] == g["id"])
+        tg[self.edits_key()] = {}
+        _stale(tg)
         self.set_groups(groups, "double determination: all changes reset")
         self.ws.log("Double determination changed", self._names(), "all changes reset")
 
@@ -778,7 +806,53 @@ class DuplicatePage(QWidget):
                    and str(r.get("status", "")).startswith("Artefact"))
         self.chips["red"].setToolTip(FILTERS["red"][2] + (f" {lone} of them found in one determination only."
                                                           if lone else ""))
+        self._update_accept()
         self.summaryChanged.emit()
+
+    def _update_accept(self) -> None:
+        """Accept: possible with two determinations and no red row left open."""
+        g = self.group()
+        signoff = (g or {}).get("signoff") or {}
+        n_open = self.decision_counts()[0]
+        ready = len(self.members) == 2 and bool(self.rows) and n_open == 0
+        if signoff and not signoff.get("stale"):
+            self.b_accept.setText(f"Accepted by {signoff.get('by', '?')} ✔")
+            self.b_accept.setToolTip(f"Accepted on {str(signoff.get('at', '')).replace('T', ' ')}; any change "
+                                     "of a value, a Report box or a name reopens it")
+            self.b_accept.setEnabled(False)
+            return
+        self.b_accept.setText("Accept again" if signoff else "Accept double determination")
+        self.b_accept.setEnabled(ready)
+        if signoff:
+            tip = f"Accepted by {signoff.get('by', '?')}, changed since. "
+        else:
+            tip = ""
+        self.b_accept.setToolTip(tip + ("Accept this double determination (saved with the project and in the "
+                                        "audit trail; a pair opened from Report² is accepted there too)" if ready
+                                        else f"Decide the {n_open} open red row(s) first" if n_open
+                                        else "Compare two determinations first"))
+
+    def accept(self) -> bool:
+        """The analyst accepts the double determination: who and when go into the replicate group (undoable)
+        and the audit trail; ``acceptRequested`` lets Report² accept its report too."""
+        from datetime import datetime
+        from gcws.core.audit import current_user
+        if len(self.members) != 2 or not self.rows or self.decision_counts()[0]:
+            return False
+        self._sync_group(self.members)
+        g = self.group()
+        if g is None:
+            return False
+        groups = copy.deepcopy(self.ws.replicate_groups)
+        tg = next(x for x in groups if x["id"] == g["id"])
+        tg["signoff"] = {"by": current_user(), "at": datetime.now().isoformat(timespec="seconds")}
+        n_report = sum(1 for r in self.rows if r.get("report"))
+        decided = self.decision_counts()[1]
+        self.set_groups(groups, f"double determination accepted: {self._names()}")
+        self.ws.log("Double determination accepted", self._names(),
+                    f"{n_report} of {len(self.rows)} substances reported; {decided} red decided by the analyst")
+        self.acceptRequested.emit(g["id"])
+        return True
 
     @staticmethod
     def _passes(key: str, row: dict, v, light: str | None = None) -> bool:

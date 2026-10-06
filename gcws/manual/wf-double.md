@@ -86,6 +86,16 @@ step and is written to the audit trail.
 **Reset row** in the right-click menu takes back your changes of a substance; **More > Reset all** every change
 of this double determination.
 
+## Accept
+
+When no red row is open any more, **Accept double determination** below the list can be pressed. It saves
+your name and the time with the project, writes them to the audit trail, and the pair gets a ✔ in the list
+**Determinations**. When the pair was opened from Report², its report is accepted in Report² as well (with
+the usual few seconds to undo it there). `Ctrl+Z` takes the acceptance back.
+
+A change after that - a value, a **Report** box, a comment, a name - reopens the pair: the button then reads
+**Accept again** and its tooltip says who accepted it before.
+
 ## The limit
 
 **Difference limit** is the largest relative difference between A and B (as a percentage of their mean)

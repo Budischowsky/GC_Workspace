@@ -1716,3 +1716,46 @@ def test_replicates_list_of_determinations(qtbot, win, samples):
     assert dock.list.currentItem().data(0, Qt.UserRole) == ("group", "g3") or n_open
     dock.show_nfold()
     assert dock.stack.currentIndex() == 1
+
+
+def test_double_determination_accept(qtbot, win, samples, monkeypatch):
+    from types import SimpleNamespace
+    from PySide6.QtCore import Qt
+    from gcws.quant import duplicate_view as DV
+    _load(qtbot, win, samples, ["07_", "11_"])
+    ws = win.ws
+    a = next(s.id for s in ws.states() if s.name.startswith("07_"))
+    b = next(s.id for s in ws.states() if s.name.startswith("11_"))
+    win.loaded_samples.pairRequested.emit(a, b)
+    page, dock = win.replicates.duplicate, win.replicates
+    assert page.decision_counts()[0] > 0 and not page.b_accept.isEnabled()
+    assert not page.accept()
+    # decide every open red row (one undo step), then accept
+    page.set_edits([(r, "comment", "checked") for r, v in zip(page.rows, page.verdicts) if DV.is_open(r, v)])
+    assert page.decision_counts()[0] == 0 and page.b_accept.isEnabled()
+    asked = []
+    page.acceptRequested.connect(asked.append)
+    page.b_accept.click()
+    g = page.group()
+    assert g["signoff"]["by"] and not g["signoff"].get("stale") and asked == [g["id"]]
+    assert page.b_accept.text().startswith("Accepted by") and not page.b_accept.isEnabled()
+    assert any(r.action == "Double determination accepted" for r in ws.audit.records)
+    assert dock._item_for(("group", g["id"])).text(0).startswith("✔")
+    win.a_undo.trigger()
+    assert not page.group().get("signoff") and page.b_accept.isEnabled()
+    win.a_redo.trigger()
+    # a later change reopens it: "Accept again"
+    k = next(i for i, r in enumerate(page.rows) if r.get("report"))
+    page.set_edit(page.rows[k], "comment", "changed after the acceptance")
+    assert page.group()["signoff"]["stale"] and page.b_accept.text() == "Accept again"
+    assert not dock._item_for(("group", g["id"])).text(0).startswith("✔")
+    # the pair loaded from Report²: its report is accepted there as well
+    job = SimpleNamespace(members=[ws.runs[a].run.path.name, ws.runs[b].run.path.name])
+    monkeypatch.setattr(win.report2.journal, "job", lambda jid: job if jid == "job1" else None)
+    reviewed = []
+    monkeypatch.setattr(win.report2, "review", lambda accept, comment="", job_ids=None: reviewed.append(
+        (accept, job_ids)) or True)
+    monkeypatch.setattr(win, "_report2_job", ("job1", 1, None))
+    page.b_accept.click()
+    assert reviewed == [(True, ["job1"])]
+    monkeypatch.setattr(win, "_report2_job", None)        # closing must not try to save a Report² project

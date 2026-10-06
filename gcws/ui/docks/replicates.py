@@ -292,6 +292,13 @@ class ReplicatesDock(QWidget):
         return None
 
     def _show_summary(self, it, g) -> None:
+        signoff = g.get("signoff") or {}
+        accepted = bool(signoff) and not signoff.get("stale")
+        it.setText(L_NAME, ("✔ " if accepted else "") + g["name"])
+        if accepted:
+            it.setForeground(L_NAME, QBrush(theme.status_color("ok")))
+            it.setToolTip(L_NAME, f"Accepted by {signoff.get('by', '?')} on "
+                          f"{str(signoff.get('at', '')).replace('T', ' ')}\n" + it.toolTip(L_NAME))
         s = self.summary.get(g["id"])
         if s is None:
             it.setText(L_OPEN, "–")
