@@ -392,14 +392,15 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
      - Area A/B, A/B and Mean [mg/kg], and a comment.
 
      The table edits like Excel: click or arrow keys to move, Shift+arrows or drag to mark cells;
-     **Enter** puts the marked substances into the report, **Delete** takes them out; type or F2 to edit a
+     **Enter** puts the marked substances into the report, **Backspace** takes them out, **Delete** deletes
+     the rows (the *Deleted* chip restores them); type or F2 to edit a
      cell; **Ctrl+C / Ctrl+V** copy and paste (one value goes into every marked cell); **Ctrl+D** or dragging
      the small square at the corner of the marking copies a name (or any value) down. Changed cells are
      marked with a corner triangle and the old value, every change - also a whole fill - is one undo step and
      is written to the audit trail, and *Reset row* (right-click) / *More > Reset all* take the changes back.
-   - **Accept double determination** (when no red row is open) saves who accepted it and when with the
-     project and in the audit trail, marks the pair ✔ in the list, and accepts a pair opened from Report²
-     there too. A later change reopens it (*Accept again*).
+   - **Accept double determination** (once A and B are compared; red rows still open keep their default)
+     saves who accepted it and when with the project and in the audit trail, marks the pair ✔ in the list,
+     and accepts a pair opened from Report² there too. A later change reopens it (*Accept again*).
    - The NIAS report of the pair (*Report preview*, or the reports under its arrow) contains exactly the rows
      with the Report box on, with the values set here.
    - Triplicates and more: select the group in the list. Its worksheet has the same chips and severity order

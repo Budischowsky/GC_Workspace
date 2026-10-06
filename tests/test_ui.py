@@ -1726,8 +1726,15 @@ def test_double_determination_accept(qtbot, win, samples):
     b = next(s.id for s in ws.states() if s.name.startswith("11_"))
     win.loaded_samples.pairRequested.emit(a, b)
     page, dock = win.replicates.duplicate, win.replicates
-    assert page.decision_counts()[0] > 0 and not page.b_accept.isEnabled()
-    assert not page.accept()
+    # red rows still open: Accept takes their default, and the sign-off says how many were left open
+    n_open = page.decision_counts()[0]
+    assert n_open > 0 and page.b_accept.isEnabled() and f"{n_open} red row" in page.b_accept.toolTip()
+    assert page.accept()
+    assert page.group()["signoff"]["open"] == n_open and "left open" in page.b_accept.toolTip()
+    rec = next(r for r in reversed(ws.audit.records) if r.action == "Double determination accepted")
+    assert f"{n_open} left open (default)" in rec.detail
+    win.a_undo.trigger()
+    assert not page.group().get("signoff")
     # decide every open red row (one undo step), then accept
     page.set_edits([(r, "comment", "checked") for r, v in zip(page.rows, page.verdicts) if DV.is_open(r, v)])
     assert page.decision_counts()[0] == 0 and page.b_accept.isEnabled()
@@ -1735,7 +1742,7 @@ def test_double_determination_accept(qtbot, win, samples):
     page.acceptRequested.connect(asked.append)
     page.b_accept.click()
     g = page.group()
-    assert g["signoff"]["by"] and not g["signoff"].get("stale") and asked == [g["id"]]
+    assert g["signoff"]["by"] and not g["signoff"].get("stale") and asked == [g["id"]] and g["signoff"]["open"] == 0
     assert page.b_accept.text().startswith("Accepted by") and not page.b_accept.isEnabled()
     assert any(r.action == "Double determination accepted" for r in ws.audit.records)
     assert dock._item_for(("group", g["id"])).text(0).startswith("✔")

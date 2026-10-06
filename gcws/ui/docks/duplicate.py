@@ -845,7 +845,8 @@ class DuplicatePage(QWidget):
         if n_decided and not n_open:
             level, text = "ok", f"All decisions made ({n_decided} red decided by you): preview the report. " + text
         elif n_decided:
-            text = f"Red: {n_open + n_decided} → {n_open} open · {n_decided} decided. " + text
+            text = f"Red: {n_open + n_decided} → {n_open} open · {n_decided} decided (Accept keeps the default for " \
+                   "the open ones). " + text
         if s.mean_reldiff is not None:
             text += f" Mean difference {s.mean_reldiff:.1f} %."
         self.banner.setText(("✔  " if level == "ok" else "⚠  ") + text)
@@ -881,15 +882,18 @@ class DuplicatePage(QWidget):
         self.summaryChanged.emit()
 
     def _update_accept(self) -> None:
-        """Accept: possible with two determinations and no red row left open."""
+        """Accept: possible once two determinations are compared; red rows still open keep their default."""
         g = self.group()
         signoff = (g or {}).get("signoff") or {}
         n_open = self.decision_counts()[0]
-        ready = len(self.members) == 2 and bool(self.rows) and n_open == 0
+        ready = len(self.members) == 2 and bool(self.rows)
         if signoff and not signoff.get("stale"):
+            left = signoff.get("open") or 0
             self.b_accept.setText(f"Accepted by {signoff.get('by', '?')} ✔")
-            self.b_accept.setToolTip(f"Accepted on {str(signoff.get('at', '')).replace('T', ' ')}; any change "
-                                     "of a value, a Report box or a name reopens it")
+            self.b_accept.setToolTip(f"Accepted on {str(signoff.get('at', '')).replace('T', ' ')}"
+                                     + (f" with {left} red row{'s' if left != 1 else ''} left open (default)"
+                                        if left else "")
+                                     + "; any change of a value, a Report box or a name reopens it")
             self.b_accept.setEnabled(False)
             return
         self.b_accept.setText("Accept again" if signoff else "Accept double determination")
@@ -898,30 +902,37 @@ class DuplicatePage(QWidget):
             tip = f"Accepted by {signoff.get('by', '?')}, changed since. "
         else:
             tip = ""
-        self.b_accept.setToolTip(tip + ("Accept this double determination (saved with the project and in the "
-                                        "audit trail; a pair opened from Report² is accepted there too)" if ready
-                                        else f"Decide the {n_open} open red row(s) first" if n_open
-                                        else "Compare two determinations first"))
+        if not ready:
+            tip += "Compare two determinations first"
+        else:
+            tip += ("Accept this double determination (saved with the project and in the audit trail; a pair "
+                    "opened from Report² is accepted there too)")
+            if n_open:
+                tip += (f". {n_open} red row{'s are' if n_open != 1 else ' is'} still open: "
+                        "they go into the report by the default rule (Only in A/B not reported, the others reported)")
+        self.b_accept.setToolTip(tip)
 
     def accept(self) -> bool:
         """The analyst accepts the double determination: who and when go into the replicate group (undoable)
         and the audit trail; ``acceptRequested`` lets Report² accept its report too."""
         from datetime import datetime
         from gcws.core.audit import current_user
-        if len(self.members) != 2 or not self.rows or self.decision_counts()[0]:
+        if len(self.members) != 2 or not self.rows:
             return False
         self._sync_group(self.members)
         g = self.group()
         if g is None:
             return False
+        n_open, decided = self.decision_counts()
         groups = copy.deepcopy(self.ws.replicate_groups)
         tg = next(x for x in groups if x["id"] == g["id"])
-        tg["signoff"] = {"by": current_user(), "at": datetime.now().isoformat(timespec="seconds")}
-        n_report = sum(1 for r in self.rows if r.get("report"))
-        decided = self.decision_counts()[1]
+        tg["signoff"] = {"by": current_user(), "at": datetime.now().isoformat(timespec="seconds"), "open": n_open}
+        live = self._live()[0]
+        n_report = sum(1 for r in live if r.get("report"))
         self.set_groups(groups, f"double determination accepted: {self._names()}")
         self.ws.log("Double determination accepted", self._names(),
-                    f"{n_report} of {len(self.rows)} substances reported; {decided} red decided by the analyst")
+                    f"{n_report} of {len(live)} substances reported; {decided} red decided by the analyst"
+                    + (f", {n_open} left open (default)" if n_open else ""))
         self.acceptRequested.emit(g["id"])
         return True
 
@@ -953,12 +964,14 @@ class DuplicatePage(QWidget):
         auto = sum(1 for r in rows if r.get("gapfill"))
         n_open, n_decided = self.decision_counts()
         if n_open and n_decided:
-            text = (f"Red: {n['red']} → {n_open} open · {n_decided} decided (F3 = next open); "
-                    f"{n['yellow']} were made consistent automatically (yellow), {n['green']} are confirmed.")
+            text = (f"Red: {n['red']} → {n_open} open · {n_decided} decided (F3 = next open; Accept keeps the "
+                    f"default for the open ones); {n['yellow']} were made consistent automatically (yellow), "
+                    f"{n['green']} are confirmed.")
             level = "bad"
         elif n_open:
-            text = (f"{n['red']} of {len(rows)} substances need your decision (red; F3 = next); "
-                    f"{n['yellow']} were made consistent automatically (yellow), {n['green']} are confirmed.")
+            text = (f"{n['red']} of {len(rows)} substances need your decision (red; F3 = next; Accept keeps the "
+                    f"default for the open ones); {n['yellow']} were made consistent automatically (yellow), "
+                    f"{n['green']} are confirmed.")
             level = "bad"
         elif n_decided:
             text = (f"All decisions made ({n_decided} red decided by you): preview the report. "

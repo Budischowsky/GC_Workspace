@@ -102,8 +102,10 @@ project and written to the audit trail.
 
 ## Accept
 
-When no red row is open any more, **Accept double determination** below the list can be pressed. It saves
-your name and the time with the project, writes them to the audit trail, and the pair gets a ✔ in the list
+**Accept double determination** below the list can be pressed once A and B are compared - also while red
+rows are still open: those keep their default (found in one determination only: not reported; the others:
+reported), and the button's tooltip says how many there are. It saves your name, the time and the number of red
+rows left open with the project, writes them to the audit trail, and the pair gets a ✔ in the list
 **Determinations**. `Ctrl+Z` takes the acceptance back. The status bar says what happened:
 
 - When the pair is a sample a workflow processed (it is listed in Report²), its report in Report² is
