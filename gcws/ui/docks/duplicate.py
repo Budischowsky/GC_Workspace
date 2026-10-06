@@ -389,8 +389,8 @@ class DuplicatePage(QWidget):
             name = replicate_stem(self.ws.runs[members[0]].run.path.name) or self.ws.runs[members[0]].name
             target = {"id": uuid.uuid4().hex[:8], "name": name, "members": [], "policy": "all"}
             groups.append(target)
-        for g in groups:                        # a run belongs to one determination group
-            if g is not target:
+        for g in groups:                        # a run belongs to one pair or single; groups of 3+ keep theirs
+            if g is not target and len(g["members"]) <= 2:
                 g["members"] = [m for m in g["members"] if m not in members]
         groups = [g for g in groups if g["members"] or g is target]
         target["members"] = list(members)

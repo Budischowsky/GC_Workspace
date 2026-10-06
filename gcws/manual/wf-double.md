@@ -123,6 +123,8 @@ The colours are those of the pair page - **Red**: the determinations name the su
 **Yellow**: found often enough, but the identification is to be reviewed; **Green**: found as the validity
 rule asks and identified; **Grey**: found in too few determinations, not reported. The chips filter the
 rows, and the chromatograms of all determinations are drawn on top of each other below the worksheet.
+**← Double determination** above the worksheet, or a click on a pair in the list, goes back. Comparing
+two runs of a group of three as a pair leaves the group whole.
 **More > 3+ determinations…** and **Quantify > Replicate groups (N-fold)** go there too.
 
 | In the list | What it does |

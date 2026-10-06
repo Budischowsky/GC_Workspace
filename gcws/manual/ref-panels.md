@@ -260,7 +260,8 @@ the rows, an icon column in the same order as on the double-determination page (
 column header sorts by it), and below it the chromatograms of all determinations on top of each other in
 their colours. Clicking a row zooms there and opens the peak. A right-click on the header shows or hides
 columns. **Report preview** has the other reports and **Export worksheet...** under its arrow. The
-worksheet is for reading: names and values are changed in the determinations themselves.
+worksheet is for reading: names and values are changed in the determinations themselves. **← Double determination** above it
+goes back to the pair shown last.
 
 ## Automation
 

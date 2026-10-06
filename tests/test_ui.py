@@ -1759,3 +1759,32 @@ def test_double_determination_accept(qtbot, win, samples, monkeypatch):
     page.b_accept.click()
     assert reviewed == [(True, ["job1"])]
     monkeypatch.setattr(win, "_report2_job", None)        # closing must not try to save a Report² project
+
+
+def test_replicates_back_from_a_group_of_three(qtbot, win, samples):
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    _load(qtbot, win, samples, ["07_", "09_", "11_"])
+    ws = win.ws
+    a, c, b = (next(s.id for s in ws.states() if s.name.startswith(p)) for p in ("07_", "09_", "11_"))
+    dock = win.replicates
+    dock._set_groups([{"id": "g3", "name": "tri", "members": [a, c, b], "policy": "all"}], "group of three")
+    dock.show_group("g3")
+    # only a group of three listed: the button leads back to the double determination
+    dock.b_back.click()
+    assert dock.stack.currentIndex() == 0 and dock.duplicate.members
+    # comparing two of its runs leaves the group of three whole
+    win.loaded_samples.pairRequested.emit(a, b)
+    assert next(g for g in ws.replicate_groups if g["id"] == "g3")["members"] == [a, c, b]
+    pair = dock.duplicate.group()
+    assert pair is not None and pair["id"] != "g3"
+    # More > 3+ determinations opens the group; a click on the pair (even still selected) goes back
+    dock.duplicate._to_groups_tab()
+    assert dock.stack.currentIndex() == 1 and dock._group_id == "g3"
+    item = dock._item_for(("group", pair["id"]))
+    QTest.mouseClick(dock.list.viewport(), Qt.LeftButton, pos=dock.list.visualItemRect(item).center())
+    assert dock.stack.currentIndex() == 0 and dock.duplicate.members == [a, b]
+    dock.show_group("g3")
+    dock.b_back.click()
+    assert dock.stack.currentIndex() == 0 and dock.duplicate.members == [a, b]
+    assert dock.list.currentItem() is dock._item_for(("group", pair["id"]))

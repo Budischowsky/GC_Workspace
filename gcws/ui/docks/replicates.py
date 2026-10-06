@@ -95,6 +95,7 @@ class ReplicatesDock(QWidget):
         self.list.headerItem().setToolTip(L_OPEN, "Red rows still open at the last comparison (– not compared yet)")
         self.list.setToolTip("Every replicate group of the project; italics: suggested from the run names")
         self.list.currentItemChanged.connect(lambda cur, _prev: self._picked(cur))
+        self.list.itemClicked.connect(lambda it, _col: self._picked(it))      # also the entry already selected
         self.list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.list.customContextMenuRequested.connect(self._group_menu)
         add = QToolButton()
@@ -174,6 +175,16 @@ class ReplicatesDock(QWidget):
         group_page = QWidget()
         gl = QVBoxLayout(group_page)
         gl.setContentsMargins(4, 4, 4, 4)
+        self.b_back = QToolButton()
+        self.b_back.setText("← Double determination")
+        self.b_back.setToolTip("Back to the double-determination page (the pair shown last, or the active run "
+                               "with its partner)")
+        self.b_back.setAutoRaise(True)
+        self.b_back.clicked.connect(self.back_to_pair)
+        top = QHBoxLayout()
+        top.addWidget(self.b_back)
+        top.addStretch(1)
+        gl.addLayout(top)
         gl.addWidget(self.info)
         gl.addLayout(chips)
         sheet_split = QSplitter(Qt.Vertical)
@@ -331,7 +342,7 @@ class ReplicatesDock(QWidget):
 
     def _picked(self, it) -> None:
         """A list entry was selected: a pair or single on the double-determination page, else the worksheet."""
-        if self._syncing or it is None:
+        if self._syncing or it is None or self._shows(it):
             return
         kind, ref = it.data(0, Qt.UserRole)
         if kind == "suggest":
@@ -346,6 +357,35 @@ class ReplicatesDock(QWidget):
                 self.show_pair(members[0], members[1] if len(members) > 1 else "")
             return
         self.show_group(g["id"])
+
+    def _shows(self, it) -> bool:
+        """The entry is already on the page (so a click or a selection has nothing to do)."""
+        kind, ref = it.data(0, Qt.UserRole)
+        if kind != "group":
+            return False
+        if self.stack.currentIndex() == GROUP_PAGE:
+            return ref == self._group_id
+        g = self.duplicate.group()
+        return g is not None and g["id"] == ref
+
+    def back_to_pair(self) -> None:
+        """From the worksheet back to the double determination: the pair shown last, else the active run."""
+        if self.duplicate.members and all(m in self.ws.runs for m in self.duplicate.members):
+            self.stack.setCurrentIndex(PAIR_PAGE)
+            g = self.duplicate.group()
+            it = self._item_for(("group", g["id"])) if g else None
+            self._syncing = True
+            try:
+                self.list.setCurrentItem(it)
+            finally:
+                self._syncing = False
+            return
+        act = self.ws.active
+        rid = act.id if act is not None and act.role in ("sample", "standard") else None
+        rid = rid or next((s.id for s in self.ws.states() if s.role in ("sample", "standard")), None)
+        self.stack.setCurrentIndex(PAIR_PAGE)
+        if rid:
+            self.show_pair(rid)
 
     def show_group(self, gid: str) -> None:
         """The worksheet of a group of three or more determinations."""
@@ -368,6 +408,11 @@ class ReplicatesDock(QWidget):
         else:
             self._group_id = None
             self.stack.setCurrentIndex(GROUP_PAGE)
+            self._syncing = True                   # nothing listed is shown: any entry clicked opens
+            try:
+                self.list.setCurrentItem(None)
+            finally:
+                self._syncing = False
             self.refresh_sheet()
 
     def next_open_group(self) -> None:
