@@ -43,6 +43,11 @@ Right-click a row:
 
 | Item | When it is offered | What it does |
 |---|---|---|
+| **Report** / **Not reported** | always | Puts the substance (or all marked rows, when it is one of them) into the report, or takes it out. |
+| **Reset row** | the row has your changes | Takes back your changes of this substance. |
+| **Comment…** | always | A comment for the report. |
+| **Show in A** / **Show in B** | the substance is in that determination | Opens that determination with the peak selected. |
+| **Copy row** | always | Copies the visible cells of the row as text. |
 | **Name: ...** | two candidate names, or differing spectra | Gives both determinations that name. |
 | **Remove the gap fill** | the row has a gap fill | Takes the gap-filled peak out again. |
 | **Harmonise the boundaries** | boundaries are proposed | Moves the peak boundaries of one determination to match the other. |

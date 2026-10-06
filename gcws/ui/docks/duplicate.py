@@ -679,8 +679,8 @@ class DuplicatePage(QWidget):
             return
         self.set_edit(row, field, value)
 
-    def reset_row(self):
-        row = self._current_row()
+    def reset_row(self, row=None):
+        row = row if row is not None else self._current_row()
         if row is None or not row.get("edit_key"):
             return
         self._sync_group(self.members)
@@ -1001,12 +1001,51 @@ class DuplicatePage(QWidget):
         self.compare(sync=False)
         return True
 
+    def _visual_row(self, row) -> int | None:
+        """The table row showing ``row`` (None: filtered out)."""
+        k = next((i for i, r in enumerate(self.rows) if r is row), None)
+        return next((r for r in range(self.table.rowCount())
+                     if self.table.item(r, 0) is not None and self.table.item(r, 0).data(Qt.UserRole) == k), None)
+
+    def _marked_or(self, row) -> list[int]:
+        """The marked table rows when ``row`` is one of them, else just ``row``'s."""
+        r = self._visual_row(row)
+        marked = self.table.selected_rows()
+        return marked if r in marked else ([r] if r is not None else [])
+
+    def edit_comment(self, row) -> None:
+        from PySide6.QtWidgets import QInputDialog
+        text, ok = QInputDialog.getText(self, "Comment", row.get("name") or f"RT {row['rt']:.3f}",
+                                        text=row.get("comment", ""))
+        if ok:
+            self.set_edit(row, "comment", text.strip() or None)
+
+    def copy_row(self, row) -> None:
+        from PySide6.QtGui import QGuiApplication
+        r = self._visual_row(row)
+        if r is None:
+            return
+        cells = [self.table.cell_value(r, c) for c in range(1, self.table.columnCount())
+                 if not self.table.isColumnHidden(c)]
+        QGuiApplication.clipboard().setText("\t".join("yes" if v is True else "no" if v is False else str(v)
+                                                       for v in cells))
+
     def row_actions(self, row) -> list:
-        """``[(text, callable)]`` of the right-click menu of ``row``."""
-        out = []
+        """``[(text, callable)]`` of the right-click menu of ``row``; ``(None, None)`` is a separator."""
+        labels = self.labels()
+        out = [("Report", lambda: self._mark_rows(self._marked_or(row), True)),
+               ("Not reported", lambda: self._mark_rows(self._marked_or(row), False))]
+        if row.get("edit_key"):
+            out.append(("Reset row", lambda: self.reset_row(row)))
+        out.append(("Comment…", lambda: self.edit_comment(row)))
+        for key, i in (("source1", 0), ("source2", 1)):
+            if row.get(key) is not None and i < len(self.members):
+                out.append((f"Show in {labels[i]}", lambda b=bool(i): self._navigate(row, prefer_b=b)))
+        out.append(("Copy row", lambda: self.copy_row(row)))
         f = self.feature_of(row)
         if f is None:
             return out
+        out.append((None, None))
         ident = f.identity
         if ident is not None and ident.case in ("C", "D"):
             for c in ident.candidates[:3]:
@@ -1025,11 +1064,12 @@ class DuplicatePage(QWidget):
         if k is None or not (0 <= k < len(self.rows)):
             return
         actions = self.row_actions(self.rows[k])
-        if not actions:
-            return
         menu = QMenu(self)
         for text, fn in actions:
-            menu.addAction(text, fn)
+            if text is None:
+                menu.addSeparator()
+            else:
+                menu.addAction(text, fn)
         menu.exec(self.table.viewport().mapToGlobal(pos))
 
     def _start_consensus_search(self):

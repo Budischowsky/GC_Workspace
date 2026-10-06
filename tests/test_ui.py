@@ -1552,3 +1552,38 @@ def test_unprocessed_runs_stay_unprocessed_in_a_project(qtbot, win, samples, tmp
     assert not st.processed and st.results == {}
     win.integrate()                                  # F5: an explicit integration processes the run
     assert st.processed and st.results
+
+
+def test_double_determination_row_menu_always_has_actions(qtbot, win, samples, monkeypatch):
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtWidgets import QInputDialog
+    from gcws.features.model import PAIRING_CLASSIC, Settings
+    _load(qtbot, win, samples, ["07_", "11_"])
+    ws = win.ws
+    a = next(s.id for s in ws.states() if s.name.startswith("07_"))
+    b = next(s.id for s in ws.states() if s.name.startswith("11_"))
+    win.loaded_samples.pairRequested.emit(a, b)
+    page = win.replicates.duplicate
+    page.set_settings(Settings(pairing=PAIRING_CLASSIC))       # no feature actions at all
+    k = next(i for i, r in enumerate(page.rows) if r.get("source1") and r.get("source2") and r.get("report"))
+    rt = page.rows[k]["rt"]
+    labels = page.labels()
+    actions = dict(page.row_actions(page.rows[k]))
+    assert {"Report", "Not reported", "Comment…", f"Show in {labels[0]}", f"Show in {labels[1]}",
+            "Copy row"} <= set(actions) and None not in actions
+    page.table.clearSelection()
+    actions["Not reported"]()
+
+    def row():
+        return min(page.rows, key=lambda r: abs(r["rt"] - rt))
+    assert row()["report"] is False and "Reset row" in dict(page.row_actions(row()))
+    win.a_undo.trigger()
+    assert row()["report"] is True
+    with monkeypatch.context() as m:
+        m.setattr(QInputDialog, "getText", staticmethod(lambda *a, **kw: ("checked by hand", True)))
+        dict(page.row_actions(row()))["Comment…"]()
+    assert row()["comment"] == "checked by hand"
+    dict(page.row_actions(row()))["Copy row"]()
+    assert "checked by hand" in QGuiApplication.clipboard().text()
+    dict(page.row_actions(row()))[f"Show in {labels[1]}"]()
+    assert ws.active_id == b
