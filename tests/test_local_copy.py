@@ -145,3 +145,204 @@ def test_old_journal_gains_the_copy_columns(tmp_path):
     jr.upsert_run(b["id"], "07", fingerprint="f", copied_fp="f")
     assert jr.runs(b["id"])["07"]["copied_fp"] == "f"
     jr.close()
+
+
+# -- the watcher ---------------------------------------------------------------------------------
+
+BATCH = ["06_EtOH_ISTD", "07_26016606_x_A", "08_EtOH", "09_26016607_y_A", "10_EtOH", "11_26016606_x_B",
+         "12_26016607_y_B", "13_EtOH"]
+
+
+class FakeCopier:
+    """The copy process, run at once in this process when ``complete()`` is called."""
+
+    def __init__(self):
+        from PySide6.QtCore import QObject, Signal
+
+        class _S(QObject):
+            finished = Signal(str, int, str)
+        self._s = _S()
+        self.finished = self._s.finished
+        self.started, self.busy = [], False
+
+    def running(self):
+        return self.busy
+
+    def start(self, job_id, spec_path, kind="job"):
+        import json
+        self.started.append((json.loads(Path(spec_path).read_text(encoding="utf-8")), kind))
+        self.busy = True
+
+    def kill(self):
+        self.busy = False
+        self.finished.emit("", -1, "")
+
+    def complete(self):
+        import json
+        from gcws.automation import localcopy as LC
+        spec = self.started[-1][0]
+        (Path(spec["out_dir"]) / "result.json").write_text(json.dumps(LC.run_copy(spec)), encoding="utf-8")
+        self.busy = False
+        self.finished.emit("", 0, "")
+
+
+@pytest.fixture()
+def env(tmp_path, monkeypatch, qapp):
+    from gcws import paths
+    from gcws.automation import journal as J
+    from gcws.core import proc_method as PM
+    monkeypatch.setattr(paths, "DATA", tmp_path / "data")
+    (tmp_path / "data").mkdir()
+    PM.save({"format": "gcws-processing-method", "version": 1, "name": "NIAS", "sections": {
+        "quant": {"mode": "nias_mgkg"}, "migration": {"simulant": "x"}}})
+    wf, cp = _workflow(tmp_path)
+    wf.edges[0].filter = {}
+    wf.source.params.update(interval_min=1, min_age_min=0, stable_scans=1, quiet_min=30)
+    wf.enabled = True
+    wf.save()
+    return {"wf": wf, "watch": tmp_path / "watch", "local": tmp_path / "local", "tmp": tmp_path,
+            "journal": J.Journal(tmp_path / "data" / "automation" / "journal.sqlite")}
+
+
+def test_runs_are_copied_and_processed_from_the_local_folder(env):
+    from test_watcher import FakeLauncher, _log
+    from gcws.automation import journal as J
+    from gcws.automation.watcher import WatcherCore
+    jr, launcher, copier = env["journal"], FakeLauncher(), FakeCopier()
+    now = [time.time()]
+    core = WatcherCore(jr, launcher, clock=lambda: now[0], copier=copier)
+    core.tick()                                            # watching starts with an empty folder
+    now[0] += 61
+    batch = env["watch"] / "26016605_TEST"
+    batch.mkdir()
+    _log(batch, BATCH)
+    for n in BATCH:
+        _run(batch, n)
+    core.tick()                                            # all finished on X:, none copied yet
+    assert launcher.started == [] and len(copier.started) == 1
+    spec, kind = copier.started[0]
+    assert kind == "copy" and spec["dst"] == str(env["local"] / batch.name) and len(spec["runs"]) == 8
+    jobs = {j.group_name: j for j in jr.jobs()}
+    assert all(j.state == J.WAITING and "(being copied)" in j.reason for j in jobs.values()), jobs
+    assert "copying 26016605_TEST" in core.copying_text()
+    core.tick()                                            # one copy pass at a time
+    assert len(copier.started) == 1
+    copier.complete()
+    local = env["local"] / batch.name
+    assert sorted(p.name for p in local.iterdir()) == sorted([f"{n}.D" for n in BATCH] + [
+        "S Sequence Log .LOG", "S Sequence Log .TSV"])
+    assert all(r["copied_fp"] == r["fingerprint"] for r in jr.runs(jr.batch(env["wf"].id, batch)["id"]).values())
+    assert jr.batch(env["wf"].id, batch)["local_folder"] == str(local)
+    assert any("8 run(s) copied" in e["text"] for e in jr.events())
+    now[0] += 5
+    core.tick()                                            # planned again at once: processed from C:
+    job_id, jspec, _ = launcher.started[0]
+    assert jspec["batch_folder"] == str(local) and jspec["source_folder"] == str(batch)
+    assert jspec["group"]["members"] == ["07_26016606_x_A.D", "11_26016606_x_B.D"]
+    assert len(copier.started) == 1                        # nothing more to copy
+    # the sequence log changes: only the files beside the runs are copied again
+    _log(batch, BATCH, completed=True)
+    now[0] += 61
+    core.tick()
+    assert len(copier.started) == 2 and copier.started[1][0]["runs"] == []
+    copier.complete()
+    assert "Sequence completed" in (local / "S Sequence Log .LOG").read_text()
+
+
+def test_a_failed_copy_is_logged_once_and_tried_again(env, monkeypatch):
+    from test_watcher import FakeLauncher
+    from gcws.automation import localcopy as LC
+    from gcws.automation.watcher import WatcherCore
+    jr, copier = env["journal"], FakeCopier()
+    now = [time.time()]
+    core = WatcherCore(jr, FakeLauncher(), clock=lambda: now[0], copier=copier)
+    core.tick()
+    now[0] += 61
+    batch = env["watch"] / "B1"
+    _run(batch, "07_26016606_x_A")
+    real = LC.copy_tree
+    monkeypatch.setattr(LC, "copy_tree", lambda s, d: (_ for _ in ()).throw(OSError("disk full")))
+    for _ in range(2):
+        core.tick()
+        copier.complete()
+        now[0] += 61
+    warnings = [e["text"] for e in jr.events() if "could not be copied" in e["text"]]
+    assert len(warnings) == 1 and "disk full" in warnings[0]
+    monkeypatch.setattr(LC, "copy_tree", real)
+    core.tick()
+    copier.complete()
+    run = next(iter(jr.runs(jr.batch(env["wf"].id, batch)["id"]).values()))
+    assert run["copied_fp"] == run["fingerprint"] and not run["copy_error"]
+    # a copy process that hangs is stopped and tried again
+    (batch / "S Sequence Log .TSV").write_text("new")
+    now[0] += 61
+    core.tick()
+    assert copier.busy
+    now[0] += LC.TIMEOUT_S + 1
+    core.check_timeout(now[0])
+    assert not copier.busy and core.copying is None
+    assert any("stopped after" in e["text"] for e in jr.events())
+
+
+def test_a_watched_folder_that_cannot_be_reached_is_waited_for(env):
+    from test_watcher import FakeLauncher
+    from gcws.automation.watcher import WatcherCore
+    jr = env["journal"]
+    env["watch"].rename(env["tmp"] / "offline")            # X: without the VPN
+    core = WatcherCore(jr, FakeLauncher(), copier=FakeCopier())
+    core.tick()
+    core._last_scan.clear()
+    core.tick()
+    assert list(core.workflows) == [env["wf"].id]          # not refused: waited for
+    texts = [e["text"] for e in jr.events()]
+    assert sum("cannot be reached" in t for t in texts) == 1 and not any("not started" in t for t in texts)
+    (env["tmp"] / "offline").rename(env["watch"])
+    _run(env["watch"] / "B1", "07_26016606_x_A")           # there before watching could start
+    core._last_scan.clear()
+    core.tick()
+    assert any("reached again" in e["text"] for e in jr.events())
+    assert jr.jobs() == []                                 # the first look only takes note
+
+
+# -- real data ---------------------------------------------------------------------------------------
+
+def test_copy_process_and_a_job_from_the_local_copy(samples, tmp_path, monkeypatch, qapp):
+    """``python -m gcws --copy-runs``, then a sample processed from C: whose blank copy was deleted."""
+    import json
+    import shutil
+    import subprocess
+    import sys
+    from test_pipeline import A, B, copy_batch, lib_oracle, snapshot, spec
+    from gcws import paths
+    from gcws.automation import headless as H
+    from gcws.automation import localcopy as LC
+    from gcws.automation import pipeline as PL
+    from gcws.automation import scanner as SC
+    data = tmp_path / "data"
+    data.mkdir()
+    shutil.copy2(paths.DATA / "settings.json", data / "settings.json")
+    monkeypatch.setattr(paths, "DATA", data)
+    batch = copy_batch(samples, tmp_path / "watch", ["06_", "07_", "08_", "11_", "13_"])
+    before = snapshot(batch)
+    local = tmp_path / "local" / batch.name
+    runs = sorted(p for p in batch.iterdir() if p.suffix == ".D")
+    out = tmp_path / "copy"
+    out.mkdir()
+    (out / "spec.json").write_text(json.dumps({"src": str(batch), "dst": str(local), "extras": True, "runs": [
+        {"stem": p.stem.casefold(), "name": p.name, "fingerprint": SC.fingerprint(p)[0]} for p in runs]}),
+        encoding="utf-8")
+    done = subprocess.run([sys.executable, "-m", "gcws", "--copy-runs", str(out / "spec.json")],
+                          cwd=str(paths.ROOT), env=dict(os.environ, GCWS_DATA=str(data)), timeout=300,
+                          capture_output=True)
+    assert done.returncode == 0, done.stdout[-800:]
+    res = json.loads((out / "result.json").read_text(encoding="utf-8"))
+    assert len(res["copied"]) == 5 and not res["failed"] and res["extras"] == LC.extras_signature(batch)
+    assert {k: v[0] for k, v in snapshot(local).items()} == {k: v[0] for k, v in snapshot(batch).items()}
+    shutil.rmtree(local / "13_EtOH.D")                     # the analyst tidied up the copy
+    res = PL.run_job(spec(local, tmp_path / "job", source_folder=str(batch)), identify=lib_oracle)
+    assert res.state in (PL.ACCEPTED_AUTO, PL.CONTROL), res.reason
+    assert (local / "13_EtOH.D" / "data.ms").is_file()     # copied again by the job
+    ws = H.new_workspace()
+    assert not [n for n in H.open_project(ws, res.project) if "not found" in n]
+    assert {Path(st.run.path).parent for st in ws.states()} == {local}   # the project points to C:
+    assert snapshot(batch) == before                       # the watched folder is only read

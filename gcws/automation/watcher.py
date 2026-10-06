@@ -23,6 +23,7 @@ from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signa
 
 from gcws import paths
 from gcws.automation import journal as J
+from gcws.automation import localcopy as LC
 from gcws.automation import planner as PN
 from gcws.automation import rules as RU
 from gcws.automation import scanner as SC
@@ -95,7 +96,8 @@ class ProcessLauncher(QObject):
     def start(self, job_id: str, spec_path: Path, kind: str = "job") -> None:
         p = QProcess(self)
         p.setProgram(python_exe())
-        p.setArguments(["-m", "gcws", "--batch-report" if kind == "batch" else "--process-job", str(spec_path)])
+        flag = {"batch": "--batch-report", "copy": "--copy-runs"}.get(kind, "--process-job")
+        p.setArguments(["-m", "gcws", flag, str(spec_path)])
         p.setWorkingDirectory(str(paths.ROOT))
         env = QProcessEnvironment.systemEnvironment()
         env.insert("QT_QPA_PLATFORM", "offscreen")
@@ -133,11 +135,17 @@ class WatcherCore(QObject):
     notify = Signal(str, str)                        # title, text
 
     def __init__(self, journal: Optional[J.Journal] = None, launcher=None, clock=time.time, parent=None,
-                 tick_ms: int = 5000):
+                 tick_ms: int = 5000, copier=None):
         super().__init__(parent)
         self.journal = journal or J.Journal()
         self.launcher = launcher or ProcessLauncher(self)
         self.launcher.finished.connect(self._job_finished)
+        # the local copy runs in its own process beside the jobs
+        self.copier = copier or ProcessLauncher(self)
+        self.copier.finished.connect(self._copy_finished)
+        self.copying: Optional[dict] = None          # {"batch_id", "workflow_id", "name", "started", "out_dir"}
+        self._copy_queue: dict[int, dict] = {}       # batch id -> copy spec
+        self._unreachable: set[str] = set()          # workflows whose watched folder cannot be reached
         self.clock = clock
         self.paused = False
         self.workflows: dict[str, W.Workflow] = {}
@@ -174,7 +182,7 @@ class WatcherCore(QObject):
     def heartbeat(self) -> None:
         cur = self.current["job"] if self.current else ""
         try:
-            self.journal.heartbeat(self.status(), cur, "", self.started)
+            self.journal.heartbeat(self.status(), cur, self.copying_text(), self.started)
         except Exception as exc:  # noqa: BLE001 - the journal may be busy for a moment
             log.warning("heartbeat: %s", exc)
 
@@ -203,7 +211,9 @@ class WatcherCore(QObject):
             if not wf.enabled:
                 self.workflows.pop(wf.id, None)
                 continue
-            problems = W.errors(W.validate(wf, method_names=self._method_names(), word=True,
+            # the folders are not checked here: a network drive that is not there yet (VPN) is
+            # waited for by scan(), not a reason to refuse the workflow
+            problems = W.errors(W.validate(wf, method_names=self._method_names(), word=True, check_paths=False,
                                            method_loader=self.method))
             if problems:
                 self.workflows.pop(wf.id, None)
@@ -250,6 +260,7 @@ class WatcherCore(QObject):
             self.check_timeout(now)
             if not self.paused:
                 self.pump(now)
+                self.pump_copies(now)
         except Exception:  # noqa: BLE001 - the watcher keeps going
             import traceback
             log.error(traceback.format_exc())
@@ -260,7 +271,18 @@ class WatcherCore(QObject):
     def scan(self, wf: W.Workflow, now: Optional[float] = None) -> None:
         now = self.clock() if now is None else now
         src = wf.source
-        first = self.journal.first_scan(wf.id, src.p("folder"))
+        root = src.p("folder")
+        if not os.path.isdir(root):                    # e.g. a network drive without the VPN
+            if wf.id not in self._unreachable:
+                self._unreachable.add(wf.id)
+                self.journal.event("warning", f"Workflow '{wf.name}': the watched folder {root} cannot be reached; "
+                                   "looking again at every check", workflow_id=wf.id)
+            return
+        if wf.id in self._unreachable:
+            self._unreachable.discard(wf.id)
+            self.journal.event("info", f"Workflow '{wf.name}': the watched folder {root} can be reached again",
+                               workflow_id=wf.id)
+        first = self.journal.first_scan(wf.id, root)
         cfg = SC.Readiness(int(src.p("stable_scans") or 2), float(src.p("min_age_min") or 0) * 60,
                            float(src.p("quiet_min") or 30) * 60)
         folders = SC.batch_folders(src.p("folder"), int(src.p("depth") or 0), src.p("pattern") or "*",
@@ -303,15 +325,23 @@ class WatcherCore(QObject):
                                   seq_completed=int(seq.finished))
         fps = {s: r.get("fingerprint") or "" for s, r in runs.items()}
         names = {s: r.get("path") and Path(r["path"]).name for s, r in runs.items()}
+        # a method fed by the local copy sees a run once it is copied
+        copied = {s for s, r in runs.items() if r.get("copied_fp") and r.get("copied_fp") == r.get("fingerprint")}
+        local_present = {s: dict(v, ready=v["ready"] and s in copied, copying=v["ready"] and s not in copied)
+                         for s, v in present.items()}
+        needed = set()                                 # runs a sample processed from the copy needs
         for m in wf.methods():
             method = self.method(m.p("method"))
-            plan = PN.plan_batch(present, seq, quiet=quiet, require=blank_requirement(m, method), baseline=baseline)
-            edge = wf.source_edge(m.id)
+            via, edges = wf.feed(m.id)
+            plan = PN.plan_batch(present if via is None else local_present, seq, quiet=quiet,
+                                 require=blank_requirement(m, method), baseline=baseline)
             for g in plan.groups:
                 if g.state == PN.BASELINE:
                     continue
-                if edge is not None and not W.passes(edge.filter, {"name": g.name, "batch": folder.name}):
+                if not all(W.passes(e.filter, {"name": g.name, "batch": folder.name}) for e in edges):
                     continue
+                if via is not None:
+                    needed.update(g.members, *g.blanks.values())
                 blanks = {k: [names.get(s) or s for s in v if s in names] for k, v in g.blanks.items()}
                 members = [names.get(s) or s for s in g.members]
                 fp = hashlib.sha1(json.dumps([[fps.get(s, "") for s in g.members],
@@ -349,6 +379,91 @@ class WatcherCore(QObject):
                  "reason": g.reason} for g in plan.groups]})
             if complete:
                 self._batch_report(wf, m, b, folder)
+        if wf.copy_step is not None:
+            self._plan_copy(wf, wf.copy_step, b, folder, runs, present_stems, needed)
+
+    # -- the local copy --------------------------------------------------------------------------------
+
+    def _plan_copy(self, wf: W.Workflow, cp: W.Node, b: dict, folder: Path, runs: dict, present: set,
+                   needed: set) -> None:
+        """Queues a copy pass of the batch folder when finished runs, or the files beside them, are not
+        yet in the local folder. Runs that were there before watching started are copied only when a
+        sample needs them."""
+        if self.copying is not None and self.copying["batch_id"] == b["id"]:
+            return                                     # being copied: looked at again afterwards
+        if not all(W.passes(e.filter, {"batch": folder.name}) for e in wf.incoming(cp.id)):
+            return
+        todo = [s for s in sorted(present) if runs[s].get("state") == "ready"
+                and runs[s].get("copied_fp") != runs[s].get("fingerprint")
+                and (not runs[s].get("baseline") or s in needed)]
+        has_copies = any(runs[s].get("copied_fp") for s in present)
+        extras = LC.extras_signature(folder)
+        if not todo and (not has_copies or extras == (b.get("copied_extras") or "")):
+            self._copy_queue.pop(b["id"], None)
+            return
+        dst = LC.local_batch(cp.p("folder"), wf.source.p("folder"), folder)
+        if b.get("local_folder") != str(dst):
+            self.journal.update_batch(b["id"], local_folder=str(dst))
+        self._copy_queue[b["id"]] = {
+            "batch_id": b["id"], "workflow_id": wf.id, "name": b.get("name") or folder.name, "src": str(folder),
+            "dst": str(dst), "extras": True,
+            "runs": [{"stem": s, "name": Path(runs[s]["path"]).name, "fingerprint": runs[s]["fingerprint"]}
+                     for s in todo]}
+
+    def pump_copies(self, now: Optional[float] = None) -> None:
+        """Starts the next copy pass (one at a time, beside the job process)."""
+        now = self.clock() if now is None else now
+        if self.copying is not None or self.copier.running() or not self._copy_queue:
+            return
+        bid = next(iter(self._copy_queue))
+        spec = self._copy_queue.pop(bid)
+        out = store.root() / "copies" / f"batch{bid}"
+        try:
+            (out / "result.json").unlink()
+        except OSError:
+            pass
+        spec_path = store.atomic_write_json(out / "spec.json", dict(spec, out_dir=str(out)))
+        self.copying = {"batch_id": bid, "workflow_id": spec["workflow_id"], "name": spec["name"],
+                        "dst": spec["dst"], "runs": [r["stem"] for r in spec["runs"]], "started": now,
+                        "out_dir": str(out)}
+        self.heartbeat()
+        self.copier.start(f"copy-{bid}", spec_path, "copy")
+
+    def copying_text(self) -> str:
+        return f"copying {self.copying['name']} to the local folder" if self.copying else ""
+
+    def _copy_finished(self, _id: str, code: int, tail: str) -> None:
+        cur, self.copying = self.copying or {}, None
+        bid = cur.get("batch_id")
+        if bid is None:
+            return
+        res = store.read_json(Path(cur["out_dir"]) / "result.json")
+        if not isinstance(res, dict):
+            last = tail.strip().splitlines()[-1] if tail.strip() else ""
+            why = "the copy took too long" if cur.get("timed_out") else \
+                "the copy process ended without a result" + (f": {last}" if last else "")
+            res = {"copied": {}, "failed": {s: why for s in cur.get("runs") or []}}
+        runs = self.journal.runs(bid)
+        for stem, fp in (res.get("copied") or {}).items():
+            if stem in runs:
+                self.journal.upsert_run(bid, stem, copied_fp=fp, copy_error="")
+        for stem, why in (res.get("failed") or {}).items():
+            if stem not in runs:
+                continue
+            if (runs[stem].get("copy_error") or "") != why:      # each new problem is logged once
+                self.journal.event("warning", f"{cur['name']}: {Path(runs[stem]['path']).name} could not be copied "
+                                   f"to the local folder - {why}", workflow_id=cur["workflow_id"], batch_id=bid)
+            self.journal.upsert_run(bid, stem, copy_error=why)
+        if res.get("extras") is not None:
+            self.journal.update_batch(bid, copied_extras=res["extras"])
+        n = len(res.get("copied") or {})
+        if n:
+            self.journal.event("info", f"{cur['name']}: {n} run(s) copied to {cur['dst']} "
+                               f"({(res.get('bytes') or 0) / 1e6:.1f} MB, {res.get('seconds') or 0:.0f} s)",
+                               workflow_id=cur["workflow_id"], batch_id=bid)
+            self._last_scan[cur["workflow_id"]] = 0     # plan again at the next tick
+        self.heartbeat()
+        self.changed.emit()
 
     # -- the batch report ------------------------------------------------------------------------------
 
@@ -382,6 +497,11 @@ class WatcherCore(QObject):
                                f"{self.current['timeout'] / 60:.0f} min", job_id=self.current["job"])
             self.current["timed_out"] = True
             self.launcher.kill()
+        if self.copying and not self.copying.get("timed_out") and now - self.copying["started"] > LC.TIMEOUT_S:
+            self.journal.event("error", f"Copying {self.copying['name']} stopped after {LC.TIMEOUT_S // 60} min",
+                               workflow_id=self.copying["workflow_id"], batch_id=self.copying["batch_id"])
+            self.copying["timed_out"] = True
+            self.copier.kill()
 
     def pump(self, now: Optional[float] = None) -> None:
         now = self.clock() if now is None else now
@@ -460,8 +580,14 @@ class WatcherCore(QObject):
         prev_project = ""
         if job.mode == "rereport":
             prev_project = job.project_path or ""
+        # fed by the local copy: the runs are read from there (the job copies a missing one itself)
+        batch_folder, source_folder = b.get("folder", ""), ""
+        via, _ = wf.feed(m.id)
+        if via is not None and batch_folder:
+            source_folder = batch_folder
+            batch_folder = str(LC.local_batch(via.p("folder"), wf.source.p("folder"), batch_folder))
         spec = {"job_id": job.id, "revision": job.revision, "mode": job.mode or "full", "workflow_id": wf.id,
-                "method_node": m.id, "method": method, "batch_folder": b.get("folder", ""),
+                "method_node": m.id, "method": method, "batch_folder": batch_folder, "source_folder": source_folder,
                 "group": {"key": job.group_key, "name": job.group_name, "members": job.members or []},
                 "blanks": job.blanks or {}, "reports": reports, "rules": rules,
                 "auto_accept": bool(review.p("auto_accept")) if review is not None else True,
@@ -630,10 +756,12 @@ class WatcherApp(QObject):
             QTimer.singleShot(100, self.quit)
         c.heartbeat()
         return {"ok": True, "state": c.status(), "pid": os.getpid(), "current": (c.current or {}).get("job", ""),
-                "workflows": [w.name for w in c.workflows.values()]}
+                "copying": c.copying_text(), "workflows": [w.name for w in c.workflows.values()]}
 
     def quit(self):
         from PySide6.QtWidgets import QApplication
+        if self.core.copier.running():
+            self.core.copier.kill()                    # copied again at the next start
         if self.core.launcher.running():
             self.core.journal.event("warning", "Watcher closed while a job was running; it will be processed again")
             job = (self.core.current or {}).get("job")

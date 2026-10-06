@@ -130,6 +130,9 @@ def run_job(spec: dict, *, progress: Callable[[str], None] = log.info,
         ws.log("Automation: processing method", "", method.get("name", ""))
         blanks = spec.get("blanks") or {}
         names = list(dict.fromkeys(group["members"] + blanks.get("blank", []) + blanks.get("blank_istd", [])))
+        if spec.get("source_folder"):                  # processed from the local copy
+            from gcws.automation import localcopy as LC
+            LC.ensure_runs(spec["source_folder"], batch, names, progress)
         progress(f"loading {len(names)} runs")
         errors = H.add_runs(ws, _paths(batch, names), progress)
         timings["load"] = round(time.time() - t0, 1)
