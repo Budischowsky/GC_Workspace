@@ -217,6 +217,6 @@ of step 3 and the names of step 4 by itself, as **one undo step**, and writes ea
 
 ## Three or more determinations
 
-With three or more determinations of a sample (**Groups (N-fold)** tab) the steps are the same. Each run gets
+With three or more determinations of a sample (a group of three or more in the list **Determinations**) the steps are the same. Each run gets
 its own time map onto the first one, and a substance takes at most one peak from each run, the best-fitting
 pairs first.

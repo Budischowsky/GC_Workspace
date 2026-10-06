@@ -518,7 +518,7 @@ class MainWindow(QMainWindow):
         self.quant_menu.addAction("Quantification panel", lambda: self._show_dock("quant"))
         self.quant_menu.addAction("Double determination...", lambda: self.open_double_determination())
         self.quant_menu.addAction("Replicate groups (N-fold)", lambda: (self._show_dock("replicates"),
-                                                                        self.replicates.tabs.setCurrentIndex(1)))
+                                                                        self.replicates.show_nfold()))
 
         self.report_menu = mb.addMenu("&Report")
         from gcws.report.service import KINDS

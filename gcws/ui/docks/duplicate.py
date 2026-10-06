@@ -94,6 +94,7 @@ class DuplicatePage(QWidget):
     reportRequested = QtSignal(str, str)        # kind, group id
     previewRequested = QtSignal(str, str)       # kind, group id
     report2Requested = QtSignal()
+    summaryChanged = QtSignal()                 # the counts of the rows changed (compared or edited)
 
     def __init__(self, ws, set_groups, parent=None):
         super().__init__(parent)
@@ -295,10 +296,10 @@ class DuplicatePage(QWidget):
 
     def _to_groups_tab(self):
         p = self.parent()
-        while p is not None and not hasattr(p, "tabs"):
+        while p is not None and not hasattr(p, "show_nfold"):
             p = p.parent()
         if p is not None:
-            p.tabs.setCurrentIndex(1)
+            p.show_nfold()
 
     def _candidates(self):
         return [s for s in self.ws.states() if s.role in ("sample", "standard")]
@@ -777,6 +778,7 @@ class DuplicatePage(QWidget):
                    and str(r.get("status", "")).startswith("Artefact"))
         self.chips["red"].setToolTip(FILTERS["red"][2] + (f" {lone} of them found in one determination only."
                                                           if lone else ""))
+        self.summaryChanged.emit()
 
     @staticmethod
     def _passes(key: str, row: dict, v, light: str | None = None) -> bool:

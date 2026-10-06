@@ -119,7 +119,7 @@ See [Identify the peaks](wf-identify.md).
 | **Detect internal standards...** | Finds the standards by name, spectrum and retention time. |
 | **Quantification panel** | Shows the **Quantification** panel. |
 | **Double determination...** | Opens the **Double determination** tab. |
-| **Replicate groups (N-fold)** | Opens the **Groups (N-fold)** tab. |
+| **Replicate groups (N-fold)** | Opens the worksheet of the first group of three or more in **Replicates / results**. |
 
 See [Blanks, internal standards and quantification](wf-quantify.md).
 

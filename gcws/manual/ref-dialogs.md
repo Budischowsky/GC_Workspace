@@ -232,7 +232,7 @@ how cell and coverage will be named in the report.
 
 ## Determinations of a group
 
-**Members...** in the **Groups (N-fold)** tab: tick the determinations of the sample and drag them into order.
+**Members...** (right-click a group in the list **Determinations** of **Replicates / results**): tick the determinations of the sample and drag them into order.
 The first is determination A (1), the second B (2), and so on.
 
 ## Report preview

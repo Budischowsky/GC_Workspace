@@ -22,7 +22,7 @@ Each report is written as an Excel workbook and a Word document.
 4. **Report > NIAS Report...** asks where to save and writes the files.
 
 The report is made for the replicate group of the active chromatogram - the pair of the double determination,
-or the group in **Groups (N-fold)**. If there is none, the program says so and opens the
+or the group selected in the list **Determinations**. If there is none, the program says so and opens the
 **Replicates / results** panel. The same report buttons are in that panel.
 
 If something needed is missing, the program names it instead of writing a wrong report. Without migration
@@ -61,4 +61,4 @@ value step by step.
 | A chromatogram as a picture | **File > Export chromatogram...** |
 | A spectrum as MSP | **Mass Spectrum > Copy MSP** / **Save MSP...** |
 | The double determination list | **Export...** in the **Double determination** tab |
-| The results of a replicate group | **Export worksheet...** in the **Groups (N-fold)** tab |
+| The results of a replicate group | **Report preview ▾ > Export worksheet...** on the worksheet of the group |

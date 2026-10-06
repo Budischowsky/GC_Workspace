@@ -8,7 +8,8 @@ found in both. This chapter is the practical guide. What the program does inside
 
 - Right-click one of the two runs in **Loaded samples** and choose **Double determination with**, then the
   partner. The run with the same sample number is offered first.
-- Or **Quantify > Double determination...** and choose **A** and **B** at the top of the tab. **⇄** swaps them.
+- Or **Quantify > Double determination...** and choose **A** and **B** at the top of the page. **⇄** swaps them.
+- Or select the pair in the list **Determinations** on the left of the panel.
 
 Press **Compare**.
 
@@ -107,15 +108,21 @@ to the pairing by name and retention time of earlier versions.
 
 ## Three or more determinations
 
-The **Groups (N-fold)** tab is for triplicates and more.
+Select a group of three or more in the list **Determinations** on the left: its worksheet shows the means.
+**More > 3+ determinations…** and **Quantify > Replicate groups (N-fold)** go there too.
 
-| Control | What it does |
+| In the list | What it does |
 |---|---|
-| **Suggest** | Groups runs with the same sample number that differ only by _A, _B, _C. |
-| **New...** | Makes a group by hand. |
-| **Members...** | Ticks the determinations of the group and puts them in order: the first is A, the second B ... |
-| **Delete** | Removes the group (not the runs). |
-| **A peak counts as valid when** | **Found in all determinations**, **Found in the majority** or **Found in at least one**. |
+| **+ > Suggest** | Groups runs with the same sample number that differ only by _A, _B, _C. |
+| **+ > New...** | Makes a group by hand. |
+| **Members...** (right-click) | Ticks the determinations of the group and puts them in order: the first is A, the second B ... |
+| **Validity rule** (right-click) | **Found in all determinations**, **Found in the majority** or **Found in at least one**. |
+| **Rename...**, **Delete** (right-click) | Renames or removes the group (not the runs). |
 | **Report preview** | The report of the group; its arrow offers the other reports and **Export worksheet...** (the averaged results of the group). |
 
-A right-click on a group offers **Rename...**, **Members...** and **Delete**.
+## Many samples
+
+The list **Determinations** holds every pair of the project. **Open** counts the red rows still open at
+the last comparison, ✔ means nothing is left to decide and – that the pair was not compared yet. `Ctrl+F3`
+goes to the next pair that still needs you. Pairs the run names suggest appear in italics until you select
+them.

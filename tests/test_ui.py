@@ -381,7 +381,7 @@ def test_double_determination_from_tab_menu(qtbot, win, samples):
     b = next(s.id for s in ws.states() if s.name.startswith("11_"))
     win.loaded_samples.pairRequested.emit(a, b)
     page = win.replicates.duplicate
-    assert win.replicates.tabs.currentIndex() == 0
+    assert win.replicates.stack.currentIndex() == 0
     assert page.a.currentData() == a and page.b.currentData() == b
     assert page.rows and len(page.verdicts) == len(page.rows), page.banner.text()
     g = page.group()
@@ -1608,7 +1608,7 @@ def test_replicates_report_button_and_more_menu(qtbot, win, monkeypatch):
     more = [a.text() for a in page.b_more.menu().actions() if a.text()]
     assert more == ["Settings…", "3+ determinations…", "Reset all"]
     page.b_more.menu().actions()[1].trigger()
-    assert win.replicates.tabs.currentIndex() == 1
+    assert win.replicates.stack.currentIndex() == 1
 
 
 def test_double_determination_columns_gauge_and_severity(qtbot, win, samples):
@@ -1671,3 +1671,37 @@ def test_double_determination_plots_follow_the_list(qtbot, win, samples):
     page.set_settings(Settings(pairing=PAIRING_CLASSIC))
     assert page.spec.isHidden()
     page.table.setCurrentCell(0, C_NAME)
+
+
+def test_replicates_list_of_determinations(qtbot, win, samples):
+    from PySide6.QtCore import Qt
+    _load(qtbot, win, samples, ["07_", "09_", "11_"])
+    ws = win.ws
+    a, c, b = (next(s.id for s in ws.states() if s.name.startswith(p)) for p in ("07_", "09_", "11_"))
+    dock = win.replicates
+    win.loaded_samples.pairRequested.emit(a, b)
+    pair = dock.duplicate.group()
+    it = dock._item_for(("group", pair["id"]))
+    assert it is not None and dock.list.currentItem() is it and it.text(1) == "2"
+    n_open = dock.duplicate.decision_counts()[0]
+    assert it.text(2) == (str(n_open) if n_open else "✔")
+    # a group of three: its worksheet; the pair again: the double-determination page
+    groups = ws.replicate_groups + [{"id": "g3", "name": "triplicate", "members": [a, c, b], "policy": "all"}]
+    dock._set_groups(groups, "test group of three")
+    g3 = dock._item_for(("group", "g3"))
+    assert g3 is not None and g3.text(2) == "–"
+    dock.list.setCurrentItem(g3)
+    assert dock.stack.currentIndex() == 1 and dock.sheet.rowCount() > 0 and "3 determination" in dock.info.text()
+    assert dock.current_group()["id"] == "g3"
+    # its validity rule from the list's menu, undoable
+    dock.set_policy("majority")
+    assert next(g for g in ws.replicate_groups if g["id"] == "g3")["policy"] == "majority"
+    win.a_undo.trigger()
+    assert next(g for g in ws.replicate_groups if g["id"] == "g3")["policy"] == "all"
+    dock.list.setCurrentItem(dock._item_for(("group", pair["id"])))
+    assert dock.stack.currentIndex() == 0 and dock.duplicate.members == [a, b]
+    # Ctrl+F3: the next group that is not compared yet or has open red rows
+    dock.next_open_group()
+    assert dock.list.currentItem().data(0, Qt.UserRole) == ("group", "g3") or n_open
+    dock.show_nfold()
+    assert dock.stack.currentIndex() == 1

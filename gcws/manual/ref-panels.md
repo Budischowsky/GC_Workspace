@@ -219,16 +219,23 @@ of HS standards, and **Bind selected TIC peak**, **Automatic**, **Detect...**, *
 
 ## Replicates / results
 
-Two tabs. Described in [Double determination](wf-double.md).
+On the left the list **Determinations**: every replicate group of the project with **N** (its number of
+determinations) and **Open** (red rows still open at its last comparison: a number, ✔ when nothing is left,
+– when not compared yet). Pairs the run names suggest but that are no group yet are shown in italics;
+selecting one compares it and makes it a group. **+** offers **Suggest** and **New...**; a right-click on a
+group offers **Suggest**, **New...**, **Rename...**, **Members...**, **Validity rule** and **Delete**.
+`Ctrl+F3` goes to the next group that is not compared yet or still has open red rows. Selecting a pair or a
+single determination opens the double-determination page, a group of three or more its worksheet.
+Described in [Double determination](wf-double.md).
 
-**Double determination** tab:
+The double-determination page:
 
 | Control | What it does |
 |---|---|
 | **A**, **B** boxes | The two determinations. |
 | **⇄** | Swaps A and B. |
 | **Compare** | Pairs the two determinations and fills the list. |
-| **More** | **Settings…** (pairing, gap filling, consensus name), **3+ determinations…** (the **Groups (N-fold)** tab) and **Reset all** (undoes every change made in this double determination). |
+| **More** | **Settings…** (pairing, gap filling, consensus name), **3+ determinations…** (the worksheet of the first group of three or more) and **Reset all** (undoes every change made in this double determination). |
 | **Load from Report²…** | Switches to another processed A/B sample visible in Report², grouped by batch. Changes to the current pair are saved first. The empty menu says **No processed A/B pairs under the current Report² filters**. |
 | **All**, **To check**, **Red**, **Yellow**, **Green**, **Grey** | Chips that count the substances of each colour. A click shows only those rows, a second click all rows again. **To check** is red and yellow plus the rows you changed. |
 | **Difference limit** | The largest difference between A and B in percent. It is the report parameter *Duplicate difference limit*: the chip **report parameter** beside it says so, and shows the default when the value differs from it. Changing it changes every report of the project (the status bar says so). |
@@ -246,9 +253,9 @@ Below the list: the two chromatograms of the selected substance, A upwards and B
 integrated peak shaded in each, and the two spectra, mirrored the same way (feature pairing only). Clicking a
 dot selects its substance. **Plots** (beside the summary line) hides or shows them.
 
-**Groups (N-fold)** tab: **Suggest**, **New...**, **Members...**, **Delete**, the box
-**A peak counts as valid when**, the averaged results, and **Report preview** with the other reports and
-**Export worksheet...** under its arrow.
+The worksheet of a group of three or more: the averaged results (the line above it names the determinations
+and the validity rule), and **Report preview** with the other reports and **Export worksheet...** under its
+arrow.
 
 ## Automation
 
