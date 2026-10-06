@@ -401,9 +401,11 @@ def test_double_determination_from_tab_menu(qtbot, win, samples):
     page._limit_changed()
     from gcws.quant.duplicate_view import limits
     assert limits(ws)[0] == pytest.approx(12.5)
-    # "needs attention" filter hides confirmed rows
-    page.only_problems.setChecked(True)
-    assert page.table.rowCount() <= len(page.rows)
+    # the "To check" chip hides the confirmed rows; clicked again it shows all
+    page.set_filter("check")
+    assert page.table.rowCount() == page.counts["check"] <= len(page.rows)
+    page.set_filter("check")
+    assert page.filter == "all" and page.table.rowCount() == len(page.rows)
     # navigation from a row activates a determination and selects its peak
     k = next(i for i, r in enumerate(page.rows) if r.get("source1"))
     page._navigate(page.rows[k])
@@ -1456,18 +1458,18 @@ def test_double_determination_features_panel(qtbot, win, samples):
     assert rows and all(r.get("light") in ("green", "yellow", "red", "grey") for r in rows)
     assert page.table.horizontalHeaderItem(C_FEATURE).text() == "Feature"
     counts = {c: sum(1 for r in rows if r["light"] == c) for c in ("green", "yellow", "red", "grey")}
-    assert page.cards["confirmed"].value.text() == str(counts["green"])
-    assert page.cards["only_a"].value.text() == str(counts["red"])
+    assert page.counts["green"] == counts["green"] and page.counts["red"] == counts["red"]
+    assert page.chips["red"].text().startswith(f"Red {counts['red']}")
     # the automatic step was one undoable step with gap fills
     stack = ws.undo_group.activeStack() or ws.project_undo
     assert "gap fill" in stack.undoText()
     gap_rows = [r for r in rows if r.get("gapfill")]
     assert gap_rows and all(r["source1"] is not None and r["source2"] is not None for r in gap_rows)
     # only red, and F3 to the next red row
-    page.only_red.setChecked(True)
+    page.set_filter("red")
     shown = [page.table.item(i, C_ICON).text() for i in range(page.table.rowCount())]
     assert shown and set(shown) == {ICON["bad"]}
-    page.only_red.setChecked(False)
+    page.set_filter("all")
     page.table.setCurrentCell(0, 3)
     page.next_red()
     assert page.table.item(page.table.currentRow(), C_ICON).text() == ICON["bad"]

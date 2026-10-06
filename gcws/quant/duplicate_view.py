@@ -115,6 +115,15 @@ def plain_verdict(row: dict, limit: float, reporting_limit: float = 0.0, labels=
                    (f"Difference {rd:.1f} % (limit {limit:g} %)." if rd is not None else "Found in both.") + note)
 
 
+#: verdict level -> traffic light, so the classic pairing gets the colours of the feature pairing
+LIGHT_OF_LEVEL = {"ok": "green", "warn": "yellow", "info": "yellow", "bad": "red", "neutral": "grey"}
+
+
+def light_of(row: dict, verdict: Verdict) -> str:
+    """The traffic light of a row: the feature pairing's own, else from the verdict's level."""
+    return row.get("light") or LIGHT_OF_LEVEL.get(verdict.level, "grey")
+
+
 def summarize(rows: list[dict], verdicts: list[Verdict], limit: float, labels=("A", "B")) -> Summary:
     s = Summary(total=len(rows))
     diffs = []

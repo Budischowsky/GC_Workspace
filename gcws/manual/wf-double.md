@@ -14,8 +14,10 @@ Press **Compare**.
 
 ## Read the result
 
-The line above the list sums it up, for example: *3 of 84 substances need your decision (red; F3 = next); 9
-were made consistent automatically (yellow), 72 are confirmed.*
+The chips at the top count the rows of each colour - **All**, **To check**, **Red**, **Yellow**, **Green**,
+**Grey** - and the line below them sums it up, for example: *3 of 84 substances need your decision (red;
+F3 = next); 9 were made consistent automatically (yellow), 72 are confirmed. Mean difference 6.2 %.* When the
+panel is narrow the line is shortened; its tooltip shows all of it.
 
 | Colour | Meaning | You |
 |---|---|---|
@@ -26,11 +28,12 @@ were made consistent automatically (yellow), 72 are confirmed.*
 
 The column with the verdict says why a row has its colour, and the notes beside it give the evidence.
 
-- **Only red** shows just the rows to decide; `F3` jumps to the next red row that is still open.
+- Click a chip to see only its rows; click it again for all rows. **Red** shows just the rows to decide;
+  `F3` jumps to the next red row that is still open.
 - A red row you have answered (its **Report** box changed, a comment or a value) is **decided**: it gets the
   mark ◉ and `F3` goes past it. The line above the list counts down, for example *Red: 7 → 2 open · 5
   decided*, and says **All decisions made** when none is left. Undo makes the row open again.
-- **Only red and yellow** adds the rows for a quick look.
+- **To check** shows the red and yellow rows and the rows you changed.
 - Click a row: both chromatograms below show that substance, A upwards and B downwards, and beside them the
   two spectra, mirrored the same way.
 

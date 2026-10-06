@@ -1,7 +1,7 @@
 """Double determination at a glance.
 
 Pick determination A and B (the partner is suggested from the run names),
-press *Compare*: summary cards, a verdict per substance in plain language and
+press *Compare*: chips counting the colours, a verdict per substance in plain language and
 a mirror plot (A up, B down) show whether the two determinations agree. The
 difference limit is the report parameter ``duplicate_max_reldiff``, so what
 is flagged here is exactly what the report flags. Choosing A and B keeps the
@@ -17,7 +17,7 @@ With the feature pairing (``gcws.features``, the default) *Compare* pairs the pe
 by retention time and spectrum, fills gaps and sets one name per substance
 automatically (one undo step), and every row gets a traffic light: green is
 taken over, yellow was made consistent automatically, red needs the analyst.
-"Only red" and F3 (next red) lead through the exceptions; the right-click menu
+The chips filter by colour and F3 (next open red) leads through the exceptions; the right-click menu
 chooses a candidate name, removes a gap fill or takes over harmonised
 boundaries.
 """
@@ -30,7 +30,7 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QTimer, Qt, Signal as QtSignal
 from PySide6.QtGui import QBrush, QColor, QKeySequence, QShortcut
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame,
+from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QFileDialog,
                                QHBoxLayout, QHeaderView, QLabel, QMenu, QPushButton, QSplitter,
                                QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 
@@ -39,6 +39,7 @@ from gcws.quant import duplicate_view as DV
 from gcws.ui import theme, workers
 from gcws.ui.icons import color_chip
 from gcws.ui.widgets.cell_marks import EDITED_ROLE, EditedDelegate
+from gcws.ui.widgets.chips import Chip, ElidedLabel
 
 #: SNIP window (min) of the baseline removed from the mirror plot's traces: wider than any peak
 BASELINE_WINDOW = 1.0
@@ -54,8 +55,14 @@ OPEN_ROLE = Qt.UserRole + 1
 C_ICON, C_REPORT, C_RT, C_NAME, C_CAS, C_A1, C_A2, C_C1, C_C2, C_MEAN, C_DIFF, C_VERDICT, C_NOTES, C_COMMENT = range(14)
 #: feature pairing only (appended, so the columns above keep their places)
 C_FEATURE, C_SIM, C_HIT_A, C_HIT_B = range(14, 18)
-LIGHT_TEXT = {"green": "green: taken over", "yellow": "yellow: made consistent", "red": "red: your decision",
-              "grey": "grey: not reported"}
+#: the filter chips: key -> (label, level, tooltip)
+FILTERS = {"all": ("All", "info", "Every substance"),
+           "check": ("To check", "accent", "Red and yellow rows and the rows you changed"),
+           "red": ("Red", "bad", "Your decision: found in one determination only, spectra differ, difference too "
+                                 "large. F3: next open red row."),
+           "yellow": ("Yellow", "warn", "Made consistent automatically: a quick look"),
+           "green": ("Green", "ok", "Confirmed in both determinations"),
+           "grey": ("Grey", "neutral", "Not reported anyway: below the reporting limit or at blank level")}
 FIELD_OF = {C_REPORT: "report", C_NAME: "name", C_CAS: "cas", C_A1: "a1", C_A2: "a2", C_C1: "c1", C_C2: "c2",
             C_MEAN: "mean", C_COMMENT: "comment"}
 
@@ -65,26 +72,6 @@ class _AbsAxis(pg.AxisItem):
 
     def tickStrings(self, values, scale, spacing):
         return super().tickStrings([abs(v) for v in values], scale, spacing)
-
-
-class _Card(QFrame):
-    def __init__(self, caption: str, level: str):
-        super().__init__()
-        self.setObjectName("card")
-        self.setProperty("level", level)
-        self.value = QLabel("–")
-        self.value.setStyleSheet(f"font-size:16pt; font-weight:600; color:{theme.status_color(level).name()};")
-        cap = QLabel(caption)
-        cap.setObjectName("hint")
-        cap.setWordWrap(True)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(10, 6, 10, 6)
-        lay.setSpacing(0)
-        lay.addWidget(self.value)
-        lay.addWidget(cap)
-
-    def set(self, text):
-        self.value.setText(str(text))
 
 
 class DuplicatePage(QWidget):
@@ -125,15 +112,12 @@ class DuplicatePage(QWidget):
         more.setText("3+ determinations…")
         more.setToolTip("Triplicates and more: the Groups (N-fold) tab")
         more.clicked.connect(self._to_groups_tab)
+        # Compare and Report² first: they stay in view in a narrow dock (choosing A or B compares anyway)
         pick = QHBoxLayout()
-        for w in (QLabel("A"), self.a, swap, QLabel("B"), self.b):
+        for w in (self.b_compare, self.b_report2, QLabel("A"), self.a, swap, QLabel("B"), self.b):
             pick.addWidget(w)
         pick.addStretch(1)
-        actions = QHBoxLayout()
-        actions.addWidget(self.b_compare)
-        actions.addWidget(self.b_report2)
-        actions.addStretch(1)
-        actions.addWidget(more)
+        pick.addWidget(more)
 
         self.limit = QDoubleSpinBox()
         self.limit.setRange(0.0, 200.0)
@@ -142,39 +126,30 @@ class DuplicatePage(QWidget):
         self.limit.setToolTip("Maximum relative difference |A−B| / mean. This is the report parameter "
                               "'Duplicate difference limit': changing it changes the report too.")
         self.limit.editingFinished.connect(self._limit_changed)
-        self.only_problems = QCheckBox("Only red and yellow")
-        self.only_problems.setToolTip("Only the substances that need attention (and those changed by the analyst)")
-        self.only_problems.toggled.connect(lambda *_: self._fill_table())
-        self.only_red = QCheckBox("Only red")
-        self.only_red.setToolTip("Only what the analyst has to decide. F3: next red row")
-        self.only_red.toggled.connect(lambda *_: self._fill_table())
         self.b_settings = QToolButton()
         self.b_settings.setText("Settings…")
         self.b_settings.setToolTip("Pairing (features or classic), gap filling, consensus name")
         self.b_settings.clicked.connect(self.edit_settings)
+        # the chips count the rows of each colour and filter the list (clicked again: all rows)
+        self.filter = "all"
+        self.counts: dict[str, int] = {}
+        self.chips: dict[str, Chip] = {}
         lim = QHBoxLayout()
+        lim.setSpacing(4)
+        for key, (label, level, tip) in FILTERS.items():
+            chip = Chip()
+            chip.setToolTip(tip)
+            chip.clicked.connect(lambda k=key: self.set_filter(k))
+            theme.set_chip(chip, label, level)
+            self.chips[key] = chip
+            lim.addWidget(chip)
+        lim.addStretch(1)
         lim.addWidget(QLabel("Accept a difference up to"))
         lim.addWidget(self.limit)
         lim.addWidget(theme.hint("(report parameter)", False))
-        lim.addStretch(1)
-        lim.addWidget(self.only_problems)
-        lim.addWidget(self.only_red)
         lim.addWidget(self.b_settings)
 
-        self.cards = {
-            "confirmed": _Card("confirmed in both", "ok"),
-            "deviating": _Card("difference above the limit", "warn"),
-            "only_a": _Card("only in A (artefact)", "bad"),
-            "only_b": _Card("only in B (artefact)", "bad"),
-            "conflicts": _Card("identification differs", "bad"),
-            "mean": _Card("mean difference", "accent"),
-        }
-        cards = QHBoxLayout()
-        cards.setSpacing(6)
-        for c in self.cards.values():
-            cards.addWidget(c, 1)
-        self.banner = QLabel()
-        self.banner.setWordWrap(True)
+        self.banner = ElidedLabel()               # one line; the whole text is its tooltip
         self.banner.setObjectName("chip")
 
         from gcws.ui.widgets.sheet_table import SheetTable
@@ -273,11 +248,18 @@ class DuplicatePage(QWidget):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(4, 4, 4, 4)
         lay.setSpacing(6)
+        self.edit_note = theme.hint("", False)
+        keys = QToolButton()
+        keys.setText("?")
+        keys.setAutoRaise(True)
+        keys.setToolTip(KEYS_NOTE)
+        status = QHBoxLayout()
+        status.addWidget(self.banner, 1)
+        status.addWidget(self.edit_note)
+        status.addWidget(keys)
         lay.addLayout(pick)
-        lay.addLayout(actions)
         lay.addLayout(lim)
-        lay.addLayout(cards)
-        lay.addWidget(self.banner)
+        lay.addLayout(status)
         lay.addWidget(split, 1)
         lay.addLayout(buttons)
 
@@ -286,8 +268,6 @@ class DuplicatePage(QWidget):
         ws.runChanged.connect(lambda *_: self.refresh_choices())
         ws.quantChanged.connect(self._quant_changed)
         ws.replicatesChanged.connect(self._reapply)
-        self.edit_note = theme.hint(KEYS_NOTE, True)
-        lay.insertWidget(lay.indexOf(split), self.edit_note)
         self.refresh_choices()
 
     # -- choices ---------------------------------------------------------------------
@@ -506,10 +486,12 @@ class DuplicatePage(QWidget):
     def _update_report_note(self):
         n = sum(1 for r in self.rows if r.get("report"))
         changed = sum(1 for r in self.rows if r.get("edited"))
-        text = f"{n} of {len(self.rows)} substances go into the report"
+        text = f"{n} of {len(self.rows)} in the report"
         if changed:
-            text += f"; {changed} changed by the analyst"
-        self.edit_note.setText(text + ". " + KEYS_NOTE)
+            text += f" · {changed} changed"
+        self.edit_note.setText(text)
+        self.edit_note.setToolTip(f"{n} of {len(self.rows)} substances go into the report"
+                                  + (f"; {changed} changed by the analyst" if changed else ""))
 
     def _names(self) -> str:
         return " / ".join(self.ws.runs[m].name for m in self.members if m in self.ws.runs)
@@ -722,8 +704,7 @@ class DuplicatePage(QWidget):
         self.rows, self.verdicts = rows, verdicts
         labels = self.labels()
         if problems:
-            for c in self.cards.values():
-                c.set("–")
+            self._update_chips()
             self.banner.setText("Cannot compare yet: " + "; ".join(problems))
             self.banner.setProperty("level", "warn")
         elif rows and rows[0].get("light"):
@@ -736,15 +717,9 @@ class DuplicatePage(QWidget):
         self._draw_mirror()
 
     def _show_summary(self, rows, labels):
-        """Cards and banner of the classic pairing."""
-        self._card_captions(labels)
+        """Chips and status line of the classic pairing."""
         s = DV.summarize(rows, self.verdicts, DV.limits(self.ws)[0], labels)
-        self.cards["confirmed"].set(s.confirmed)
-        self.cards["deviating"].set(s.deviating)
-        self.cards["only_a"].set(s.only_a)
-        self.cards["only_b"].set(s.only_b)
-        self.cards["conflicts"].set(s.conflicts)
-        self.cards["mean"].set("–" if s.mean_reldiff is None else f"{s.mean_reldiff:.1f} %")
+        self._update_chips()
         if len(self.members) != 2:
             self.banner.setText("Single determination: choose a partner B to compare.")
             self.banner.setProperty("level", "neutral")
@@ -755,6 +730,8 @@ class DuplicatePage(QWidget):
             level, text = "ok", f"All decisions made ({n_decided} red decided by you): preview the report. " + text
         elif n_decided:
             text = f"Red: {n_open + n_decided} → {n_open} open · {n_decided} decided. " + text
+        if s.mean_reldiff is not None:
+            text += f" Mean difference {s.mean_reldiff:.1f} %."
         self.banner.setText(("✔  " if level == "ok" else "⚠  ") + text)
         self.banner.setProperty("level", level)
 
@@ -764,28 +741,45 @@ class DuplicatePage(QWidget):
         decided = sum(1 for r in red if r.get("decided"))
         return len(red) - decided, decided
 
-    def _card_captions(self, labels, lights: bool = False):
-        caps = ({"confirmed": LIGHT_TEXT["green"], "deviating": LIGHT_TEXT["yellow"], "only_a": LIGHT_TEXT["red"],
-                 "only_b": "of them: found in one only", "conflicts": LIGHT_TEXT["grey"], "mean": "mean difference"}
-                if lights else
-                {"confirmed": "confirmed in both", "deviating": "difference above the limit",
-                 "only_a": f"only in {labels[0]} (artefact)", "only_b": f"only in {labels[1]} (artefact)",
-                 "conflicts": "identification differs", "mean": "mean difference"})
-        for k, text in caps.items():
-            self.cards[k].findChild(QLabel, "hint").setText(text)
+    def _update_chips(self):
+        """Count the rows of each colour on the chips; the chip of the current filter is marked."""
+        lights = [DV.light_of(r, v) for r, v in zip(self.rows, self.verdicts)]
+        n = {key: sum(1 for r, v, lt in zip(self.rows, self.verdicts, lights) if self._passes(key, r, v, lt))
+             for key in FILTERS}
+        self.counts = n
+        n_open, n_decided = self.decision_counts()
+        for key, (label, level, tip) in FILTERS.items():
+            text = f"{label} {n[key]}"
+            if key == "red" and n_decided:
+                text += f" · {n_open} open"
+            theme.set_chip(self.chips[key], text, level)
+            self.chips[key].setProperty("selected", key == self.filter)
+            theme._repolish(self.chips[key])
+        lone = sum(1 for r, lt in zip(self.rows, lights) if lt == "red"
+                   and str(r.get("status", "")).startswith("Artefact"))
+        self.chips["red"].setToolTip(FILTERS["red"][2] + (f" {lone} of them found in one determination only."
+                                                          if lone else ""))
+
+    @staticmethod
+    def _passes(key: str, row: dict, v, light: str | None = None) -> bool:
+        light = light or DV.light_of(row, v)
+        if key == "all":
+            return True
+        if key == "check":
+            return light in ("red", "yellow") or bool(row.get("edited"))
+        return light == key
+
+    def set_filter(self, key: str):
+        """Show only the rows of one chip; the chip clicked again shows all rows."""
+        self.filter = "all" if key == self.filter or key not in FILTERS else key
+        self._update_chips()
+        self._fill_table()
 
     def _show_lights(self, rows):
-        """Cards and banner of the feature pairing: how many rows are green, yellow, red, grey."""
-        self._card_captions(self.labels(), lights=True)
+        """Chips and status line of the feature pairing: how many rows are green, yellow, red, grey."""
         n = {c: sum(1 for r in rows if r.get("light") == c) for c in ("green", "yellow", "red", "grey")}
-        lone = sum(1 for r in rows if r.get("light") == "red" and str(r.get("status", "")).startswith("Artefact"))
         diffs = [r["reldiff"] for r in rows if r.get("reldiff") is not None and r.get("light") != "grey"]
-        self.cards["confirmed"].set(n["green"])
-        self.cards["deviating"].set(n["yellow"])
-        self.cards["only_a"].set(n["red"])
-        self.cards["only_b"].set(lone)
-        self.cards["conflicts"].set(n["grey"])
-        self.cards["mean"].set(f"{sum(diffs) / len(diffs):.1f} %" if diffs else "–")
+        self._update_chips()
         notes = list(getattr(self.table_features, "notes", []) or [])
         auto = sum(1 for r in rows if r.get("gapfill"))
         n_open, n_decided = self.decision_counts()
@@ -809,6 +803,8 @@ class DuplicatePage(QWidget):
             text, level = f"Double determination consistent: {n['green']} substances confirmed.", "ok"
         if auto:
             text += f" {auto} gap fill(s)."
+        if diffs:
+            text += f" Mean difference {sum(diffs) / len(diffs):.1f} %."
         drift = [x for x in notes if "drift" in x]
         if drift:
             text += " " + "; ".join(drift) + "."
@@ -848,9 +844,7 @@ class DuplicatePage(QWidget):
         self.table.setRowCount(0)
         editable = set(FIELD_OF) - {C_REPORT}
         for k, (row, v) in enumerate(zip(self.rows, self.verdicts)):
-            if self.only_problems.isChecked() and v.level in ("ok", "neutral") and not row.get("edited"):
-                continue
-            if self.only_red.isChecked() and v.level != "bad":
+            if not self._passes(self.filter, row, v):
                 continue
             r = self.table.rowCount()
             self.table.insertRow(r)

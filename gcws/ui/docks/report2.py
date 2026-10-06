@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QC
 
 from gcws.automation import journal as J
 from gcws.ui import theme
+from gcws.ui.widgets.chips import Chip as _Chip
 
 PERIODS = {"all": ("All", None), "today": ("Today", 1), "week": ("7 days", 7), "month": ("30 days", 30),
            "year": ("12 months", 365)}
@@ -131,21 +132,6 @@ class _BatchBar(QStyledItemDelegate):
         painter.drawText(tr, Qt.AlignVCenter | Qt.AlignLeft, opt.fontMetrics.elidedText(text, Qt.ElideRight,
                                                                                          tr.width()))
         painter.restore()
-
-
-class _Chip(QLabel):
-    """A status chip that filters the list when clicked."""
-    clicked = Signal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setObjectName("chip")
-        self.setCursor(Qt.PointingHandCursor)
-
-    def mousePressEvent(self, ev):
-        if ev.button() == Qt.LeftButton:
-            self.clicked.emit()
-        super().mousePressEvent(ev)
 
 
 class Report2Dock(QWidget):

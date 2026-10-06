@@ -15,10 +15,13 @@ from gcws.ui import theme
 from gcws.ui.undo import ValueCommand
 
 
-def _scrolled(widget: QWidget) -> QScrollArea:
-    """Wrap a page so the dock can be made narrow (the page scrolls instead)."""
+def _scrolled(widget: QWidget, vertical: bool = True) -> QScrollArea:
+    """Wrap a page so the dock can be made narrow (the page scrolls instead). ``vertical=False``:
+    only sideways, so a page with its own table and plots fills the height and never scrolls twice."""
     area = QScrollArea()
     area.setWidgetResizable(True)
+    if not vertical:
+        area.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
     area.setFrameShape(QScrollArea.NoFrame)
     area.setWidget(widget)
     return area
@@ -103,7 +106,7 @@ class ReplicatesDock(QWidget):
         gl.setContentsMargins(2, 2, 2, 2)
         gl.addWidget(split)
         self.tabs = QTabWidget()
-        self.tabs.addTab(_scrolled(self.duplicate), "Double determination")
+        self.tabs.addTab(_scrolled(self.duplicate, vertical=False), "Double determination")
         self.tabs.addTab(_scrolled(groups_page), "Groups (N-fold)")
         self.tabs.currentChanged.connect(lambda i: self.duplicate.compare() if i == 0 else self.refresh_sheet())
         lay = QVBoxLayout(self)

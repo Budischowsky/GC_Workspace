@@ -230,15 +230,18 @@ Two tabs. Described in [Double determination](wf-double.md).
 | **Compare** | Pairs the two determinations and fills the list. |
 | **Load from Report²…** | Switches to another processed A/B sample visible in Report², grouped by batch. Changes to the current pair are saved first. The empty menu says **No processed A/B pairs under the current Report² filters**. |
 | **3+ determinations…** | Goes to the **Groups (N-fold)** tab. |
+| **All**, **To check**, **Red**, **Yellow**, **Green**, **Grey** | Chips that count the substances of each colour. A click shows only those rows, a second click all rows again. **To check** is red and yellow plus the rows you changed. |
 | **Accept a difference up to** | The difference limit in percent (a report parameter). |
-| **Only red and yellow** | Shows only the substances that need attention. |
-| **Only red** | Shows only what you have to decide. |
+| **?** | The keys of the list (Enter, Delete, F2, Ctrl+C / Ctrl+V, Ctrl+D). |
 | **Settings…** | Pairing, gap filling, consensus name. |
 | **NIAS report - preview** | The NIAS report of this pair. |
 | **Harmonise boundaries** | Takes over every proposed integration boundary. Shown when there are proposals. |
 | **Reset row** | Undoes your changes of the selected substance. |
 | **Reset all** | Undoes every change made in this double determination. |
 | **Export...** | Writes the list as a worksheet. |
+
+The line under the chips sums up the comparison in one line (the whole text is its tooltip); beside it,
+how many substances go into the report and how many you changed.
 
 Below the list: the two chromatograms of the selected substance, A upwards and B downwards, and the two
 spectra, mirrored the same way.
