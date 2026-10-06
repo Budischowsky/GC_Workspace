@@ -336,3 +336,61 @@ def test_tabbed_panels_show_a_slim_bar(qtbot, win):
     assert props.sizeHint().height() > normal
     win.docks["props"].setFloating(False)
     win.apply_preset("Chromatogram top")
+
+
+def test_layout_menu_current_reset_update_and_confirmations(qtbot, win, monkeypatch):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication, QInputDialog, QMessageBox
+    from gcws.ui.layout import presets
+    win.apply_preset("Review")
+    win._update_layout_menu()
+    assert win.preset_actions["Review"].isChecked() and not win.preset_actions["Chromatogram top"].isChecked()
+    assert win.a_reset_layout.isEnabled() and not win.a_update_layout.isEnabled()
+    # reset puts a moved panel back
+    win.addDockWidget(Qt.LeftDockWidgetArea, win.docks["replicates"])
+    win.reset_layout()
+    assert win.docks["replicates"] in win.tabifiedDockWidgets(win.docks["table"])
+    # save: asks only when the name exists; "No" keeps the old one
+    asked = []
+    with monkeypatch.context() as mp:
+        mp.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("mine", True)))
+        mp.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: asked.append(1) or QMessageBox.No))
+        win.save_layout()
+        assert asked == [] and presets.current() == ("saved", "mine")
+        win.apply_preset("Integration")
+        win.save_layout()
+        assert asked == [1] and presets.current() == ("preset", "Integration")
+    win.restore_saved_layout("mine")
+    win._update_layout_menu()
+    win._fill_layouts()
+    assert win.a_update_layout.isEnabled() and not any(a.isChecked() for a in win.preset_actions.values())
+    assert [a.isChecked() for a in win.saved_layouts_menu.actions()] == [True]
+    win.update_layout()
+    # delete: "No" keeps it, "Yes" removes it and the tick
+    win.delete_saved_layout("mine")
+    assert "mine" in presets.saved_layouts()
+    with monkeypatch.context() as mp:
+        mp.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.Yes))
+        win.delete_saved_layout("mine")
+    assert "mine" not in presets.saved_layouts() and presets.current() is None
+    win._update_layout_menu()
+    assert not win.a_reset_layout.isEnabled()
+    win.apply_preset("Chromatogram top")
+
+
+def test_lock_and_docking_suggestion_are_remembered(qtbot, win):
+    from PySide6.QtWidgets import QDockWidget
+    from gcws.ui.main_window import MainWindow
+    win.a_lock_panels.setChecked(True)
+    win.a_suggest_docking.setChecked(False)
+    other = MainWindow()
+    qtbot.addWidget(other)
+    try:
+        assert other.a_lock_panels.isChecked() and not other.a_suggest_docking.isChecked()
+        assert not other.overlay.enabled
+        assert not other.docks["table"].features() & QDockWidget.DockWidgetMovable
+    finally:
+        other.a_lock_panels.setChecked(False)
+        other.a_suggest_docking.setChecked(True)
+        other.close()
+    win.a_lock_panels.setChecked(False)

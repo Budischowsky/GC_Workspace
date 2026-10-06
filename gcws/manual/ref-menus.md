@@ -157,13 +157,17 @@ See [Unattended processing](wf-automation.md).
 | **Integration** | | The chromatograms with the integration method panel. |
 | **Review** | | Chromatograms, table, spectrum and replicates; the folder tree hidden. |
 | **Dual monitor - table detached** | | Chromatograms here; peak table and spectrum on the second screen. |
-| **Save layout...** | | Stores the present arrangement under a name. |
+| **Reset layout** | | Arranges the panels again as in the ticked layout, after you moved them. |
+| **Save layout...** | | Stores the present arrangement under a name. An existing name is replaced only after you confirm. |
+| **Update saved layout** | | Stores the present arrangement under the ticked saved layout, without asking for a name. |
 | **Saved layouts** | | Applies one of your stored arrangements. |
-| **Delete saved layout** | | Removes one. |
-| **Suggest docking position when dragging panels** | | Shows a band where a dragged panel will dock. |
-| **Lock panels** | | Fixes the panels so they cannot be moved by accident. |
+| **Delete saved layout** | | Removes one, after you confirm. |
+| **Suggest docking position when dragging panels** | | Shows a band where a dragged panel will dock. Remembered. |
+| **Lock panels** | | Fixes the panels so they cannot be moved by accident. Remembered. |
 | **Light Mode**, **Dark Mode**, **Dark Mode - Neon** | | The look of the program. |
 | **Next theme** | `Ctrl+Shift+D` | Steps to the next look. |
+
+The layout you chose last, a preset or a saved one, is ticked.
 
 In every layout, Quantification, Replicates / results, Automation and Report² are tabs beside the peak table,
 where they have room; Integration method, Properties and Audit trail are tabs beside Folders.

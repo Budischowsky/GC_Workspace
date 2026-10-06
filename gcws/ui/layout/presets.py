@@ -165,3 +165,24 @@ def restore_layout(win, name: str) -> bool:
 def delete_layout(name: str) -> None:
     s = QSettings()
     s.remove(f"layouts/{name}")
+    if current() == ("saved", name):
+        set_current(None, "")
+
+
+def current() -> tuple[str, str] | None:
+    """The layout chosen last: ("preset" | "saved", name), or None when it no longer exists."""
+    s = QSettings()
+    kind, name = s.value("layout/current_kind", "", type=str), s.value("layout/current_name", "", type=str)
+    if (kind == "preset" and name in PRESETS) or (kind == "saved" and name in saved_layouts()):
+        return kind, name
+    return None
+
+
+def set_current(kind: str | None, name: str) -> None:
+    s = QSettings()
+    if kind is None:
+        s.remove("layout/current_kind")
+        s.remove("layout/current_name")
+    else:
+        s.setValue("layout/current_kind", kind)
+        s.setValue("layout/current_name", name)

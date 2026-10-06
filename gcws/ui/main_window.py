@@ -405,23 +405,37 @@ class MainWindow(QMainWindow):
         m.addAction("Stop the watcher", self.automation.stop_watcher)
 
         m = mb.addMenu("&Layout")
+        self.layout_menu = m
+        m.aboutToShow.connect(self._update_layout_menu)
+        self.preset_actions = {}
         for name, tip in presets.PRESETS.items():
             a = m.addAction(name, lambda n=name: self.apply_preset(n))
             a.setStatusTip(tip)
+            a.setCheckable(True)
+            self.preset_actions[name] = a
         m.addSeparator()
+        self.a_reset_layout = m.addAction("Reset layout", self.reset_layout)
+        self.a_reset_layout.setStatusTip("Arranges the panels again as in the ticked layout")
         m.addAction("Save layout...", self.save_layout)
+        self.a_update_layout = m.addAction("Update saved layout", self.update_layout)
+        self.a_update_layout.setStatusTip("Stores the present arrangement under the ticked saved layout")
         self.saved_layouts_menu = m.addMenu("Saved layouts")
         self.saved_layouts_menu.aboutToShow.connect(self._fill_layouts)
         self.delete_layouts_menu = m.addMenu("Delete saved layout")
         self.delete_layouts_menu.aboutToShow.connect(self._fill_delete_layouts)
         m.addSeparator()
-        a = m.addAction("Suggest docking position when dragging panels")
+        s = QSettings()
+        a = self.a_suggest_docking = m.addAction("Suggest docking position when dragging panels")
         a.setCheckable(True)
-        a.setChecked(True)
-        a.toggled.connect(lambda on: setattr(self.overlay, "enabled", on))
-        a = m.addAction("Lock panels")
+        a.setChecked(s.value("layout/suggest_docking", True, type=bool))
+        self.overlay.enabled = a.isChecked()
+        a.toggled.connect(lambda on: (setattr(self.overlay, "enabled", on),
+                                      QSettings().setValue("layout/suggest_docking", on)))
+        a = self.a_lock_panels = m.addAction("Lock panels")
         a.setCheckable(True)
-        a.toggled.connect(self._lock)
+        a.setChecked(s.value("layout/locked", False, type=bool))
+        self._lock(a.isChecked())
+        a.toggled.connect(lambda on: (self._lock(on), QSettings().setValue("layout/locked", on)))
         m.addSeparator()
         from gcws.ui import theme
         self.theme_group = QActionGroup(self)          # exclusive: one look at a time
@@ -1865,26 +1879,69 @@ class MainWindow(QMainWindow):
 
     def save_layout(self):
         name, ok = QInputDialog.getText(self, "Save layout", "Name:")
-        if ok and name.strip():
-            self.restore_maximized()
-            presets.save_layout(self, name.strip())
-            self.statusBar().showMessage(f"Layout '{name.strip()}' saved", 4000)
+        name = name.strip()
+        if not ok or not name:
+            return
+        if name in presets.saved_layouts() and QMessageBox.question(
+                self, "Save layout", f"Replace the saved layout '{name}'?") != QMessageBox.Yes:
+            return
+        self.restore_maximized()
+        presets.save_layout(self, name)
+        presets.set_current("saved", name)
+        self.statusBar().showMessage(f"Layout '{name}' saved", 4000)
+
+    def update_layout(self):
+        cur = presets.current()
+        if cur is None or cur[0] != "saved":
+            return
+        self.restore_maximized()
+        presets.save_layout(self, cur[1])
+        self.statusBar().showMessage(f"Layout '{cur[1]}' updated", 4000)
+
+    def reset_layout(self):
+        cur = presets.current()
+        if cur is None:
+            return
+        if cur[0] == "preset":
+            self.apply_preset(cur[1])
+        else:
+            self.restore_saved_layout(cur[1])
+
+    def restore_saved_layout(self, name):
+        self.restore_maximized()
+        if presets.restore_layout(self, name):
+            presets.set_current("saved", name)
+
+    def delete_saved_layout(self, name):
+        if QMessageBox.question(self, "Delete saved layout",
+                                f"Delete the saved layout '{name}'?") == QMessageBox.Yes:
+            presets.delete_layout(name)
+
+    def _update_layout_menu(self):
+        cur = presets.current()
+        for name, a in self.preset_actions.items():
+            a.setChecked(cur == ("preset", name))
+        self.a_reset_layout.setEnabled(cur is not None)
+        self.a_update_layout.setEnabled(cur is not None and cur[0] == "saved")
 
     def _fill_layouts(self):
         self.saved_layouts_menu.clear()
+        cur = presets.current()
         for n in presets.saved_layouts():
-            self.saved_layouts_menu.addAction(n, lambda n=n: (self.restore_maximized(),
-                                                              presets.restore_layout(self, n)))
+            a = self.saved_layouts_menu.addAction(n, lambda n=n: self.restore_saved_layout(n))
+            a.setCheckable(True)
+            a.setChecked(cur == ("saved", n))
 
     def _fill_delete_layouts(self):
         self.delete_layouts_menu.clear()
         for n in presets.saved_layouts():
-            self.delete_layouts_menu.addAction(n, lambda n=n: presets.delete_layout(n))
+            self.delete_layouts_menu.addAction(n, lambda n=n: self.delete_saved_layout(n))
 
     def apply_preset(self, name):
         self.sidebar.expand()
         self.restore_maximized()
         presets.apply_preset(self, name)
+        presets.set_current("preset", name)
 
     def toggle_maximize(self, dock):
         """Double-click on a panel title: the panel alone fills the window (a detached one its
