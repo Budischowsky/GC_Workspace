@@ -13,6 +13,7 @@ A **workflow** is a chain of steps drawn as a chart:
 | Step | What it does |
 |---|---|
 | **Watched folder** | The folder the instrument writes into. Each batch is a folder below it. |
+| **Local copy** | Optional, between the watched folder and the method: copies every finished run to a folder on this PC, and the method works on the copy. For a watched folder on a slow network drive, see [Working from a slow network drive](wf-automation.md#working-from-a-slow-network-drive). |
 | **Method** | Processes each sample with a saved processing method: integration, library search, internal standards, blanks, quantification, double determination. |
 | **Report²** | Judges the result with rules: *accepted* or *control needed*. |
 | **Report** | Writes the report files. |
@@ -57,6 +58,13 @@ You need a processing method first: set everything up for one batch by hand and 
 | **Skip folders older than** | 14 days | Batch folders not changed for longer are not looked at (0 = all). |
 | **Also process the runs already in the folder** | off | By default only runs that arrive after watching started are processed. |
 
+**Local copy**
+
+| Setting | Default | Meaning |
+|---|---|---|
+| **Local folder** | | The folder on this PC the runs are copied to, for example `C:\GC Data`. It must not lie inside the watched folder. |
+| **Copies go to** | | Shows where a batch folder ends up: the layout below the watched folder is kept (`X:\GC\2610_A` → `C:\GC Data\2610_A`). |
+
 **Method**
 
 | Setting | Default | Meaning |
@@ -96,7 +104,32 @@ You need a processing method first: set everything up for one batch by hand and 
 
 **An arrow** (double-click it): **Report status** (accepted automatically, accepted by the analyst, control
 needed), **Files** (which file types pass), **Sample names** and **Batch folders** (name patterns). Only
-what matches every chosen condition passes. Nothing chosen = everything passes.
+what matches every chosen condition passes. Nothing chosen = everything passes. On the arrow into the
+**Local copy**, **Batch folders** chooses which batch folders are copied.
+
+### Working from a slow network drive
+
+If the instrument writes to a network drive (for example `X:`) and reading it is slow - in the home office
+over VPN, say - add a **Local copy** step. Drag **Local copy** from the list onto the chart: it is put between
+the watched folder and the method by itself, and the filters of the arrows stay on the way to the method.
+Double-click it and choose the **Local folder** on this PC.
+
+- Only the watched folder is watched. As soon as a run is finished there, it is copied to the local folder,
+  together with the files beside the runs (the sequence log). One copy runs at a time, beside the processing.
+- A sample is processed once its runs and blanks are copied; the queue says *being copied* meanwhile. The
+  method reads the copy, and the project saved with the report points to it, so **Open in GC Workspace** is
+  fast too.
+- The copies are **kept**: nothing is deleted, and files you add to a copy stay. You can open the copies
+  yourself as you would any batch. If a copy needed for **Process again** has been deleted, it is copied again
+  from the watched folder.
+- The watched folder is only read. A run that changes there after it was copied is copied again.
+- A copy that fails (the disk is full, say) is noted once in the log and tried again at the next check.
+- A workflow with a **Local copy** but no method only copies.
+
+If the watched folder cannot be reached - the network drive is not there before the VPN connects - the
+watcher notes it once in the log and looks again at every check. It goes on by itself as soon as the drive is
+back; nothing needs to be started again. The chart editor, too, only notes a watched folder it cannot reach,
+so a workflow can be edited and switched on without the VPN.
 
 ## The watcher
 
@@ -112,7 +145,8 @@ Windows tray and keeps running when GC Workspace is closed.
 | **Start with Windows** | Starts the watcher when you log on. |
 
 It processes one sample at a time, each in its own process, so that a crash or a hanging Office program cannot
-stop the watcher. The raw data are only read.
+stop the watcher. The raw data are only read. Beside the state, the Automation panel shows what the watcher is
+processing and copying.
 
 ## When a sample is processed
 
@@ -184,7 +218,8 @@ decide** and **Yellow - to check** (hover for their names); the details are in *
 | **Copy sample name** | The names of the selected samples. |
 | **Delete...** | Hides the report in Report². Nothing on disk is deleted - reports, project and delivered files stay - and a sample still in the queue is removed from it. **Restore** (with **Show deleted reports**) brings it back. |
 
-**Right-click a batch**: **Open batch report**, **Open batch folder**, **Accept all "control needed"...**,
+**Right-click a batch**: **Open batch report**, **Open batch folder**, **Open the local copy** (with a
+**Local copy** step), **Accept all "control needed"...**,
 **Reject batch** (with a reason), **Process batch again...**, **Reopen** (in the archive), **Delete batch...**
 (hides the batch with all its reports; the watcher no longer looks at the folder) and **Restore batch**.
 

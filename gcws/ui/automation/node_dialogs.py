@@ -80,6 +80,20 @@ class NodeDialog(QDialog):
             lay.addWidget(theme.hint("A run counts as finished when it did not change over the checks, is old "
                                      "enough and the instrument moved on (next run started, checksum.xml "
                                      "written, sequence completed) or the folder has been quiet."))
+        elif t == "copy":
+            self.w["folder"] = QLineEdit(p("folder") or "")
+            form.addRow("Local folder", _folder_row(self.w["folder"], self))
+            self.where = QLabel()
+            self.where.setWordWrap(True)
+            form.addRow("Copies go to", self.where)
+            show = lambda: self.where.setText(
+                f"{source_folder or '(watched folder)'}\\<batch folder>  →  "
+                f"{self.w['folder'].text().strip() or '(local folder)'}\\<batch folder>")
+            self.w["folder"].textChanged.connect(show)
+            show()
+            lay.addWidget(theme.hint("Every finished run is copied here, with the files beside it (sequence log), "
+                                     "as soon as it is finished; the method then reads the copy. The copies are "
+                                     "kept, nothing is deleted, and the watched folder is only read."))
         elif t == "method":
             self.w["method"] = QComboBox()
             self.w["method"].setEditable(False)

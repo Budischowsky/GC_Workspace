@@ -12,7 +12,8 @@ from gcws.ui import theme
 W_NODE, H_NODE = 185.0, 88.0
 PORT = 7.0
 #: colour of each step type (theme keys)
-TYPE_COLOR = {"source": "INFO", "method": "ACCENT", "report2": "WARN", "report": "OK", "folder": "NEUTRAL"}
+TYPE_COLOR = {"source": "INFO", "copy": "INFO", "method": "ACCENT", "report2": "WARN", "report": "OK",
+              "folder": "NEUTRAL"}
 
 
 def type_color(kind: str) -> QColor:

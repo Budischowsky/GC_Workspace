@@ -181,6 +181,12 @@ class Workflow:
                 e.src = cp.id
             if moved:
                 self.connect(src.id, cp.id)
+                # in line on the chart: the steps after the watched folder move one place to the right
+                step = max(200.0, min(self.node(e.dst).x for e in moved) - src.x)
+                for n in self.nodes:
+                    if n is not cp and n.x > src.x:
+                        n.x += step
+                cp.x, cp.y = src.x + step, src.y
         return cp
 
     def connect(self, src: str, dst: str, **filt) -> Edge:
@@ -476,7 +482,9 @@ def validate(wf: Workflow, *, method_names: Optional[list] = None, check_paths: 
         if not src_folder:
             err(src.id, "Choose the folder to watch.")
         elif check_paths and not os.path.isdir(src_folder):
-            err(src.id, f"The watched folder does not exist: {src_folder}")
+            # a note only: a network drive may be away for now (no VPN); the watcher waits for it
+            warn(src.id, f"The watched folder does not exist or cannot be reached now: {src_folder}. The "
+                         "watcher waits for it.")
         try:
             if float(src.p("interval_min")) < 1:
                 err(src.id, "Check the folder at most once a minute.")

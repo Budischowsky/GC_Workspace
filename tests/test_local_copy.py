@@ -76,6 +76,9 @@ def test_validation_of_the_local_copy(data):
         only.remove(e.id)
     only.connect(only.source.id, only.methods()[0].id)
     assert "only copied" in texts(only)                   # a workflow may also just copy
+    away = wf.copy()
+    away.source.params["folder"] = str(data / "offline")  # X: without the VPN: a note, it can be switched on
+    assert "cannot be reached now" in texts(away) and not W.errors(W.validate(away, method_names=["NIAS"]))
     assert not any(i.text.startswith("Connect the watched") for i in W.validate(only, method_names=["NIAS"]))
 
 
@@ -346,3 +349,55 @@ def test_copy_process_and_a_job_from_the_local_copy(samples, tmp_path, monkeypat
     assert not [n for n in H.open_project(ws, res.project) if "not found" in n]
     assert {Path(st.run.path).parent for st in ws.states()} == {local}   # the project points to C:
     assert snapshot(batch) == before                       # the watched folder is only read
+
+
+# -- the chart editor and Report² -------------------------------------------------------------------
+
+def test_editor_puts_the_local_copy_in_place(qtbot, data):
+    from gcws.automation import templates
+    from gcws.automation import workflow as W
+    from gcws.core import proc_method as PM
+    from gcws.ui.automation.editor import WorkflowEditor
+    from gcws.ui.automation.items import EdgeItem
+    from gcws.ui.automation.node_dialogs import NodeDialog
+    PM.save({"format": "gcws-processing-method", "version": 1, "name": "NIAS",
+             "sections": {"quant": {"mode": "nias_mgkg"}, "migration": {"simulant": "x"}}})
+    watch = data / "watch"
+    watch.mkdir()
+    ed = WorkflowEditor(templates.make("simple", "Lab", source=str(watch), method="NIAS", folder_a=str(data / "A")))
+    qtbot.addWidget(ed)
+    titles = [ed.palette.item(i).text() for i in range(ed.palette.count())]
+    assert titles[:3] == ["Watched folder", "Local copy", "Method"]
+    x_method = ed.wf.methods()[0].x
+    cp = ed.add_node("copy", 160, 300, folder=str(data / "local"))
+    m = ed.wf.methods()[0]
+    assert ed.wf.feed(m.id)[0].id == cp.id
+    assert (cp.x, cp.y) == (x_method, ed.wf.source.y) and m.x > cp.x     # in line, the rest moved right
+    assert sum(isinstance(i, EdgeItem) for i in ed.scene.items()) == 4
+    assert not W.errors(ed.validate())
+    ed.undo.undo()                                         # one step: the step and its arrows
+    assert ed.wf.copy_step is None and ed.wf.source_edge(m.id) is not None
+    ed.undo.redo()
+    dlg = NodeDialog(ed.wf.copy_step, source_folder=r"X:\GC")
+    qtbot.addWidget(dlg)
+    dlg.w["folder"].setText(r"C:\GC Data")
+    assert dlg.values()["folder"] == r"C:\GC Data"
+    assert dlg.where.text() == r"X:\GC\<batch folder>  →  C:\GC Data\<batch folder>"
+    ed.dirty = False                                       # closing must not ask to save
+
+
+def test_report2_opens_the_local_copy_of_a_batch(qtbot, data, tmp_path, monkeypatch):
+    from test_report2_ui import _dock, _seed
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    local = tmp_path / "local" / batch.name
+    local.mkdir(parents=True)
+    jr.update_batch(jr.batch(wf.id, batch)["id"], local_folder=str(local))
+    dock = _dock(jr, monkeypatch, qtbot)
+    opened = []
+    monkeypatch.setattr(dock, "open_path", lambda p: opened.append(p))
+    top = dock.tree.topLevelItem(0)
+    menu = dock._tree_context_menu(dock.tree.visualItemRect(top).center())
+    action = next(a for a in menu.actions() if a.text() == "Open the local copy")
+    assert action.isEnabled()
+    action.trigger()
+    assert opened == [str(local)]
