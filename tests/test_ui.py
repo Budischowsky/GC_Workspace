@@ -1967,3 +1967,71 @@ def test_double_determination_delete_rows(qtbot, win, samples):
     assert not any(page.rows[k]["deleted"] for k in keys)
     assert page.filter == "all" and page.chips["deleted"].isHidden() and set(keys) <= shown()
     assert "Delete row" in dict(page.row_actions(page.rows[keys[0]]))
+
+
+def test_hs_calibration_runs_and_entered_areas(qtbot, win, samples):
+    """HS external calibration in the Quantification panel: tick the calibration run (role Standard, undoable),
+    bind its standards there, see each standard's area per calibration run; or type the areas in."""
+    import copy
+    from PySide6.QtCore import Qt
+    _load(qtbot, win, samples, ["07_", "08_", "11_"])
+    ws = win.ws
+    win.quant.mode.setCurrentIndex(win.quant.mode.findData("hs_screening"))
+    win.quant._mode_changed()
+    panel = win.quant.hs_panel
+    panel.calibration.setCurrentIndex(panel.calibration.findData("external"))
+    panel._calibration_picked()
+    assert ws.quant["hs"]["calibration"] == "external" and not panel.cal_box.isHidden()
+    sample = next(s for s in ws.states() if s.name.startswith("07_"))
+    std = next(s for s in ws.states() if s.name.startswith("08_"))
+    role = std.role
+    # no calibration run yet: the seven standards are listed all the same
+    ws.set_active(sample.id)
+    panel.refresh()
+    assert panel.bound.rowCount() == 7 and panel.bound.item(0, panel.bound.columnCount() - 1).text() == \
+        "No calibration run"
+    item = next(panel.cal_runs.item(i) for i in range(panel.cal_runs.count())
+                if panel.cal_runs.item(i).data(Qt.UserRole) == std.id)
+    item.setCheckState(Qt.Checked)
+    assert ws.runs[std.id].role == "standard"
+    # the standards: by target RT at seven TIC peaks of the calibration run
+    peaks = ws.result(std.id, "TIC").peaks
+    picks = [peaks[i] for i in range(0, len(peaks), max(1, len(peaks) // 7))][:7]
+    q = copy.deepcopy(ws.quant)
+    from gcws.quant.hs import default_defs
+    for d, p in zip(q["hs"].setdefault("istd_defs", default_defs()), picks):
+        d["target_rt"] = p.apex_rt
+    q["hs"]["rt_tolerance"] = 0.001
+    ws.push_quant("test targets", q)
+    ws.set_active(sample.id)
+    panel.refresh()
+    headers = [panel.bound.horizontalHeaderItem(c).text() for c in range(panel.bound.columnCount())]
+    assert headers == ["Code", "µg/HS", std.name, "Mean area", "Active", "Status"]
+    assert float(panel.bound.item(0, 2).text()) == pytest.approx(picks[0].area, rel=1e-5)
+    assert not panel.bind_buttons[1].isEnabled() and "Go to run" in panel.status.text()
+    panel.go_to_run()
+    assert ws.active_id == std.id and panel.bind_buttons[1].isEnabled()
+    assert ws.quant_result.samples[sample.id].mean_factor == pytest.approx(
+        7 / sum(p.area for p in picks), rel=1e-6)
+    # entered areas: switching fills them from the calibration run
+    panel.calibration.setCurrentIndex(panel.calibration.findData("manual"))
+    panel._calibration_picked()
+    cfg = ws.quant["hs"]
+    assert cfg["calibration"] == "manual" and not panel.defs.isColumnHidden(5) and panel.bind_row.isHidden()
+    assert [d["area"] for d in cfg["istd_defs"]] == pytest.approx([p.area for p in picks], rel=1e-6)
+    panel.defs.item(0, 5).setText("1000")
+    assert ws.quant["hs"]["istd_defs"][0]["area"] == 1000
+    from gcws.core import proc_method
+    method = proc_method.collect(win, "HS entered areas")["sections"]["quant"]["hs"]     # kept in a method
+    assert method["calibration"] == "manual" and method["istd_defs"][0]["area"] == 1000
+    assert ws.quant_result.samples[sample.id].mean_factor == pytest.approx(
+        7 / (1000 + sum(p.area for p in picks[1:])), rel=1e-6)
+    # the calibration run's role: unticked, it is what its name says again; Ctrl+Z on its own stack
+    panel.calibration.setCurrentIndex(panel.calibration.findData("external"))
+    panel._calibration_picked()
+    item = next(panel.cal_runs.item(i) for i in range(panel.cal_runs.count())
+                if panel.cal_runs.item(i).data(Qt.UserRole) == std.id)
+    item.setCheckState(Qt.Unchecked)
+    assert ws.runs[std.id].role == role
+    ws.runs[std.id].undo.undo()
+    assert ws.runs[std.id].role == "standard"

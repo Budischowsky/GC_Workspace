@@ -702,6 +702,7 @@ class MainWindow(QMainWindow):
         self.report2.prepare_review = self._save_report2_project
         self.replicates.report2Requested.connect(self._show_report2_pair_menu)
         self.replicates.duplicate.acceptRequested.connect(self._accept_pair)
+        self.quant.hs_panel.roleRequested.connect(self.set_role)            # HS: a calibration run ticked
         self._tool_changed("select")
 
     # -- helpers -------------------------------------------------------------

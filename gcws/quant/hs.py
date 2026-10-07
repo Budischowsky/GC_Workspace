@@ -63,9 +63,27 @@ def matched_standards(st, config):
     return result
 
 
+#: the calibration of the HS standards: in each sample, in calibration runs (role Standard), or entered
+CALIBRATIONS = ("internal", "external", "manual")
+#: what is missing when the external calibration has no calibration run
+NO_CALIBRATION_RUN = "Tick a calibration run in the HS panel (role Standard), or enter the areas"
+METHODS = {"internal": "Headspace; TIC; internal standard response",
+           "external": "Headspace; TIC; external standard (calibration runs)",
+           "manual": "Headspace; TIC; external standard (entered areas)"}
+
+
 def external(cfg) -> bool:
-    """External 1-point calibration: the standards are in the Standard runs, not in the samples."""
-    return cfg.get("calibration") == "external"
+    """External 1-point calibration (from calibration runs or entered areas): the samples hold no ISTD."""
+    return cfg.get("calibration") in ("external", "manual")
+
+
+def manual(cfg) -> bool:
+    """External calibration from the TIC areas the analyst entered (``istd_defs[i]["area"]``)."""
+    return cfg.get("calibration") == "manual"
+
+
+def calibration_mode(cfg) -> str:
+    return "manual" if manual(cfg) else "external" if external(cfg) else "internal"
 
 
 def factor(active, cfg, missing="Identify or bind every activated HS standard"):
@@ -84,29 +102,54 @@ def factor(active, cfg, missing="Identify or bind every activated HS standard"):
     return sum(amounts) / sum(areas), []
 
 
+def entered(cfg):
+    """The external calibration from entered areas: (standards, factor, problems, [])."""
+    standards, missing = [], []
+    for d in cfg.get("istd_defs", default_defs()):
+        area = d.get("area")
+        ok = area not in (None, "")
+        standards.append(dict(d, index=None, rt=None, runs=0, areas=[], area=float(area) if ok else None,
+                              status="Entered" if ok else "Enter the TIC area"))
+        if not ok and d.get("quantify", True):
+            missing.append(d["code"])
+    active = [s for s in standards if s.get("quantify", True)]
+    value, problems = factor(active, cfg, f"Enter the TIC area of {', '.join(missing)} (HS standards)")
+    return standards, value, problems, []
+
+
 def calibration(ws, cfg):
-    """Each HS standard's TIC area averaged over every Standard run: (standards, factor, problems, run names)."""
+    """The external calibration: (standards, factor, problems, run names). From calibration runs, each
+    HS standard's TIC area is averaged over every Standard run (``areas``: [(run name, area or None)]);
+    with entered areas (:func:`manual`) the definitions carry them."""
+    if manual(cfg):
+        return entered(cfg)
     runs = [st for st in ws.states() if st.role == "standard"]
-    if not runs:
-        return [], None, ["Mark at least one run as Standard for external calibration"], []
     problems, matched = [], []
     for st in runs:
         if TIC not in st.results:
             problems.append(f"Standard run {st.name} has no integrated TIC")
         else:
             matched.append((st.name, matched_standards(st, cfg)))
+    if not runs:
+        problems.append(NO_CALIBRATION_RUN)
     standards, missing = [], []
     for k, d in enumerate(cfg.get("istd_defs", default_defs())):
         found = [m[k] for _, m in matched if m[k]["index"] is not None]
         lost = [name for name, m in matched if m[k]["index"] is None]
         complete = bool(found) and not lost
         n = len(found)
-        status = f"Mean of {n} Standard run{'s' if n != 1 else ''}" if complete else             f"Not found in {', '.join(lost)}" if lost else "No Standard run with a TIC"
+        status = (f"Mean of {n} Standard run{'s' if n != 1 else ''}" if complete else
+                  f"Not found in {', '.join(lost)}" if lost else
+                  "No calibration run" if not runs else "No Standard run with a TIC")
         standards.append(dict(d, index=None, status=status, runs=n,
+                              areas=[(name, m[k]["area"] if m[k]["index"] is not None else None)
+                                     for name, m in matched],
                               rt=sum(s["rt"] for s in found) / n if complete else None,
                               area=sum(s["area"] for s in found) / n if complete else None))
         if lost and d.get("quantify", True):
             missing.append(f"Identify or bind {d['code']} in Standard run {', '.join(lost)}")
+    if not runs:
+        return standards, None, problems, []
     active = [s for s in standards if s.get("quantify", True)]
     value, more = factor(active, cfg, "; ".join(missing) or "Identify or bind every activated HS standard")
     return standards, value if not problems else None, problems + more, [st.name for st in runs]
@@ -154,7 +197,8 @@ def compute(ws):
                 # A Standard run shows its own standards (to check and bind); a sample has none of them.
                 averaged, sample.mean_factor, problems, cal_runs = cal
                 problems = list(problems)
-                sample.standards = matched_standards(st, cfg) if st.role == "standard" else averaged
+                own = st.role == "standard" and not manual(cfg)
+                sample.standards = matched_standards(st, cfg) if own else averaged
             else:
                 sample.standards = matched_standards(st, cfg)
                 active = [s for s in sample.standards if s.get("quantify", True)]
@@ -179,6 +223,7 @@ def compute(ws):
             sample.meta = dict(unit=unit, inputs=dict(inputs), source=str(st.run.path),
                                factor=sample.mean_factor, denominator=denominator,
                                calculation=calculation(cfg, cal_runs if external(cfg) else ()),
+                               method=METHODS[calibration_mode(cfg)],
                                blank_correction=cfg.get("blank_correction", True),
                                blanks=[ws.runs[b].name for b in st.blanks + st.blanks_istd if b in ws.runs])
             if problems:
@@ -229,6 +274,8 @@ def compute(ws):
 def calculation(cfg, runs=()):
     """The calculation as the report's HS calculation sheet names it."""
     text = "Mean ISTD areas" if cfg.get("use_mean_area", True) else "Single ISTD"
+    if manual(cfg):
+        return f"External 1-point calibration ({text}) from entered areas"
     if external(cfg):
         return f"External 1-point calibration ({text}) from {len(runs)} Standard run" +             ("s" if len(runs) != 1 else "") + (f": {', '.join(runs)}" if runs else "")
     return text

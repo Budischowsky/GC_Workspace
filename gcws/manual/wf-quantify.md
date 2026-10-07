@@ -126,18 +126,37 @@ response of every substance is taken to be that of the standards.
 #### External calibration
 
 When the samples contain no ISTD, the same seven standards are measured in separate calibration vials (the ISTD
-mix) - a 1-point calibration.
+mix) - a 1-point calibration. **Calibration** offers two ways.
 
-1. Set **Calibration** to **External (Standard runs)**.
-2. Give every calibration vial the role **Standard** in the sample rail.
-3. Open each Standard run and check that the seven standards are found; bind them there if needed. Binding is
-   only possible in Standard runs.
+**External: calibration runs** - the standards are measured in one or more runs loaded beside the samples:
 
-Each standard's TIC area is averaged over all Standard runs; the factor is Σ µg ÷ Σ mean areas of the activated
-standards (with one active standard: its µg ÷ its mean area). Every TIC peak of a sample is quantified as
-corrected area × factor; blank correction and the units work as above. An activated standard missing in any
-Standard run stops the calculation, and the message names the run. The HS report lists the averaged standards and
-the calibration runs.
+1. Set **Calibration** to **External: calibration runs**.
+2. Under **Calibration runs**, tick the run(s) with the calibration vial. The list shows every loaded run with its
+   role; runs that look like an ISTD mix (role Blank + ISTD) come first. A ticked run gets the role **Standard**
+   (undoable, saved with the project); unticked, it gets back the role its name suggests.
+3. **Go to run** (or a double-click in the list) shows the calibration run. Check there that the seven standards
+   are found - by target RT or name - and bind them if needed (**Bind selected TIC peak**, **Detect...**, the
+   right-click menu of a peak). Binding is only possible in a calibration run; on a sample the status line points
+   to **Go to run**.
+
+On a sample the table below shows each standard's TIC area in every calibration run, the **Mean area**, whether
+it is active and its status - before any run is ticked too, with the status *No calibration run*. Each
+standard's area is averaged over the calibration runs; the factor is Σ µg ÷ Σ mean areas of the activated
+standards (with one active standard: its µg ÷ its mean area). An activated standard missing in any calibration
+run stops the calculation, and the message names the run.
+
+**External: entered areas** - the calibration was measured before (another sequence, a control chart):
+
+1. Set **Calibration** to **External: entered areas**. The table of standards gets the column **TIC area**; when
+   calibration runs were ticked, their mean areas are filled in for a start.
+2. Type the TIC area of each activated standard (and its µg/HS). An active standard without an area stops the
+   calculation and the message names it.
+
+The factor is Σ µg ÷ Σ entered areas. The areas are part of the HS settings, so they are kept in a processing
+method and also apply to unattended processing.
+
+In both ways every TIC peak of a sample is quantified as corrected area × factor; blank correction and the units
+work as above. The HS report lists the standards and the calibration.
 
 To keep this setup, save it with **Method > Save current settings as Method...** (e.g. "HS external").
 

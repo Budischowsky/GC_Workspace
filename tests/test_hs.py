@@ -129,7 +129,7 @@ def test_external_calibration_needs_every_standard_in_every_run():
 def test_external_calibration_without_standard_run():
     ws = external_workspace()
     result = compute(ws)
-    assert result.errors["sample"] == "Mark at least one run as Standard for external calibration"
+    assert result.errors["sample"] == hs.NO_CALIBRATION_RUN
     assert result.rows["sample"][0]["conc"] is None
     ws.quant["hs"]["calibration"] = "internal"
     assert "Identify or bind" in compute(ws).errors["sample"]          # the internal mode looks in the sample
@@ -252,7 +252,7 @@ def test_hs_panel_calibration_choice(qtbot):
     panel.save_inputs()
     assert ws.quant["hs"]["calibration"] == "external"
     panel.refresh()
-    assert "Standard runs" in panel.note.text()
+    assert "calibration runs" in panel.note.text()
     assert not panel.bind_buttons[1].isEnabled()           # no run loaded: nothing to bind
     ws.project_undo.undo()
     panel.refresh()
@@ -357,3 +357,40 @@ def test_derived_tic_uses_same_quantities_once():
     ws.result = lambda rid, key: ws.runs[rid].results.get(key)
     assert Workspace.quant_rows(ws, st.id)[7]["conc"] == 2
     assert Workspace.quant_rows(ws, st.id, "FID") == {}
+
+
+def test_external_calibration_lists_the_standards_before_a_run_is_chosen():
+    ws = external_workspace()
+    standards, factor, problems, runs = hs.calibration(ws, ws.quant["hs"])
+    assert len(standards) == 7 and factor is None and runs == []
+    assert {s["status"] for s in standards} == {"No calibration run"}
+    assert problems == [hs.NO_CALIBRATION_RUN]
+
+
+def test_external_calibration_areas_per_run():
+    ws = external_workspace(80, 120)
+    standards = hs.calibration(ws, ws.quant["hs"])[0]
+    assert standards[0]["areas"] == [("Std 1", 80), ("Std 2", 120)] and standards[0]["area"] == 100
+    assert compute(ws).samples["sample"].meta["method"] == hs.METHODS["external"]
+
+
+def test_external_calibration_from_entered_areas():
+    ws = external_workspace()                                       # no calibration run at all
+    cfg = ws.quant["hs"]
+    cfg["calibration"] = "manual"
+    assert hs.external(cfg) and hs.manual(cfg)
+    for d in cfg["istd_defs"]:
+        d["area"] = 50.0
+    result = compute(ws)
+    assert not result.errors
+    sample = result.samples["sample"]
+    assert sample.mean_factor == pytest.approx(7 / 350)             # Σ 1 µg ÷ Σ entered area 50
+    assert result.rows["sample"][0]["conc"] == pytest.approx(4)      # area 200 → 4 µg/HS
+    assert sample.standards[0]["status"] == "Entered"
+    assert sample.meta["calculation"].endswith("from entered areas")
+    assert sample.meta["method"] == hs.METHODS["manual"]
+    del cfg["istd_defs"][2]["area"]
+    result = compute(ws)
+    assert "Enter the TIC area of HS3" in result.errors["sample"] and result.rows["sample"][0]["conc"] is None
+    cfg["istd_defs"][2]["quantify"] = False                          # an inactive standard needs no area
+    assert not compute(ws).errors

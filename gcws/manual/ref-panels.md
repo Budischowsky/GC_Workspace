@@ -213,10 +213,14 @@ Described task by task in [Blanks, internal standards and quantification](wf-qua
 | **Detect ISTDs...** | Finds them by name, spectrum and retention time and shows the evidence. |
 | **Learn spectrum** | Keeps the bound peak's spectrum as the standard's reference. |
 
-In the mode **HS-Screening** the panel shows instead: **Calibration** (internal standards in each sample, or
-external from the Standard runs), **Result unit**, **Use mean of activated ISTD areas**,
-**Subtract matching Blank / Blank+ISTD (larger area)**, **Sample area (dm²)**, **Sample mass (g)**, the table
-of HS standards, and **Bind selected TIC peak**, **Automatic**, **Detect...**, **Learn spectrum**.
+In the mode **HS-Screening** the panel shows instead: **Calibration** (**Internal standards in each sample**,
+**External: calibration runs** or **External: entered areas**), with external calibration runs the list
+**Calibration runs** (tick the calibration vials; they get the role Standard) and **Go to run**, **Result unit**,
+**Use mean of activated ISTD areas**, **Subtract matching Blank / Blank+ISTD (larger area)**,
+**Sample area (dm²)**, **Sample mass (g)**, the table of HS standards (with entered areas also **TIC area**), the
+standards of the active run (with calibration runs, on a sample: the area in each calibration run and the
+**Mean area**), and **Bind selected TIC peak**, **Unbind**, **Automatic**, **Detect...**, **Learn spectrum**.
+See [External calibration](wf-quantify.md#external-calibration).
 
 ## Replicates / results
 
