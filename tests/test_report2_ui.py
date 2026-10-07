@@ -208,19 +208,87 @@ def test_processed_pairs_are_nested_and_available_to_switch(qtbot, data, tmp_pat
     assert [j.id for j in dock.visible_pairs()] == [ids["S-auto"]]
 
 
-def test_edited_accept_queues_regeneration(qtbot, data, tmp_path, monkeypatch):
+class FakeLauncher:
+    """The job process of GC Workspace's LocalJobs, completed by the test."""
+
+    def __init__(self, parent=None):
+        from PySide6.QtCore import QObject, Signal
+
+        class _S(QObject):
+            finished = Signal(str, int, str)
+        self._s = _S()
+        self.finished = self._s.finished
+        self.started, self.job, self.killed = [], None, 0
+
+    def running(self):
+        return self.job is not None
+
+    def start(self, job_id, spec_path, kind="job"):
+        self.started.append((job_id, json.loads(Path(spec_path).read_text(encoding="utf-8")), kind))
+        self.job = job_id
+
+    def kill(self):
+        self.killed += 1
+        self.job = None
+
+    def complete(self, result):
+        job_id, spec, _kind = self.started[-1]
+        (Path(spec["out_dir"]) / "result.json").write_text(json.dumps(result), encoding="utf-8")
+        self.job = None
+        self.finished.emit(job_id, 0, "")
+
+
+def test_edited_accept_makes_the_report_again_here(qtbot, data, tmp_path, monkeypatch):
+    """Accepting an edited report makes it again in GC Workspace at once (no watcher needed); it stays
+    accepted and is delivered."""
+    import os
     from gcws.automation import journal as J
     wf, jr, ids, batch = _seed(data, tmp_path)
     project = tmp_path / "pair.gcws"
     project.write_text("{}")
     jr.update_job(ids["S-control"], project_path=str(project), edited=1)
+    launcher = FakeLauncher()
+    monkeypatch.setattr("gcws.automation.watcher.ProcessLauncher", lambda parent=None: launcher)
     dock = _dock(jr, monkeypatch, qtbot)
     dock.select(ids["S-control"])
     assert dock.review(True)
     job = jr.job(ids["S-control"])
-    assert job.state == J.QUEUED and job.review_pending
+    assert job.state == J.PROCESSING and job.review_pending and job.pid == os.getpid()
     assert not dock.b_undo.isVisibleTo(dock)                   # regenerating: nothing to undo
     assert _names(dock, "control") == ["S-control"] and "S-control" not in _names(dock, "waiting")
+    job_id, spec, kind = launcher.started[-1]
+    assert job_id == job.id and spec["mode"] == "rereport" and spec["project_path"] == str(project)
+    rep = wf.by_type("report")[0]
+    files = {}
+    for fmt in ("xlsx", "docx", "pdf"):
+        p = Path(spec["out_dir"]) / f"S-control_NIAS_Report.{fmt}"
+        p.write_text(fmt)
+        files[fmt] = str(p)
+    new = {"rule": "manual_check", "level": "control", "text": "new", "member": "B", "substance": "Y", "rt": 2.0}
+    launcher.complete({"state": "control", "reason": "", "files": {rep.id: files}, "project": str(project),
+                       "evidence": {}, "findings": list(job.findings) + [new], "warnings": [], "timings": {}})
+    after = jr.job(job.id)
+    assert after.state == J.ACCEPTED_MANUAL and after.revision == 2 and after.review_pending is None
+    assert "1 new finding" in after.reason and after.export_pending == 0 and after.export_state == "done"
+    assert (tmp_path / "A" / batch.name / "S-control_NIAS_Report.xlsx").is_file()
+    assert (tmp_path / "B" / batch.name / "S-control_NIAS_Report.docx").is_file()
+    assert "updated report is made and accepted" in dock.bar_text.text()
+
+
+def test_edited_report_left_when_gc_workspace_closes_goes_back_to_the_queue(qtbot, data, tmp_path, monkeypatch):
+    from gcws.automation import journal as J
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    project = tmp_path / "pair.gcws"
+    project.write_text("{}")
+    jr.update_job(ids["S-control"], project_path=str(project), edited=1)
+    launcher = FakeLauncher()
+    monkeypatch.setattr("gcws.automation.watcher.ProcessLauncher", lambda parent=None: launcher)
+    dock = _dock(jr, monkeypatch, qtbot)
+    dock.select(ids["S-control"])
+    assert dock.review(True) and jr.job(ids["S-control"]).state == J.PROCESSING
+    dock._stop_local()
+    job = jr.job(ids["S-control"])
+    assert launcher.killed == 1 and job.state == J.QUEUED and job.review_pending and job.pid is None
 
 
 def test_undo_and_next_report_needing_control(qtbot, data, tmp_path, monkeypatch):

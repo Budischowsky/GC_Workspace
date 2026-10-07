@@ -159,6 +159,7 @@ class Report2Dock(QWidget):
         self.mode = "todo"
         self.filter = "all"
         self._undo_fn: Optional[Callable[[], str]] = None
+        self._local = None                       # LocalJobs, made when first needed
         self._deliver: set = set()               # accepted here without a watcher: delivered after the undo time
         self._building = False
         self._stamp = None
@@ -345,6 +346,7 @@ class Report2Dock(QWidget):
         app = QApplication.instance()
         if app is not None:
             app.aboutToQuit.connect(self.deliver_due)
+            app.aboutToQuit.connect(self._stop_local)
         self.timer = QTimer(self)
         self.timer.setInterval(poll_ms)
         self.timer.timeout.connect(self._poll)
@@ -1167,7 +1169,7 @@ class Report2Dock(QWidget):
         ids = list(job_ids) if job_ids is not None else [j.id for j in self.selected_jobs()]
         self.dismiss_message()                    # the previous decision is final now
         allowed = can_accept if accept else can_reject
-        done, before, regenerated = [], [], 0
+        done, before, regenerated = [], [], []
         for jid in ids:
             job = self.journal.job(jid)
             if job is None or not allowed(job):
@@ -1178,7 +1180,8 @@ class Report2Dock(QWidget):
             snap = {k: job.row.get(k) for k in J.Journal.REVIEW_FIELDS} | {"revision": job.revision}
             if accept and job.edited:
                 ok = self.journal.accept_edited(jid, comment)
-                regenerated += ok
+                if ok:
+                    regenerated.append(jid)
             else:
                 ok = self.journal.review(jid, accept, comment, grace=J.UNDO_GRACE if accept else 0)
                 if ok:
@@ -1191,6 +1194,8 @@ class Report2Dock(QWidget):
             return False
         if accept and not self._watcher_running():
             self._deliver.update(jid for jid, _ in before)
+        for jid in regenerated:                   # made again here at once, not left to the watcher
+            self.local.run(jid)
         nxt = self._next_control(ids[-1]) if len(ids) == 1 else None
         self.refresh()
         if nxt and nxt in self.jobs:
@@ -1198,9 +1203,37 @@ class Report2Dock(QWidget):
         verb = "Accepted" if accept else "Rejected"
         text = f"{verb} {self._names(done)}" + (f" ({comment})" if comment and not accept else "")
         if regenerated:
-            text += " - the edited report is made again"
+            text += " - the edited report is made again now and then delivered"
         self.notify(text + ".", self._undo_review(before) if before else None)
         return True
+
+    @property
+    def local(self):
+        """Makes edited reports again in GC Workspace (:class:`gcws.automation.runner.LocalJobs`)."""
+        if self._local is None:
+            from gcws.automation.runner import LocalJobs
+            self._local = LocalJobs(lambda: self.journal, parent=self)
+            self._local.finished.connect(self._regenerated)
+        return self._local
+
+    def _regenerated(self, job_id: str, state: str):
+        """An edited report was made again here: delivered (unless a watcher does it) and said so."""
+        job = self.journal.job(job_id)
+        if job is None:
+            return
+        if state in J.ACCEPTED and job.export_pending and not self._watcher_running():
+            self._deliver.add(job_id)
+            self.deliver_due()
+        self.refresh()
+        if state in J.ACCEPTED:
+            self.notify(f"{job.group_name}: the updated report is made and accepted" +
+                        (f" ({job.reason})" if job.reason else "") + ".")
+        else:
+            self.notify(f"{job.group_name}: the updated report could not be made - {job.reason}", level="warn")
+
+    def _stop_local(self):
+        if self._local is not None:
+            self._local.stop()
 
     def _undo_review(self, before: list) -> Callable[[], str]:
         def undo() -> str:

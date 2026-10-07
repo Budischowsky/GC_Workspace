@@ -25,32 +25,17 @@ from gcws import paths
 from gcws.automation import journal as J
 from gcws.automation import localcopy as LC
 from gcws.automation import planner as PN
-from gcws.automation import rules as RU
+from gcws.automation import runner as RN
 from gcws.automation import scanner as SC
 from gcws.automation import store
 from gcws.automation import workflow as W
 
 log = logging.getLogger("gcws.watcher")
 
-BACKOFF_S = (120, 600, 1800)          # retries of a job that could not read its files
+BACKOFF_S = RN.BACKOFF_S
 HEARTBEAT_S = 10
-
-
-def _missing_sample_files(out_dir: Path, files: dict) -> list[str]:
-    """Formats the workflow requested but the regenerated revision did not produce."""
-    try:
-        spec = json.loads((out_dir / "spec.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return ["job specification"]
-    missing = []
-    for report in spec.get("reports") or []:
-        produced = files.get(report.get("node")) or {}
-        wanted = (set(report.get("formats") or []) & set(W.SAMPLE_FORMATS)) | {"xlsx"}
-        for fmt in sorted(wanted):
-            path = produced.get(fmt)
-            if not path or not Path(path).is_file():
-                missing.append(f"{report.get('kind', 'report')} {fmt}")
-    return missing
+_missing_sample_files = RN.missing_sample_files
+blank_requirement = RN.blank_requirement
 
 
 def server_name() -> str:
@@ -68,15 +53,6 @@ def python_exe(windowless: bool = True) -> str:
     if windowless and exe.name.lower() == "python.exe" and (exe.parent / "pythonw.exe").exists():
         return str(exe.parent / "pythonw.exe")
     return str(exe)
-
-
-def blank_requirement(node: W.Node, method: dict) -> str:
-    """The method step's blank requirement; "auto" follows the method's blank subtraction source."""
-    req = node.p("require_blank") or "auto"
-    if req != "auto":
-        return req
-    source = (((method or {}).get("sections") or {}).get("blank") or {}).get("source", "blank")
-    return {"blank_istd": "blank_istd", "both": "both"}.get(source, "blank")
 
 
 # -- launching job processes -----------------------------------------------------------------------
@@ -677,144 +653,24 @@ class WatcherCore(QObject):
             return
 
     def _cannot_start_review(self, job: J.Job, reason: str, now: float) -> None:
-        if self.journal.transition(job.id, J.QUEUED, J.PROCESSING):
-            self.journal.transition(job.id, J.PROCESSING, J.CONTROL, reason=f"cannot start: {reason}",
-                                    finished=now, edited=1, review_pending=None, export_pending=0)
-            self.journal.event("error", f"{job.group_name}: updated report cannot start: {reason}",
-                               job_id=job.id, workflow_id=job.workflow_id, batch_id=job.batch_id)
+        RN.cannot_start(self.journal, job, reason, now)
 
     def spec_for(self, wf: W.Workflow, job: J.Job) -> tuple[dict, str]:
-        m = wf.node(job.method_node)
-        b = self.journal.batch_by_id(job.batch_id)
-        out_dir = store.jobs_dir() / job.id / f"r{job.revision}"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        reports = []
-        for r, _ in wf.report_nodes(m.id):
-            if any(x["node"] == r.id for x in reports):
-                continue
-            reports.append({"node": r.id, "kind": r.p("kind"), "keep_middle": bool(r.p("keep_middle")),
-                            "formats": [f for f in r.p("formats") or [] if f in W.SAMPLE_FORMATS],
-                            "batch_formats": [f for f in r.p("formats") or [] if f in W.BATCH_FORMATS]})
-        if job.is_batch:
-            entries = []
-            members = {j.id: j for j in self.journal.jobs(workflow_id=wf.id, batch_id=job.batch_id,
-                                                          include_batch=False)}
-            rep = next((r for r in reports if r["batch_formats"]), None)
-            for jid in job.members or []:
-                j = members.get(jid)
-                if j is None:
-                    continue
-                files = (j.files or {}).get(rep["node"], {}) if rep else {}
-                entries.append({"name": j.group_name, "state": j.state, "reviewer": j.reviewer or "",
-                                "reviewed": J.when(j.reviewed_at), "comment": j.comment or "",
-                                "findings": j.findings or [], "xlsx": files.get("xlsx"), "report": files.get("docx")
-                                or files.get("xlsx") or ""})
-            return {"job_id": job.id, "out_dir": str(out_dir), "batch_name": b.get("name", ""), "entries": entries,
-                    "formats": rep["batch_formats"] if rep else [], "report_node": rep["node"] if rep else ""}, \
-                "batch"
-        method = self.method(m.p("method"))
-        review = wf.review_node(m.id)
-        rules = RU.to_list(RU.rules_for(review.params)) if review is not None else None
-        prev_project = ""
-        if job.mode == "rereport":
-            prev_project = job.project_path or ""
-        # fed by the local copy: the runs are read from there (the job copies a missing one itself)
-        batch_folder, source_folder = b.get("folder", ""), ""
-        via, _ = wf.feed(m.id)
-        if via is not None and batch_folder:
-            source_folder = batch_folder
-            batch_folder = str(LC.local_batch(via.p("folder"), wf.source.p("folder"), batch_folder))
-        spec = {"job_id": job.id, "revision": job.revision, "mode": job.mode or "full", "workflow_id": wf.id,
-                "method_node": m.id, "method": method, "batch_folder": batch_folder, "source_folder": source_folder,
-                "group": {"key": job.group_key, "name": job.group_name, "members": job.members or []},
-                "blanks": job.blanks or {}, "reports": reports, "rules": rules,
-                "auto_accept": bool(review.p("auto_accept")) if review is not None else True,
-                "has_review": review is not None, "out_dir": str(out_dir), "project_path": prev_project,
-                "require_blank": blank_requirement(m, method), "search": bool(m.p("search")),
-                "istd_detect": bool(m.p("istd_detect")), "min_confidence": m.p("min_confidence") or "high",
-                "override": job.override or {}}
-        return spec, "job"
+        return RN.job_spec(self.journal, wf, job, self.method)
 
     def _job_finished(self, job_id: str, code: int, tail: str) -> None:
-        from gcws.automation import pipeline as PL
         cur, self.current = self.current or {}, None
-        now = self.clock()
         job = self.journal.job(job_id)
         if job is None:
             return
-        out_dir = Path(cur.get("out_dir") or job.job_dir or "")
-        res = PL.read_result(out_dir) if out_dir else None
-        if res is None:
-            reason = "the job process ended without a result" + (" (timeout)" if cur.get("timed_out") else "")
-            logtail = ""
-            try:
-                logtail = (out_dir / "job.log").read_text(encoding="utf-8", errors="replace")[-600:]
-            except OSError:
-                logtail = tail[-600:]
-            res = {"state": PL.FAILED, "reason": reason + (": " + logtail.strip().splitlines()[-1]
-                                                           if logtail.strip() else "")}
-        state = res.get("state")
-        fields = {"finished": now, "reason": res.get("reason", ""), "files": res.get("files") or {},
-                  "findings": res.get("findings") or [], "evidence": res.get("evidence") or {},
-                  "summary": {"warnings": res.get("warnings") or [], "timings": res.get("timings") or {}}}
-        if res.get("project"):
-            fields["project_path"] = res["project"]
-        if job.is_batch and state == PL.ACCEPTED_AUTO:
-            # accepted when every sample with a report is accepted (samples not processed are only listed)
-            members = [m for m in (self.journal.job(j) for j in job.members or []) if m is not None]
-            reported = [m for m in members if m.state != J.NOT_PROCESSED]
-            accepted = bool(reported) and all(m.state in J.ACCEPTED for m in reported)
-            state = J.ACCEPTED_AUTO if accepted else J.CONTROL
-        if state == PL.RETRY:
-            attempts = int(job.attempts or 0) + 1
-            if attempts <= len(BACKOFF_S):
-                self.journal.transition(job_id, J.PROCESSING, J.QUEUED, attempts=attempts,
-                                        not_before=now + BACKOFF_S[attempts - 1], reason=res.get("reason", ""))
-                self.journal.event("warning", f"{job.group_name}: {res.get('reason', '')}; trying again in "
-                                   f"{BACKOFF_S[attempts - 1] // 60} min", job_id=job_id)
-                return
-            state = PL.FAILED
-        pending = job.review_pending if not job.is_batch else None
-        if pending:
-            old_keys = {tuple(k) for k in pending.get("findings") or []}
-            new_keys = {J.finding_key(f) for f in fields["findings"] if f.get("level", "control") == "control"}
-            missing = _missing_sample_files(out_dir, fields["files"])
-            generated = (state in (J.CONTROL, J.ACCEPTED_AUTO) and bool(fields["files"])
-                         and not (fields["evidence"] or {}).get("errors") and not missing)
-            fields["review_pending"] = None
-            if not generated:
-                state = J.CONTROL
-                fields.update(reason="Edited report could not be regenerated: " +
-                              (res.get("reason") or ("missing report files: " + ", ".join(missing) if missing else "")
-                               or "; ".join(res.get("warnings") or []) or "no report was made"),
-                              files=job.files or {}, findings=job.findings or [], evidence=job.evidence or {},
-                              edited=1, export_pending=0)
-            elif new_keys - old_keys:
-                state = J.CONTROL
-                fields.update(reason="New findings in the regenerated report; review them before accepting",
-                              edited=0, export_pending=0)
-            else:
-                state = J.ACCEPTED_MANUAL
-                fields.update(reason="", edited=0, reviewer=pending.get("user") or "",
-                              comment=pending.get("comment") or "", reviewed_at=now, export_pending=1)
-                self.journal.event("info", f"{job.group_name}: updated report accepted by {fields['reviewer']}",
-                                   job_id=job.id, workflow_id=job.workflow_id, batch_id=job.batch_id,
-                                   user=fields["reviewer"])
-        if state not in (J.CONTROL, J.ACCEPTED_AUTO, J.ACCEPTED_MANUAL, J.NOT_PROCESSED, J.FAILED):
-            state = J.FAILED
-        if state in (J.CONTROL, J.ACCEPTED_AUTO) and not pending:
-            fields["export_pending"] = 1
-        self.journal.transition(job_id, J.PROCESSING, state, **fields)
-        text = {J.CONTROL: "control needed", J.ACCEPTED_AUTO: "accepted automatically",
-                J.ACCEPTED_MANUAL: "accepted by analyst",
-                J.NOT_PROCESSED: "not processed", J.FAILED: "failed"}[state]
-        level = "info" if state in (J.ACCEPTED_AUTO, J.ACCEPTED_MANUAL, J.CONTROL) else "error"
-        self.journal.event(level, f"{job.group_name}: {text}" + (f" - {res.get('reason')}" if res.get("reason") else ""),
-                           job_id=job_id, workflow_id=job.workflow_id, batch_id=job.batch_id)
-        if state == J.CONTROL and not job.is_batch:
-            self.notify.emit("Report² - control needed", f"{job.group_name}: {len(fields['findings'])} finding(s)")
-        elif state == J.FAILED:
-            self.notify.emit("Processing failed", f"{job.group_name}: {fields['reason']}")
+        out = RN.finish(self.journal, job_id, Path(cur.get("out_dir") or job.job_dir or ""), tail,
+                        bool(cur.get("timed_out")), self.clock())
+        if out is None or out["retry"]:
+            return
+        if out["state"] == J.CONTROL and not job.is_batch:
+            self.notify.emit("Report² - control needed", f"{job.group_name}: {len(out['findings'])} finding(s)")
+        elif out["state"] == J.FAILED:
+            self.notify.emit("Processing failed", f"{job.group_name}: {out['reason']}")
         self.deliver_pending()
         if not self.paused:
             self.pump()                                # the next sample at once

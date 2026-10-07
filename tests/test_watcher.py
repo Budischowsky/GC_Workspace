@@ -101,7 +101,7 @@ def _result(spec, state="control", findings=1):
             "timings": {}}
 
 
-@pytest.mark.parametrize("scenario,expected", [("same", "accepted_manual"), ("new", "control"),
+@pytest.mark.parametrize("scenario,expected", [("same", "accepted_manual"), ("new", "accepted_manual"),
                                                ("failed", "control"), ("partial", "control")])
 def test_edited_accept_waits_for_rereport_and_checks_new_findings(env, scenario, expected):
     from gcws.automation import journal as J
@@ -144,7 +144,9 @@ def test_edited_accept_waits_for_rereport_and_checks_new_findings(env, scenario,
     launcher.complete(result)
     reviewed = jr.job(job.id)
     assert reviewed.state == expected and reviewed.review_pending is None
-    assert reviewed.reviewer == ("analyst" if scenario == "same" else None)
+    assert reviewed.reviewer == ("analyst" if scenario in ("same", "new") else None)
+    if scenario == "new":                                  # accepted as edited; the new finding is listed
+        assert "1 new finding" in reviewed.reason and len(reviewed.findings) == 2
     assert reviewed.export_pending == 0
     if scenario in ("failed", "partial"):
         assert reviewed.edited == 1 and reviewed.project_path == str(project)

@@ -524,7 +524,9 @@ class Journal:
             job = self.job(job_id)
             if job is None or job.state not in (CONTROL, REJECTED) or not job.edited or not job.project_path:
                 return False
-            intent = {"user": user, "comment": comment,
+            # keep: the analyst accepted the edited report, so it stays accepted when the regenerated one has
+            # new findings (they are listed with it)
+            intent = {"user": user, "comment": comment, "keep": True,
                       "findings": [finding_key(f) for f in (job.findings or []) if f.get("level", "control") == "control"]}
             ok = self.transition(job_id, job.state, QUEUED, mode="rereport", revision=job.revision + 1,
                                  queued_at=time.time(), not_before=0, attempts=0, export_pending=0,

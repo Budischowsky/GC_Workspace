@@ -235,7 +235,7 @@ decide** and **Yellow - to check** (hover for their names); the details are in *
 
 | Button | What it does |
 |---|---|
-| **Accept** | Accepts the report with your name and time - one click, no comment needed (the arrow beside it: **Accept with comment...**). If you changed the sample, Report² makes the report again from the saved project first and checks for new findings; the updated report is delivered after acceptance. The next report needing control is selected. |
+| **Accept** | Accepts the report with your name and time - one click, no comment needed (the arrow beside it: **Accept with comment...**). If you changed the sample, GC Workspace makes the report again from the saved project at once - the watcher is not needed - and it stays accepted by you as a new revision (new findings of the updated report are listed with it); then it is delivered. The next report needing control is selected. |
 | **Reject** | Rejects it: choose a reason, or **Other...** for a comment of your own (optional). **View > Reject reasons...** changes the list. A rejected report can still be accepted. |
 | **Open report** | Opens the Word, Excel or PDF file. |
 | **Open in GC Workspace** | Opens the sample exactly as it was processed - runs, integration, names, internal standards, blanks - to check or correct it. |
@@ -272,8 +272,9 @@ Keys in the list: `A` accept, `R` reject, `Enter` open the report, `Ctrl+O` open
 
 The usual way through a report that needs control: open its double determination, correct what the finding names,
 then **Accept**. Switching to another pair with **Load from Report²…** beside **Compare** saves changes to the
-current project. If the watcher is stopped, a requested report update waits in **Control needed** until it starts.
-An edited report with new findings stays in **Control needed** for another review.
+current project. The updated report is made in GC Workspace, also when the watcher is stopped (the list says
+*Updating report* meanwhile); if GC Workspace is closed before it is done, the watcher makes it. Only a report
+that cannot be made goes back to **Control needed**, with the reason.
 
 ## The rules
 
