@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QSettings, Qt, QTimer, Signal
-from PySide6.QtWidgets import (QCheckBox, QFileDialog, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QMenu,
+from PySide6.QtWidgets import (QApplication, QCheckBox, QFileDialog, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QMenu,
                                QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QTabWidget, QToolButton,
                                QVBoxLayout, QWidget)
 
@@ -22,7 +22,7 @@ from gcws.automation import workflow as W
 from gcws.ui import theme
 
 STATE_LEVEL = {"running": "ok", "processing": "info", "paused": "warn", "stopped": "neutral",
-               "not responding": "bad"}
+               "starting": "info", "not responding": "bad"}
 
 
 class AutomationDock(QWidget):
@@ -223,6 +223,8 @@ class AutomationDock(QWidget):
         self.state_text.setText(text)
         running = state not in ("stopped", "not responding")
         self.b_start.setEnabled(not running)
+        # a watcher that hangs is replaced, never joined by a second one
+        self.b_start.setText("Restart" if state == "not responding" else "Start")
         self.b_pause.setEnabled(running)
         self.b_pause.setText("Resume" if state == "paused" else "Pause")
         self.b_scan.setEnabled(running)
@@ -389,8 +391,12 @@ class AutomationDock(QWidget):
         return b
 
     def wake_watcher(self) -> bool:
-        """The watcher looks at once; one that is not running is started."""
+        """The watcher looks at once; one that is not running is started (one that is busy looks when it
+        is done)."""
         if self.control.send("scan_now", 800) is not None:
+            return True
+        if self.control.status(self.journal).get("state") != "stopped":
+            self.state_text.setText("The watcher is busy; it picks the samples up at its next look.")
             return True
         ok = bool(self.control.start())
         self.state_text.setText("Starting the watcher ..." if ok else "The watcher could not be started.")
@@ -442,6 +448,9 @@ class AutomationDock(QWidget):
         return reply
 
     def start_watcher(self):
+        if self.status.get("state") == "not responding":
+            self.restart_watcher()
+            return
         if not W.list_workflows() or not any(w.enabled for w in W.list_workflows()):
             if QMessageBox.question(self, "Watcher", "No workflow is active. Start the watcher anyway?") \
                     != QMessageBox.Yes:
@@ -449,6 +458,19 @@ class AutomationDock(QWidget):
         if not self.control.start():
             QMessageBox.warning(self, "Watcher", "The watcher could not be started.")
         QTimer.singleShot(1500, self.refresh)
+
+    def restart_watcher(self) -> bool:
+        """The watcher does not answer: it is ended and started again."""
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            ok = self.control.restart(self.journal)
+        finally:
+            QApplication.restoreOverrideCursor()
+        if not ok:
+            QMessageBox.warning(self, "Watcher", "The watcher could not be restarted. End the pythonw process "
+                                "\"GC Workspace Watcher\" in the Task Manager and start it again.")
+        QTimer.singleShot(1500, self.refresh)
+        return ok
 
     def toggle_pause(self):
         self._send("resume" if self.status.get("state") == "paused" else "pause")

@@ -131,6 +131,78 @@ def alive(pid, started: float | None = None) -> bool:
         k32.CloseHandle(handle)
 
 
+_LOCKS: dict = {}                                   # name -> handle / open file, held until the process ends
+
+
+def take_lock(name: str) -> bool:
+    """Take the lock ``name`` for this process; False when another process holds it. Windows releases
+    it when the process ends, also after a crash (a named mutex), so a stale lock never keeps a new
+    process out."""
+    if name in _LOCKS:
+        return True
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateMutexW.restype = wintypes.HANDLE
+        k32.CreateMutexW.argtypes = (ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR)
+        k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        handle = k32.CreateMutexW(None, False, "Local\\" + name)
+        if not handle:
+            return False
+        if ctypes.get_last_error() == 183:              # ERROR_ALREADY_EXISTS
+            k32.CloseHandle(handle)
+            return False
+        _LOCKS[name] = handle
+        return True
+    import fcntl
+    root().mkdir(parents=True, exist_ok=True)
+    f = open(root() / f"{name}.lock", "w")
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return False
+    _LOCKS[name] = f
+    return True
+
+
+def release_lock(name: str) -> None:
+    lock = _LOCKS.pop(name, None)
+    if lock is None:
+        return
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32")
+        k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        k32.CloseHandle(lock)
+    else:
+        lock.close()
+
+
+def lock_held(name: str) -> bool:
+    """True while some process (this one too) holds the lock ``name``."""
+    if name in _LOCKS:
+        return True
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenMutexW.restype = wintypes.HANDLE
+        k32.OpenMutexW.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR)
+        k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        handle = k32.OpenMutexW(0x00100000, False, "Local\\" + name)     # SYNCHRONIZE
+        if handle:
+            k32.CloseHandle(handle)
+            return True
+        return ctypes.get_last_error() == 5             # access denied: it exists
+    if not take_lock(name):
+        return True
+    release_lock(name)
+    return False
+
+
 def is_inside(path, folder) -> bool:
     """True when ``path`` is ``folder`` or lies below it (case-insensitive on Windows)."""
     try:

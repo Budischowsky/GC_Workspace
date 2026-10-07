@@ -849,3 +849,110 @@ def test_samples_added_from_this_pc_go_on_while_the_watched_folder_is_away(env, 
     now[0] += 61
     core.tick()
     assert launcher.started and launcher.started[0][1]["batch_folder"] == str(here)
+
+
+# -- one watcher only, and the GUI never waits for it (Oct 2026) -----------------------------------------
+
+def _holder(name: str, seconds: float = 60):
+    """Another process that holds the watcher lock ``name`` (like a running watcher that never answers)."""
+    import subprocess
+    import sys
+    from gcws import paths
+    code = (f"import os, time; from gcws.automation import store; ok = store.take_lock({name!r}); "
+            f"print('locked' if ok else 'refused', os.getpid(), flush=True); time.sleep({seconds})")
+    proc = subprocess.Popen([sys.executable, "-c", code], cwd=str(paths.ROOT), stdout=subprocess.PIPE)
+    word, pid = proc.stdout.readline().decode().split()
+    assert word == "locked"
+    proc.real_pid = int(pid)                               # a venv's python.exe runs the interpreter as a child
+    return proc
+
+
+def _end(proc):
+    import signal
+    try:
+        os.kill(proc.real_pid, signal.SIGTERM)
+    except OSError:
+        pass
+    proc.kill()
+    proc.wait()
+    from gcws.automation.store import alive
+    end = time.monotonic() + 10
+    while alive(proc.real_pid) and time.monotonic() < end:
+        time.sleep(0.05)
+
+
+@pytest.fixture()
+def lock_name(monkeypatch):
+    from gcws.automation import watcher as WM
+    name = f"gcws-watcher-test-{os.getpid()}-{time.time_ns()}"
+    monkeypatch.setattr(WM, "server_name", lambda: name)
+    return name
+
+
+def test_the_lock_keeps_a_second_process_out_until_the_first_ends(lock_name):
+    from gcws.automation import store
+    assert not store.lock_held(lock_name)
+    proc = _holder(lock_name)
+    try:
+        assert store.lock_held(lock_name) and not store.take_lock(lock_name)
+    finally:
+        _end(proc)
+    assert not store.lock_held(lock_name)                  # released by Windows when the process ended
+    assert store.take_lock(lock_name) and store.lock_held(lock_name)
+    store.release_lock(lock_name)
+    assert not store.lock_held(lock_name)
+
+
+def test_no_second_watcher_beside_a_busy_one(env, lock_name, monkeypatch):
+    """A watcher busy for minutes neither answers its socket nor writes heartbeats: nothing may start a
+    second one beside it (that doubled the CPU load); the state is read without waiting for it."""
+    from PySide6.QtCore import QProcess
+    from gcws.automation import watcher as WM
+    from gcws.automation.control import WatcherControl
+    started = []
+    monkeypatch.setattr(QProcess, "startDetached", lambda *a: started.append(a) or True)
+    ctl = WatcherControl()
+    assert ctl.status(env["journal"])["state"] == "stopped" and ctl.start() and len(started) == 1
+    proc = _holder(lock_name)
+    try:
+        jr = env["journal"]
+        t0 = time.monotonic()
+        assert ctl.status(jr)["state"] == "starting"       # lock taken, no heartbeat yet
+        jr.heartbeat("running", "", "", time.time())
+        jr.con.execute("UPDATE watcher SET pid=?", (proc.real_pid,))
+        assert ctl.status(jr)["state"] == "running"
+        jr.con.execute("UPDATE watcher SET heartbeat=?", (time.time() - 120,))
+        assert ctl.status(jr)["state"] == "not responding"
+        assert time.monotonic() - t0 < 1.0                 # no socket waits
+        assert ctl.start() and len(started) == 1           # nothing started beside it
+        assert WM.main(["gcws", "--watch"]) == 0           # a watcher started by hand leaves at once
+    finally:
+        _end(proc)
+    assert ctl.status(jr)["state"] == "stopped" and ctl.start() and len(started) == 2
+
+
+def test_a_watcher_of_an_older_version_counts_as_running(env, lock_name):
+    """Watchers from before the lock are known by their heartbeat and process."""
+    from gcws.automation.control import WatcherControl
+    jr = env["journal"]
+    jr.heartbeat("running", "", "", time.time())           # this process plays the old watcher
+    assert WatcherControl().running(jr)
+    jr.con.execute("UPDATE watcher SET pid=?", (2 ** 30,))  # one that ended
+    assert not WatcherControl().running(jr)
+
+
+def test_restart_ends_a_watcher_that_hangs(env, lock_name, monkeypatch):
+    from PySide6.QtCore import QProcess
+    from gcws.automation.control import WatcherControl
+    started = []
+    monkeypatch.setattr(QProcess, "startDetached", lambda *a: started.append(a) or True)
+    proc = _holder(lock_name)
+    jr = env["journal"]
+    jr.heartbeat("running", "", "", time.time() - 600)
+    jr.con.execute("UPDATE watcher SET pid=?, heartbeat=?", (proc.real_pid, time.time() - 600))
+    try:
+        assert WatcherControl().status(jr)["state"] == "not responding"
+        assert WatcherControl().restart(jr, wait_s=0.5)
+        assert proc.wait(10) is not None and len(started) == 1
+    finally:
+        _end(proc)

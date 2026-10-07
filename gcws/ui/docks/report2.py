@@ -508,10 +508,13 @@ class Report2Dock(QWidget):
         except Exception:  # noqa: BLE001
             st = {"state": "stopped"}
         state = st.get("state", "stopped")
-        level = {"running": "ok", "processing": "ok", "paused": "warn"}.get(state, "bad")
+        level = {"running": "ok", "processing": "ok", "paused": "warn", "starting": "info"}.get(state, "bad")
         theme.set_chip(self.watcher, f"● Watcher {state}", level)
         self.watcher.setToolTip("New data is not processed while the watcher is not running" if level == "bad"
                                 else "The background watcher processes new data")
+        # a watcher that hangs is replaced, never joined by a second one
+        self._watcher_state = state
+        self.start_btn.setText("Restart" if state == "not responding" else "Start")
         self.start_btn.setVisible(state in ("stopped", "not responding"))
 
     def set_mode(self, mode: str):
@@ -1839,5 +1842,12 @@ class Report2Dock(QWidget):
 
     def _start_watcher(self):
         from gcws.automation.control import WatcherControl
-        WatcherControl().start()
+        if getattr(self, "_watcher_state", "") == "not responding":
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                WatcherControl().restart(self.journal)
+            finally:
+                QApplication.restoreOverrideCursor()
+        else:
+            WatcherControl().start()
         theme.set_chip(self.watcher, "● Watcher starting ...", "info")

@@ -4,8 +4,9 @@
 running when the main window is closed. Every enabled workflow's folder is looked at every
 *x* minutes; finished samples are processed one at a time in a separate job process (a crash
 or a hanging Office program cannot stop the watcher), judged by Report² and delivered to the
-target folders. One watcher runs per data folder (a local socket keeps a second one out); the
-GUI talks to it through that socket and reads everything else from the journal.
+target folders. One watcher runs per data folder (a lock held by its process keeps a second one
+out, also while it is busy); the GUI sends commands through a local socket and reads everything
+else, the watcher's state too, from the journal.
 """
 from __future__ import annotations
 
@@ -829,6 +830,11 @@ def main(argv) -> int:
                                   encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
+    # one watcher per data folder: the lock lives as long as this process, also while it is busy
+    from gcws.automation.control import WatcherControl
+    if WatcherControl().running() or not store.take_lock(server_name()):
+        log.info("a watcher is already running for %s", paths.DATA)
+        return 0
     QCoreApplication.setOrganizationName("GCWorkspace")
     QCoreApplication.setApplicationName("GC Workspace Watcher")
     QSettings.setDefaultFormat(QSettings.IniFormat)
@@ -837,10 +843,6 @@ def main(argv) -> int:
     app.setQuitOnLastWindowClosed(False)
     from gcws.ui import theme
     theme.apply(app)
-    from gcws.automation.control import WatcherControl
-    if WatcherControl().send("status", timeout=800) is not None:
-        log.info("a watcher is already running for %s", paths.DATA)
-        return 0
     core = WatcherCore()
     core.paused = "--paused" in argv
     watcher = WatcherApp(core)
