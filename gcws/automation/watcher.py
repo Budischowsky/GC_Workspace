@@ -775,8 +775,8 @@ class WatcherCore(QObject):
     def deliver_pending(self) -> None:
         from gcws.automation import export
         now = self.clock()
-        for job in self.journal.jobs(states=[J.CONTROL, J.ACCEPTED_AUTO, J.ACCEPTED_MANUAL]):
-            if not job.export_pending or float(job.deliver_after or 0) > now:
+        for job in self.journal.to_deliver():
+            if float(job.deliver_after or 0) > now:
                 continue                               # nothing to deliver, or the analyst may still undo
             wf = self.workflows.get(job.workflow_id) or W.find(job.workflow_id)
             if wf is None:

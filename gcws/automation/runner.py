@@ -102,8 +102,7 @@ def job_spec(journal: J.Journal, wf: W.Workflow, job: J.Job, method: Callable[[s
             "method_node": m.id, "method": meth, "batch_folder": batch_folder, "source_folder": source_folder,
             "group": {"key": job.group_key, "name": job.group_name, "members": job.members or []},
             "blanks": job.blanks or {}, "reports": reports, "rules": rules,
-            # a report made again from the (edited) project is checked by the analyst, never accepted by itself
-            "auto_accept": job.mode != "rereport" and (bool(review.p("auto_accept")) if review is not None else True),
+            "auto_accept": bool(review.p("auto_accept")) if review is not None else True,
             "has_review": review is not None, "out_dir": str(out_dir), "project_path": prev_project,
             "require_blank": blank_requirement(m, meth), "search": bool(m.p("search")),
             "istd_detect": bool(m.p("istd_detect")), "min_confidence": m.p("min_confidence") or "high",
@@ -217,6 +216,7 @@ class LocalJobs(QObject):
         self.launcher.finished.connect(self._done)
         self.todo: list[str] = []
         self.current: Optional[dict] = None
+        self._runs = 0
 
     @property
     def journal(self) -> J.Journal:
@@ -255,13 +255,16 @@ class LocalJobs(QObject):
                 continue
             self.journal.event("info", f"{job.group_name}: making the updated report in GC Workspace", job_id=jid,
                                workflow_id=job.workflow_id, batch_id=job.batch_id)
-            self.current = {"job": jid, "out_dir": spec["out_dir"], "timed_out": False}
+            self._runs += 1
+            self.current = {"job": jid, "out_dir": spec["out_dir"], "timed_out": False, "run": self._runs}
             timeout = float(wf.node(job.method_node).p("timeout_min") or 30) * 60
-            QTimer.singleShot(int(timeout * 1000), lambda j=jid: self._timeout(j))
+            QTimer.singleShot(int(timeout * 1000), lambda j=jid, n=self._runs: self._timeout(j, n))
             self.launcher.start(jid, spec_path, kind)
 
-    def _timeout(self, job_id: str):
-        if (self.current or {}).get("job") == job_id:
+    def _timeout(self, job_id: str, run: Optional[int] = None):
+        cur = self.current or {}
+        # the timer of this run only: an earlier run of the same report (updated again) has ended
+        if cur.get("job") == job_id and (run is None or cur.get("run") == run):
             self.current["timed_out"] = True
             self.launcher.kill()
 

@@ -159,6 +159,7 @@ def test_updated_report_comes_back_as_control_needed(env, scenario):
 
 def test_report_again_is_never_accepted_by_itself(env):
     from gcws.automation import journal as J
+    from gcws.automation import pipeline as PL
     from gcws.automation import runner as RN
 
     jr = env["journal"]
@@ -170,9 +171,10 @@ def test_report_again_is_never_accepted_by_itself(env):
     jr.transition(job.id, J.PROCESSING, J.ACCEPTED_AUTO, project_path=str(env["tmp"] / "p.gcws"))
     assert jr.request(job.id, "rereport")
     again, _ = RN.job_spec(jr, env["wf"], jr.job(job.id), method=lambda name: {})
-    assert again["auto_accept"] is False and again["mode"] == "rereport"
-    assert spec["auto_accept"] == (env["wf"].review_node(env["wf"].methods()[0].id) is None or
-                                   bool(env["wf"].review_node(env["wf"].methods()[0].id).p("auto_accept")))
+    assert again["mode"] == "rereport" and spec["mode"] == "full"
+    assert PL.checked_state(again, PL.ACCEPTED_AUTO) == PL.CONTROL           # made again: the analyst checks
+    assert PL.checked_state(spec, PL.ACCEPTED_AUTO) == PL.ACCEPTED_AUTO      # processed: the rules decide
+    assert PL.checked_state(again, PL.FAILED) == PL.FAILED
 
 
 def test_set_back_to_control_needed(env):

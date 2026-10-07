@@ -220,6 +220,10 @@ class AutomationDock(QWidget):
     def refresh(self):
         self._refreshed = time.time()
         self._files = self._file_stamp()
+        try:
+            self.journal.changed("automation")          # built now: a poll need not build it again
+        except Exception:  # noqa: BLE001
+            pass
         self._refresh_status()
         self._refresh_workflows()
         self._refresh_queue()

@@ -41,6 +41,12 @@ class JobResult:
         return asdict(self)
 
 
+def checked_state(spec: dict, state: str) -> str:
+    """A report made again from the analyst's (edited) project ("rereport": Update report, Report again) is
+    checked by the analyst: never accepted by itself, whatever the rules and the review step say."""
+    return CONTROL if spec.get("mode") == "rereport" and state == ACCEPTED_AUTO else state
+
+
 def write_result(out_dir: Path, result: JobResult) -> Path:
     return store.atomic_write_json(Path(out_dir) / "result.json", result.to_dict())
 
@@ -288,6 +294,7 @@ def run_job(spec: dict, *, progress: Callable[[str], None] = log.info,
         state, findings = ev.status, ev.to_list()
     else:
         state, findings = ACCEPTED_AUTO, []
+    state = checked_state(spec, state)
     if not files and spec.get("reports"):
         state = CONTROL if state == ACCEPTED_AUTO else state
         if not any(f["rule"] == "processing_warnings" for f in findings):

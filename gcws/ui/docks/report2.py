@@ -185,6 +185,7 @@ class Report2Dock(QWidget):
         self._stamp = None
         self._refreshed = 0.0
         self._facts_cache: dict = {}               # (job id, findings, evidence) -> what its row shows
+        self._resumed = 0.0                        # when updates left behind were last looked for
         lay = QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
         # To do / Archive and the filters
@@ -496,6 +497,11 @@ class Report2Dock(QWidget):
 
     def _poll(self):
         if not self.isVisible():
+            # also with the panel closed: updates left behind are made when no watcher runs
+            if time.time() - self._resumed > 60:
+                self._resumed = time.time()
+                if not self._watcher_running():
+                    self.resume_updates()
             return
         stale = time.time() - self._refreshed > 60                           # "5 min ago" moves on
         try:
@@ -506,6 +512,24 @@ class Report2Dock(QWidget):
         if stamp != self._stamp or stale:
             self.refresh()
         self._update_watcher()
+        if getattr(self, "_watcher_state", "") in ("stopped", "not responding") and time.time() - self._resumed > 60:
+            self._resumed = time.time()
+            self.resume_updates()
+
+    def resume_updates(self) -> list:
+        """Updated reports left behind - GC Workspace was closed or stopped while it made them - are made
+        here when no watcher runs (one that runs makes them itself). Returns their job ids."""
+        try:
+            keep = [self._local.current["job"]] if self._local is not None and self._local.current else []
+            self.journal.recover_orphans(keep=keep)          # only those whose program is gone
+            ids = [j.id for j in self.journal.jobs(states=[J.QUEUED]) if j.review_pending and not j.is_batch]
+        except Exception:  # noqa: BLE001 - the journal may be busy for a moment
+            return []
+        for jid in ids:
+            self.local.run(jid)
+        if ids:
+            self.refresh()
+        return ids
 
     def _update_watcher(self):
         from gcws.automation.control import WatcherControl

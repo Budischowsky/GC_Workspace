@@ -295,7 +295,8 @@ Keys in the list: `A` accept, `R` reject, `Enter` open the report, `Ctrl+O` edit
 The usual way through a report that needs control: open its double determination, correct what the finding names,
 then **Accept**. Switching to another pair with **Load from Report²…** beside **Compare** saves changes to the
 current project. The updated report is made in GC Workspace, also when the watcher is stopped (the list says
-*Updating report* meanwhile); if GC Workspace is closed before it is done, the watcher makes it. The updated
+*Updating report* meanwhile); if GC Workspace is closed before it is done, the watcher makes it - or GC
+Workspace itself when it is opened again and no watcher runs. The updated
 report is never accepted by itself: it comes back as **Control needed** - look at it, then **Accept** it. A report
 that cannot be made stays in **Control needed** with the reason.
 

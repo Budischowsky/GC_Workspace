@@ -40,6 +40,7 @@ STATE_LABELS = {WAITING: "Waiting", QUEUED: "Queued", PROCESSING: "Processing", 
                 REJECTED: "Rejected", FAILED: "Failed", NOT_PROCESSED: "Not processed", REMOVED: "Removed"}
 ACCEPTED = (ACCEPTED_AUTO, ACCEPTED_MANUAL)
 DONE = (CONTROL, ACCEPTED_AUTO, ACCEPTED_MANUAL, REJECTED)          # processed (a report exists)
+DELIVERABLE = (CONTROL, ACCEPTED_AUTO, ACCEPTED_MANUAL)              # the states a report is delivered in
 TRANSITIONS = {
     WAITING: {QUEUED, NOT_PROCESSED, WAITING, REMOVED},
     QUEUED: {PROCESSING, WAITING, REMOVED},
@@ -201,6 +202,8 @@ class Journal:
                          "deleted, export_pending, export_state, revision, edited)")
         # jobs() lists in this order: without the index every report's large columns were sorted
         self.con.execute("CREATE INDEX IF NOT EXISTS jobs_created ON jobs(created)")
+        # the watcher asks every few seconds what waits for delivery: only those rows are read
+        self.con.execute("CREATE INDEX IF NOT EXISTS jobs_deliver ON jobs(export_pending) WHERE export_pending=1")
         self.con.execute(f"PRAGMA user_version={SCHEMA}")
         self._data_version: dict = {}
 
@@ -564,6 +567,12 @@ class Journal:
             sql += " AND group_key<>?"
             args.append(BATCH_KEY)
         return [Job(r) for r in self._rows(sql + " ORDER BY created", args)]
+
+    def to_deliver(self) -> list[Job]:
+        """The reports waiting for delivery (from a partial index: not every report there is)."""
+        return [Job(r) for r in self._rows(
+            f"SELECT * FROM jobs WHERE export_pending=1 AND state IN ({', '.join('?' * len(DELIVERABLE))}) "
+            "ORDER BY created", DELIVERABLE)]
 
     def counts(self, workflow_id: Optional[str] = None) -> dict[str, int]:
         sql = "SELECT state, COUNT(*) AS n FROM jobs WHERE group_key<>?"

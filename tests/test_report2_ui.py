@@ -295,6 +295,51 @@ def test_edited_report_left_when_gc_workspace_closes_goes_back_to_the_queue(qtbo
     dock._stop_local()
     job = jr.job(ids["S-control"])
     assert launcher.killed == 1 and job.state == J.QUEUED and job.review_pending and job.pid is None
+    # GC Workspace opened again, no watcher running: it makes the update itself (also with Report² closed)
+    again = _dock(jr, monkeypatch, qtbot)
+    again.hide()
+    again._poll()
+    assert jr.job(ids["S-control"]).state == J.PROCESSING and launcher.started[-1][0] == ids["S-control"]
+    assert again.resume_updates() == []                         # being made: not taken twice
+
+
+def test_a_timeout_of_an_earlier_run_does_not_stop_the_next(qtbot, data, tmp_path):
+    from gcws.automation import journal as J
+    from gcws.automation.runner import LocalJobs
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    project = tmp_path / "pair.gcws"
+    project.write_text("{}")
+    jid = ids["S-control"]
+    launcher = FakeLauncher()
+    local = LocalJobs(lambda: jr, launcher)
+    for run in (1, 2):
+        jr.update_job(jid, project_path=str(project), edited=1)
+        assert jr.update_edited(jid) and local.run(jid)
+        if run == 1:
+            launcher.complete({"state": "failed", "reason": "x", "files": {}})
+            assert jr.job(jid).state == J.CONTROL and local.current is None
+    local._timeout(jid, 1)                                     # the first run's timer: ignored
+    assert launcher.killed == 0 and local.current["job"] == jid
+    local._timeout(jid, 2)
+    assert launcher.killed == 1
+
+
+def test_update_left_by_a_program_that_stopped_is_made_again(qtbot, data, tmp_path, monkeypatch):
+    """Processing, but its program is gone (GC Workspace crashed while it made the update): Report² puts
+    it back and makes it when no watcher runs."""
+    from gcws.automation import journal as J
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    project = tmp_path / "pair.gcws"
+    project.write_text("{}")
+    jr.update_job(ids["S-control"], project_path=str(project), edited=1)
+    assert jr.update_edited(ids["S-control"])
+    jr.transition(ids["S-control"], J.QUEUED, J.PROCESSING, pid=999999, started=1.0)
+    launcher = FakeLauncher()
+    monkeypatch.setattr("gcws.automation.watcher.ProcessLauncher", lambda parent=None: launcher)
+    monkeypatch.setattr("gcws.automation.store.alive", lambda pid, started=None: False)
+    dock = _dock(jr, monkeypatch, qtbot)
+    assert dock.resume_updates() == [ids["S-control"]]
+    assert jr.job(ids["S-control"]).state == J.PROCESSING and launcher.started[-1][0] == ids["S-control"]
 
 
 def test_undo_and_next_report_needing_control(qtbot, data, tmp_path, monkeypatch):

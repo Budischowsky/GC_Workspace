@@ -14,7 +14,7 @@ from pathlib import Path
 from gcws.automation import journal as J
 from gcws.automation import routing, store
 
-DELIVERABLE = (J.CONTROL, J.ACCEPTED_AUTO, J.ACCEPTED_MANUAL)
+DELIVERABLE = J.DELIVERABLE
 
 
 def copy_atomic(src: Path, dst: Path) -> Path:
