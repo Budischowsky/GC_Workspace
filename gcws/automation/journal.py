@@ -19,7 +19,7 @@ from typing import Iterable, Optional
 
 from gcws.automation import store
 
-SCHEMA = 3
+SCHEMA = 4
 #: seconds an analyst's accept waits before it is delivered (Report² offers "Undo" meanwhile)
 UNDO_GRACE = 10.0
 
@@ -166,10 +166,18 @@ class Journal:
         for col in ("local_folder", "copied_extras"):
             if col not in columns:
                 self.con.execute(f"ALTER TABLE batches ADD COLUMN {col} TEXT")
+        for col, kind in (("folder_birth", "REAL"), ("missing", "INTEGER DEFAULT 0")):
+            if col not in columns:
+                self.con.execute(f"ALTER TABLE batches ADD COLUMN {col} {kind}")
         columns = {r["name"] for r in self.con.execute("PRAGMA table_info(runs)")}
         for col in ("copied_fp", "copy_error"):
             if col not in columns:
                 self.con.execute(f"ALTER TABLE runs ADD COLUMN {col} TEXT")
+        for col, kind in (("birth", "REAL"), ("readded", "INTEGER DEFAULT 0")):
+            if col not in columns:
+                self.con.execute(f"ALTER TABLE runs ADD COLUMN {col} {kind}")
+        if "census" not in {r["name"] for r in self.con.execute("PRAGMA table_info(watched)")}:
+            self.con.execute("ALTER TABLE watched ADD COLUMN census REAL")
         self.con.execute(f"PRAGMA user_version={SCHEMA}")
 
     def close(self):
@@ -216,6 +224,53 @@ class Journal:
         cur = self.con.execute("INSERT OR IGNORE INTO watched(workflow_id, source_key, first_scan) VALUES(?,?,?)",
                                (workflow_id, key, time.time()))
         return cur.rowcount == 1
+
+    def census(self, workflow_id: str, source) -> bool:
+        """True once per workflow and watched folder (at its first look, or the first look of a journal
+        from before): the batch folders found then that are too old to look at are recorded, so that
+        afterwards a folder the journal does not know is new data, however old its files are."""
+        key = os.path.normcase(os.path.abspath(str(source)))
+        self.con.execute("INSERT OR IGNORE INTO watched(workflow_id, source_key, first_scan) VALUES(?,?,?)",
+                         (workflow_id, key, time.time()))
+        cur = self.con.execute("UPDATE watched SET census=? WHERE workflow_id=? AND source_key=? AND census IS NULL",
+                               (time.time(), workflow_id, key))
+        return cur.rowcount == 1
+
+    def batch_keys(self, workflow_id: str) -> set[str]:
+        return {r["folder_key"] for r in self._rows("SELECT folder_key FROM batches WHERE workflow_id=?",
+                                                    (workflow_id,))}
+
+    def reset_batch(self, batch_id: int, reason: str = "the batch folder was put in again") -> list[str]:
+        """The batch folder came back (removed and put in again, or deleted and copied in again): its
+        samples are processed again as new revisions, deleted reports are shown again and the runs are
+        looked at afresh. Entries accepted by hand and a job being processed are left as they are."""
+        done = []
+        with self.tx():
+            for j in self.jobs(batch_id=batch_id):
+                if j.workflow_id == MANUAL_WORKFLOW or j.state == PROCESSING:
+                    continue
+                self.con.execute(
+                    "UPDATE jobs SET state=?, revision=revision+1, input_fp='', reason=?, attempts=0, not_before=0, "
+                    "reviewer=NULL, comment=NULL, reviewed_at=NULL, export_pending=0, export_state='none', edited=0, "
+                    "review_pending_json=NULL, deleted=0, deliver_after=0, mode='full', override_json=NULL "
+                    "WHERE id=?", (WAITING, reason, j.id))
+                done.append(j.id)
+            self.con.execute("DELETE FROM runs WHERE batch_id=?", (batch_id,))
+            self.con.execute("UPDATE batches SET deleted=0, missing=0, reopened=0, plan_json=NULL, seq_completed=0, "
+                             "last_change=? WHERE id=?", (time.time(), batch_id))
+        return done
+
+    def put_in_again(self, job_ids: Iterable[str]) -> list[str]:
+        """A run of these samples was deleted and copied in again: a sample deleted in Report² is shown
+        again and one removed from the queue waits again, so that the watcher processes the new data."""
+        done = []
+        for j in (self.job(i) for i in job_ids):
+            if j is None or not (j.deleted or j.state == REMOVED):
+                continue
+            self.con.execute("UPDATE jobs SET deleted=0, state=?, reason=? WHERE id=?",
+                             (WAITING if j.state == REMOVED else j.state, "a run was put in again", j.id))
+            done.append(j.id)
+        return done
 
     def batch(self, workflow_id: str, folder: Path) -> dict:
         key = os.path.normcase(os.path.abspath(str(folder)))
@@ -292,7 +347,7 @@ class Journal:
                 self._event_raw("info", workflow_id, batch_id, jid, f"{group_name}: {what} ({reason or state})")
                 return self.job(jid)
             if cur.state == REMOVED or cur.deleted:
-                return cur
+                return cur                             # data put in again brings it back (put_in_again)
             if cur.input_fp != input_fp and cur.state not in (QUEUED, PROCESSING, WAITING):
                 self.con.execute(
                     "UPDATE jobs SET revision=revision+1, members_json=?, blanks_json=?, input_fp=?, state=?, "

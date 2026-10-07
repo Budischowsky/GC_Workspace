@@ -49,14 +49,14 @@ You need a processing method first: set everything up for one batch by hand and 
 | Setting | Default | Meaning |
 |---|---|---|
 | **Folder to watch** | | The folder above the batch folders. |
-| **Batch folders** | directly below | How deep below the watched folder the batch folders are. |
+| **Batch folders** | directly below | How deep below the watched folder the batch folders are. Runs dropped straight into the watched folder (or into a folder above the batch folders) count as a batch of their own. |
 | **Folder names** | * | Only batch folders whose name matches, for example `2601*`. Several patterns with `;`. |
 | **Check every** | 5 min | How often the folder is looked at. |
-| **Quiet time** | 30 min | Without a sequence log: a batch is processed once nothing changed for this long. It also ends a sequence that stopped early. |
+| **Quiet time** | 30 min | Without a sequence log: a batch is processed once nothing changed for this long. It also ends a sequence that stopped early. Data copied or moved in, whose files were written longer ago, does not wait: it is processed once its runs are finished. |
 | **A run must be at least** | 2 min old | A run younger than this is still being written. |
 | **Unchanged for** | 2 checks | A run must look the same for this many checks. |
-| **Skip folders older than** | 14 days | Batch folders not changed for longer are not looked at (0 = all). |
-| **Also process the runs already in the folder** | off | By default only runs that arrive after watching started are processed. |
+| **Skip folders older than** | 14 days | Batch folders not changed for longer are not looked at again (0 = all). A folder that arrives later is always looked at, however old its files are. |
+| **Also process the runs already in the folder** | off | By default only runs that arrive after watching started are processed. This holds again when you choose another folder to watch. |
 
 **Local copy**
 
@@ -157,7 +157,14 @@ A **sample** here is all determinations of one sample number - usually A and B. 
 - the blanks it needs, **from the same batch folder**, are finished.
 
 The instrument's sequence log tells which runs are still to come, so the watcher knows to wait for run B or
-for the blank after it. Without a log, the folder must be quiet for the **Quiet time**.
+for the blank after it. Without a log, the folder must be quiet for the **Quiet time** - unless the data were
+copied or moved in and their files were written longer ago than that.
+
+**Data put in again is processed again.** A batch folder that was taken out of the watched folder and put
+back, or deleted and copied in again, is processed again: each of its samples gets a new revision in Report²,
+and reports you had deleted there are shown again. The same holds for a single finished run deleted and copied
+in again (a run folder of an Agilent `.D`). Otherwise a report deleted in Report² stays hidden, even when its
+data change.
 
 A sample **without the required blank** in its batch folder is not processed at all. Report² lists it under
 **Not processed**; right-click it > **Process again > Process without a blank...** overrides that, and the report then carries a finding.

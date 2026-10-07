@@ -28,6 +28,7 @@ class RunObs:
     mtime: float                # newest file time
     marker: bool
     busy: bool = False          # a file could not be read (still written)
+    birth: Optional[float] = None   # when the run folder / file was made here (a copy put in again is newer)
 
 
 def _is_run(entry: os.DirEntry) -> bool:
@@ -40,38 +41,83 @@ def _is_run(entry: os.DirEntry) -> bool:
         return False
 
 
-def batch_folders(root, depth: int = 1, pattern: str = "*", ignore_older_days: float = 0,
-                  now: Optional[float] = None) -> list[Path]:
-    """Folders ``depth`` levels below ``root`` (0 = ``root`` itself) that hold runs.
+def folder_key(folder) -> str:
+    """How the journal names a folder (case and separators do not matter)."""
+    return os.path.normcase(os.path.abspath(str(folder)))
 
-    ``pattern`` (``;``-separated globs) filters the batch folder names; folders unchanged for
-    more than ``ignore_older_days`` are skipped (0 = never)."""
-    root = Path(root)
-    now = time.time() if now is None else now
-    level = [root]
-    for _ in range(max(0, int(depth))):
-        nxt = []
-        for folder in level:
+
+def birth(path) -> Optional[float]:
+    """When ``path`` was made where it is (a folder copied in again is newer; one moved keeps its time)."""
+    try:
+        return getattr(os.stat(path), "st_birthtime", None)
+    except OSError:
+        return None
+
+
+def _subfolders(folder: Path) -> list[Path]:
+    out = []
+    with os.scandir(folder) as it:
+        for e in it:
             try:
-                with os.scandir(folder) as it:
-                    nxt += [Path(e.path) for e in it if e.is_dir() and not e.name.lower().endswith(".d")
-                            and not e.name.startswith(".")]
+                if e.is_dir() and not e.name.lower().endswith(".d") and not e.name.startswith("."):
+                    out.append(Path(e.path))
             except OSError:
                 continue
-        level = nxt
+    return out
+
+
+def _has_runs(folder: Path) -> bool:
+    with os.scandir(folder) as it:
+        return any(_is_run(e) for e in it)
+
+
+def batch_folders(root, depth: int = 1, pattern: str = "*", ignore_older_days: float = 0,
+                  now: Optional[float] = None, *, known: Optional[set] = None, skipped: Optional[list] = None,
+                  seen: Optional[set] = None) -> list[Path]:
+    """The batch folders below ``root``: those ``depth`` levels down (0 = ``root`` itself) that hold
+    runs and, above them, any folder with runs lying loose in it (runs dropped straight into the
+    watched folder are a batch of their own).
+
+    ``pattern`` (``;``-separated globs) filters the names of the folders ``depth`` levels down.
+    Folders unchanged for more than ``ignore_older_days`` are skipped (0 = never); with ``known``
+    (journal folder keys) only those the journal knows already - a folder never seen before is new
+    data, however old its files are. ``skipped`` collects ``(folder, why)`` of the folders with runs
+    (or too old to look into) that are left out: "old" or "name". ``seen`` collects the keys of every
+    folder listed, and of the folders whose listing worked as ``"listed:" + key``."""
+    root = Path(root)
+    now = time.time() if now is None else now
+    depth = max(0, int(depth))
+    levels = [[root]]
+    for _ in range(depth):
+        nxt = []
+        for folder in levels[-1]:
+            try:
+                nxt += _subfolders(folder)
+            except OSError:
+                continue
+            if seen is not None:
+                seen.add("listed:" + folder_key(folder))
+        levels.append(nxt)
+    if seen is not None:
+        seen.update(folder_key(f) for level in levels for f in level)
     pats = [p.strip() for p in (pattern or "*").split(";") if p.strip()] or ["*"]
     out = []
-    for folder in sorted(level):
-        if not any(fnmatch.fnmatch(folder.name.casefold(), p.casefold()) for p in pats):
-            continue
-        try:
-            if ignore_older_days and now - folder.stat().st_mtime > ignore_older_days * 86400:
-                continue
-            with os.scandir(folder) as it:
-                if any(_is_run(e) for e in it):
+    for n, level in enumerate(levels):
+        for folder in sorted(level):
+            try:
+                if n == depth and not any(fnmatch.fnmatch(folder.name.casefold(), p.casefold()) for p in pats):
+                    if skipped is not None and _has_runs(folder):
+                        skipped.append((folder, "name"))
+                    continue
+                if ignore_older_days and (known is None or folder_key(folder) in known) and \
+                        now - folder.stat().st_mtime > ignore_older_days * 86400:
+                    if skipped is not None and (n == depth or _has_runs(folder)):
+                        skipped.append((folder, "old"))
+                    continue
+                if _has_runs(folder):
                     out.append(folder)
-        except OSError:
-            continue
+            except OSError:
+                continue
     return out
 
 
@@ -128,7 +174,7 @@ def observe(folder) -> list[RunObs]:
     for e in sorted(entries, key=lambda e: e.name.casefold()):
         p = Path(e.path)
         fp, newest, marker, busy = fingerprint(p)
-        out.append(RunObs(p, p.stem.casefold(), p.name, fp, newest, marker, busy))
+        out.append(RunObs(p, p.stem.casefold(), p.name, fp, newest, marker, busy, birth(p)))
     return out
 
 

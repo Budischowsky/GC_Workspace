@@ -530,3 +530,194 @@ def test_delivered_file_deleted_in_the_target_is_delivered_again(env):
     assert not (b.parent / "26016606_x_NIAS_Report_2.docx").exists()   # its own copy replaced, not versioned
     assert jr.job(job.id).export_state == "done"
     assert set(jr.targets()[job.id]) == {str(a), str(b)}
+
+
+# -- detection (Oct 2026): data put in again, loose runs, old folders, copies --------------------------
+
+def _age(path: Path, seconds: float):
+    """Make ``path`` (and what is in it) look ``seconds`` old."""
+    t = time.time() - seconds
+    for p in [*path.rglob("*"), path]:
+        os.utime(p, (t, t))
+
+
+def _processed(jr, launcher, state="accepted_auto"):
+    """Complete every job the fake launcher starts until the queue is empty."""
+    while launcher.job is not None:
+        _, spec, kind = launcher.started[-1]
+        launcher.complete(_result(spec, state, findings=0) if kind == "job" else
+                          {"state": "accepted_auto", "files": {}, "findings": []})
+
+
+def _core(env):
+    from gcws.automation.watcher import WatcherCore
+    now = [time.time()]
+    launcher = FakeLauncher()
+    core = WatcherCore(env["journal"], launcher, clock=lambda: now[0])
+    return core, launcher, now
+
+
+def test_batch_folder_put_in_again_is_processed_again(env, qapp):
+    import shutil
+    from gcws.automation import journal as J
+    jr = env["journal"]
+    core, launcher, now = _core(env)
+    core.tick()                                            # first look: empty
+    batch = env["watch"] / "26016605_TEST"
+    batch.mkdir()
+    _log(batch, BATCH[:3], completed=True)
+    for n in BATCH[:3]:
+        _acquire(batch, n)
+    now[0] += 61
+    core.tick()
+    _processed(jr, launcher)
+    sample = next(j for j in jr.jobs() if not j.is_batch)
+    assert sample.state == J.ACCEPTED_AUTO
+    jr.delete([j.id for j in jr.jobs()])                   # deleted in Report²
+    keep = env["tmp"] / "keep"
+    shutil.move(str(batch), str(keep))                    # taken out of the watched folder ...
+    now[0] += 61
+    core.tick()
+    assert jr.batch(env["wf"].id, batch)["missing"] == 1
+    shutil.move(str(keep), str(batch))                    # ... and put back: the same data
+    now[0] += 61
+    core.tick()
+    again = jr.job(sample.id)
+    assert again.revision == 2 and not again.deleted and again.state == J.PROCESSING
+    assert any("put in again" in e["text"] for e in jr.events())
+    _processed(jr, launcher)
+    # deleted and copied in again before the next look: a new folder (its creation time) - again
+    shutil.copytree(str(batch), str(keep))
+    shutil.rmtree(batch)
+    shutil.copytree(str(keep), str(batch))
+    now[0] += 61
+    core.tick()
+    assert jr.job(sample.id).revision == 3
+
+
+def test_run_copied_in_again_is_processed_again(env, qapp):
+    import shutil
+    jr = env["journal"]
+    core, launcher, now = _core(env)
+    core.tick()
+    batch = env["watch"] / "26016605_TEST"
+    batch.mkdir()
+    _log(batch, BATCH[:3], completed=True)
+    for n in BATCH[:3]:
+        _acquire(batch, n)
+    now[0] += 61
+    core.tick()
+    _processed(jr, launcher)
+    sample = next(j for j in jr.jobs() if not j.is_batch)
+    jr.delete([sample.id])                                 # deleted in Report²
+    run = batch / f"{BATCH[1]}.D"
+    copy = env["tmp"] / run.name
+    shutil.copytree(str(run), str(copy))                  # keeps the file times: the same fingerprint
+    shutil.rmtree(run)
+    shutil.copytree(str(copy), str(run))
+    now[0] += 61
+    core.tick()
+    assert jr.job(sample.id).revision == 2 and not jr.job(sample.id).deleted
+    _processed(jr, launcher)
+    now[0] += 61
+    core.tick()
+    assert jr.job(sample.id).revision == 2                 # once
+
+
+def test_runs_dropped_straight_into_the_watched_folder(env, qapp):
+    jr = env["journal"]
+    core, launcher, now = _core(env)
+    core.tick()
+    _log(env["watch"], BATCH[:3], completed=True)
+    for n in BATCH[:3]:
+        _acquire(env["watch"], n)
+    now[0] += 61
+    core.tick()
+    jobs = [j for j in jr.jobs() if not j.is_batch]
+    assert [j.group_name for j in jobs] == ["26016606_x"] and launcher.started
+    assert jr.batch_by_id(jobs[0].batch_id)["name"] == env["watch"].name
+
+
+def test_old_folder_moved_in_later_is_processed(env, qapp):
+    jr = env["journal"]
+    core, launcher, now = _core(env)
+    core.tick()
+    batch = env["tmp"] / "26010000_OLD"
+    batch.mkdir()
+    _log(batch, BATCH[:3], completed=True)
+    for n in BATCH[:3]:
+        _acquire(batch, n)
+    _age(batch, 40 * 86400)                               # older than "Skip folders older than" (14 days)
+    batch.rename(env["watch"] / batch.name)               # moved: keeps its time
+    now[0] += 61
+    core.tick()
+    assert [j.group_name for j in jr.jobs() if not j.is_batch] == ["26016606_x"] and launcher.started
+
+
+def test_old_folder_there_at_the_first_look_is_not_processed(env, qapp):
+    jr = env["journal"]
+    batch = env["watch"] / "26010000_OLD"
+    batch.mkdir()
+    _log(batch, BATCH[:3], completed=True)
+    for n in BATCH[:3]:
+        _acquire(batch, n)
+    _age(batch, 40 * 86400)
+    core, launcher, now = _core(env)
+    core.tick()
+    now[0] += 61
+    core.tick()
+    assert jr.jobs() == [] and launcher.started == []
+    runs = jr.runs(jr.batch(env["wf"].id, batch)["id"])
+    assert len(runs) == 3 and all(r["baseline"] for r in runs.values())
+    _acquire(batch, "14_26016608_z_A")                    # a new sample in the old folder: processed
+    now[0] += 61
+    core.tick()
+    assert [j.group_name for j in jr.jobs() if not j.is_batch] == ["26016608_z"]
+
+
+def test_journal_from_before_records_what_is_there(env, qapp):
+    """The first look of this version at a folder watched before: old folders and runs lying loose are
+    recorded as there before, not processed."""
+    jr = env["journal"]
+    jr.first_scan(env["wf"].id, env["watch"])              # watched before this version (no census)
+    jr.con.execute("UPDATE watched SET census=NULL")
+    old = env["watch"] / "26010000_OLD"
+    old.mkdir()
+    for n in BATCH[:3]:
+        _acquire(old, n)
+        _acquire(env["watch"], n)
+    _age(old, 40 * 86400)
+    core, launcher, now = _core(env)
+    core.tick()
+    now[0] += 61
+    core.tick()
+    assert [j for j in jr.jobs() if j.state != "waiting"] == [] and launcher.started == []
+
+
+def test_copied_batch_without_log_does_not_wait_for_the_quiet_time(env, qapp):
+    jr = env["journal"]
+    core, launcher, now = _core(env)
+    core.tick()
+    batch = env["watch"] / "26016605_COPY"
+    batch.mkdir()
+    for n in BATCH[:3]:
+        _acquire(batch, n)
+    _age(batch, 2 * 3600)                                  # acquired hours ago, copied in now
+    now[0] += 61
+    core.tick()                                            # seen: may still be copied
+    assert not launcher.started
+    now[0] += 61
+    core.tick()                                            # unchanged, nothing written for 30 min: quiet
+    assert launcher.started and launcher.started[0][1]["group"]["name"] == "26016606_x"
+    live = env["watch"] / "26016605_LIVE"
+    live.mkdir()
+    for n in BATCH[:3]:
+        _acquire(live, n)
+    _age(live, 60)                                         # being acquired: waits for the quiet time
+    for _ in range(3):
+        _processed(jr, launcher)
+        now[0] += 61
+        core.tick()
+    _processed(jr, launcher)
+    assert not any(k == "job" and spec["batch_folder"] == str(live) for _, spec, k in launcher.started)
+    assert any(j.state == "waiting" and "quiet" in j.reason for j in jr.jobs())

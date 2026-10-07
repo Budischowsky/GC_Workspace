@@ -289,16 +289,73 @@ class WatcherCore(QObject):
             self.journal.event("info", f"Workflow '{wf.name}': the watched folder {root} can be reached again",
                                workflow_id=wf.id)
         first = self.journal.first_scan(wf.id, root)
+        census = self.journal.census(wf.id, root)
         cfg = SC.Readiness(int(src.p("stable_scans") or 2), float(src.p("min_age_min") or 0) * 60,
                            float(src.p("quiet_min") or 30) * 60)
-        folders = SC.batch_folders(src.p("folder"), int(src.p("depth") or 0), src.p("pattern") or "*",
-                                   float(src.p("ignore_older_days") or 0), now)
+        depth = int(src.p("depth") or 0)
+        known = self.journal.batch_keys(wf.id)
+        skipped, seen = [], set()
+        folders = SC.batch_folders(root, depth, src.p("pattern") or "*", float(src.p("ignore_older_days") or 0),
+                                   now, known=None if census else known, skipped=skipped, seen=seen)
+        if census:
+            # what is there at the first look and too old to look into is recorded as there before
+            # watching; afterwards a folder the journal does not know is new data, however old its files
+            for folder, why in skipped:
+                if why == "old":
+                    self._baseline_folder(wf, folder)
         for folder in folders:
-            self._scan_batch(wf, folder, now, cfg, baseline_new=first and not src.p("process_existing"))
+            # runs lying loose above the batch folders count since this version: those there already
+            # when it first looks are not processed (like everything at a workflow's first look)
+            loose = census and SC.folder_key(folder) not in known and len(folder.relative_to(root).parts) < depth
+            self._scan_batch(wf, folder, now, cfg,
+                             baseline_new=(first and not src.p("process_existing")) or loose)
+        self._check_missing(wf, root, seen)
+
+    def _baseline_folder(self, wf: W.Workflow, folder: Path) -> None:
+        """A batch folder too old to look into at the workflow's first look: its runs (names only, nothing
+        is read) are recorded as there before watching, so that only runs added later are processed."""
+        from gcws.io import sequence as SQ
+        b = self.journal.batch(wf.id, folder)
+        runs = self.journal.runs(b["id"])
+        try:
+            with os.scandir(folder) as it:
+                entries = [e for e in it if SC._is_run(e)]
+        except OSError:
+            return
+        for e in entries:
+            stem = Path(e.name).stem.casefold()
+            if stem not in runs:
+                self.journal.upsert_run(b["id"], stem, path=e.path, baseline=1, state="baseline",
+                                        role=SQ.classify_role(e.name))
+        if not b.get("folder_birth"):
+            self.journal.update_batch(b["id"], folder_birth=SC.birth(folder))
+
+    def _check_missing(self, wf: W.Workflow, root, seen: set) -> None:
+        """Batch folders that are gone from the watched folder (their parent was listed, they were not):
+        marked, so that they are processed again when they are put back."""
+        for b in self.journal.batches(wf.id):
+            if b.get("missing") or b["folder_key"] in seen:
+                continue
+            parent = SC.folder_key(Path(b["folder"]).parent)
+            if "listed:" + parent not in seen or not store.is_inside(b["folder"], root):
+                continue                               # not looked at this time (or not below the folder)
+            self.journal.update_batch(b["id"], missing=1)
+            if not b.get("deleted"):
+                self.journal.event("info", f"{b['name']}: the batch folder was removed from the watched folder",
+                                   workflow_id=wf.id, batch_id=b["id"])
 
     def _scan_batch(self, wf, folder: Path, now: float, cfg: SC.Readiness, baseline_new: bool) -> None:
         from gcws.io import sequence as SQ
         b = self.journal.batch(wf.id, folder)
+        born, recorded = SC.birth(folder), b.get("folder_birth")
+        if b.get("missing") or (recorded and born and abs(float(recorded) - born) > 1e-3):
+            # removed and put back, or deleted and copied in again: new data, processed again
+            self.journal.reset_batch(b["id"])
+            self.journal.event("info", f"{b['name']}: the batch folder was put in again; its samples are "
+                               "processed again", workflow_id=wf.id, batch_id=b["id"])
+            b = self.journal.batch_by_id(b["id"])
+        if born and b.get("folder_birth") != born:
+            self.journal.update_batch(b["id"], folder_birth=born)
         if b.get("deleted"):
             return                                     # deleted in Report²: not looked at any more
         prev = self.journal.runs(b["id"])
@@ -311,6 +368,7 @@ class WatcherCore(QObject):
                                                key=lambda s: SQ.order_key(s))
         present_stems = {o.stem for o in obs}
         present = {}
+        readded = set()
         for o in obs:
             i = order.index(o.stem) if o.stem in order else -1
             successor = i >= 0 and any(s in present_stems for s in order[i + 1:])
@@ -323,13 +381,30 @@ class WatcherCore(QObject):
                 fields["last_change"] = now
             if row is None and baseline_new:
                 fields["baseline"] = 1
+            if o.birth is not None:
+                fields["birth"] = o.birth
+                if row is not None and row.get("birth") and row.get("state") == "ready" and \
+                        abs(float(row["birth"]) - o.birth) > 1e-3:
+                    # a finished run deleted and copied in again: its sample is processed again
+                    fields.update(readded=int(row.get("readded") or 0) + 1, baseline=0)
+                    readded.add(o.name)
+                    self.journal.event("info", f"{b['name']}: {o.name} was put in again; its sample is processed "
+                                       "again", workflow_id=wf.id, batch_id=b["id"])
             self.journal.upsert_run(b["id"], o.stem, **fields)
             present[o.stem] = {"name": o.name, "ready": state == "ready"}
+        newest = max((o.mtime for o in obs), default=0.0)
+        if not quiet and obs and not changed and all(v["ready"] for v in present.values()) and \
+                now - newest >= cfg.quiet_s:
+            quiet = True                               # copied or moved in: nothing written for the quiet time
+        if readded:
+            self.journal.put_in_again([j.id for j in self.journal.jobs(workflow_id=wf.id, batch_id=b["id"])
+                                       if set(j.members or []) & readded])
         runs = self.journal.runs(b["id"])
         baseline = {s for s, r in runs.items() if r.get("baseline")}
         self.journal.update_batch(b["id"], last_change=last_change, has_log=int(bool(seq.lines)),
                                   seq_completed=int(seq.finished))
-        fps = {s: r.get("fingerprint") or "" for s, r in runs.items()}
+        fps = {s: (r.get("fingerprint") or "") + (f"#{r['readded']}" if r.get("readded") else "")
+               for s, r in runs.items()}
         names = {s: r.get("path") and Path(r["path"]).name for s, r in runs.items()}
         # a method fed by the local copy sees a run once it is copied
         copied = {s for s, r in runs.items() if r.get("copied_fp") and r.get("copied_fp") == r.get("fingerprint")}

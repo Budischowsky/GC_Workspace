@@ -348,6 +348,12 @@ class WorkflowEditor(QMainWindow):
             self.enabled.setChecked(False)
             self.enabled.blockSignals(False)
             self.status.setText("Saved inactive: correct the errors first")
+        old = W.find(self.wf.id)
+        before = (old.source.p("folder") or "") if old is not None and old.source is not None else ""
+        now = (self.wf.source.p("folder") or "") if self.wf.source is not None else ""
+        if before and now and before.casefold() != now.casefold() and not self.wf.source.p("process_existing"):
+            self.status.setText("Saved. The runs already in the new watched folder are not processed (tick 'Also "
+                                "process the runs already in the folder' for that, or add them to the queue).")
         self.wf.save()
         self.dirty = False
         self.saved.emit(self.wf.id)
