@@ -69,6 +69,19 @@ def safe_name(text: str, limit: int = 80) -> str:
     return (out or "unnamed")[:limit]
 
 
+def is_network(path) -> bool:
+    """True when ``path`` lies on a network share (UNC path or a mapped network drive)."""
+    p = str(path)
+    if p.startswith("\\\\"):
+        return True
+    try:
+        import ctypes
+        drive = os.path.splitdrive(os.path.abspath(p))[0] + "\\"
+        return ctypes.windll.kernel32.GetDriveTypeW(drive) == 4          # DRIVE_REMOTE
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def is_inside(path, folder) -> bool:
     """True when ``path`` is ``folder`` or lies below it (case-insensitive on Windows)."""
     try:

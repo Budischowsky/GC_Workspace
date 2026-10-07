@@ -186,7 +186,8 @@ class AutomationDock(QWidget):
         cur = self.status.get("current") or ""
         job = self.journal.job(cur) if cur else None
         hb = self.status.get("heartbeat")
-        text = f"processing {job.group_name}" if job else ""
+        text = "; ".join(t for t in (f"processing {job.group_name}" if job else "",
+                                     self.status.get("copying") or "") if t)
         if hb is not None and state != "stopped":
             text += ("; " if text else "") + f"last sign of life {hb:.0f} s ago"
         self.state_text.setText(text)

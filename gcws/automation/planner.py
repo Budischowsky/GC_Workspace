@@ -65,7 +65,8 @@ def plan_batch(present: dict, seq: Optional[SQ.SequenceInfo], *, quiet: bool, re
                baseline: frozenset | set = frozenset()) -> BatchPlan:
     """The samples of one batch folder and their state.
 
-    ``present``: run stem -> {"name": file name, "ready": bool}. ``seq``: the folder's sequence
+    ``present``: run stem -> {"name": file name, "ready": bool, "copying": bool (finished, but not yet
+    in the local copy)}. ``seq``: the folder's sequence
     log (or None). ``quiet``: the folder has not changed for the quiet time. ``require``: the
     blanks a sample needs (blank | blank_istd | both | either | none). ``baseline``: stems that
     were there before the workflow started watching (their samples are not processed)."""
@@ -86,6 +87,8 @@ def plan_batch(present: dict, seq: Optional[SQ.SequenceInfo], *, quiet: bool, re
                                new_id=lambda: "")
     plan = BatchPlan(finished=finished, order=order, roles=roles)
     ready = lambda s: s in present and bool(present[s].get("ready"))
+    where = lambda s: (" (planned)" if s not in present else
+                       " (being copied)" if present[s].get("copying") else " (acquiring)")
     for g in groups:
         members = g["members"]
         first = names[members[0]]
@@ -105,7 +108,7 @@ def plan_batch(present: dict, seq: Optional[SQ.SequenceInfo], *, quiet: bool, re
         waiting_blanks = [x for x in b_all + bi_all if not ready(x)]
         if waiting:
             m = waiting[0]
-            gp.reason = (f"waiting for {names[m]}" + (" (planned)" if m not in present else " (acquiring)")
+            gp.reason = (f"waiting for {names[m]}" + where(m)
                          + (f" and {len(waiting) - 1} more" if len(waiting) > 1 else ""))
         elif not ok:
             if finished or seq.lines:
@@ -114,7 +117,7 @@ def plan_batch(present: dict, seq: Optional[SQ.SequenceInfo], *, quiet: bool, re
                 gp.reason = f"waiting for a {missing} (or until the folder is quiet)"
         elif waiting_blanks:
             x = waiting_blanks[0]
-            gp.reason = f"waiting for the blank {names[x]}" + (" (planned)" if x not in present else " (acquiring)")
+            gp.reason = f"waiting for the blank {names[x]}" + where(x)
         elif not seq.lines and not quiet:
             gp.reason = "waiting until the folder is quiet (no sequence log)"
         else:

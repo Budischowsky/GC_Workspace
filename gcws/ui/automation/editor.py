@@ -21,6 +21,8 @@ from gcws.ui.automation.items import EdgeItem, NodeItem, type_color
 
 PALETTE_HELP = {
     "source": "The folder the instrument writes into. Checked every few minutes.",
+    "copy": "Copies every finished run to a folder on this PC; the method works on the copy (fast on a slow "
+            "network). Put between the watched folder and the method by itself.",
     "method": "Processing method: integration, library search, ISTDs, quantification.",
     "report2": "Report²: accepted automatically, or control needed by the analyst.",
     "report": "The report and its files (Excel, Word, PDF, batch).",
@@ -260,8 +262,8 @@ class WorkflowEditor(QMainWindow):
 
     def add_node(self, node_type: str, x: float = 0.0, y: float = 0.0, **params) -> W.Node:
         box = {}
-        self._change(f"add {W.NODE_TYPES[node_type]}",
-                     lambda: box.setdefault("n", self.wf.add_node(node_type, x, y, **params)))
+        add = self.wf.insert_copy if node_type == "copy" else lambda *a, **k: self.wf.add_node(node_type, *a, **k)
+        self._change(f"add {W.NODE_TYPES[node_type]}", lambda: box.setdefault("n", add(x, y, **params)))
         return self.wf.node(box["n"].id)
 
     def connect_nodes(self, src: str, dst: str) -> str:

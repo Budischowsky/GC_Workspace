@@ -1029,6 +1029,9 @@ class Report2Dock(QWidget):
         files.setEnabled(not files.isEmpty())
         menu.addMenu(files)
         menu.addAction("Open batch folder", lambda: self.open_batch_folder(bid)).setEnabled(bool(b.get("folder")))
+        local = b.get("local_folder") or ""
+        if local:                                      # the workflow copies the runs to this PC
+            menu.addAction("Open the local copy", lambda: self.open_path(local)).setEnabled(os.path.isdir(local))
         menu.addSeparator()
         n = sum(j.state == J.CONTROL and can_accept(j) for j in jobs)
         menu.addAction(f'Accept all "control needed" ({n})...',
