@@ -471,3 +471,32 @@ def test_send_to_automation_from_the_folder_panel(qtbot, data, monkeypatch):
         m.setattr(FT, "QMenu", Menu)
         tree._menu(QPoint(0, 0))
     assert sent == [[str(one)]]
+
+
+def test_panel_lists_are_built_again_only_when_something_changed(qtbot, data, monkeypatch):
+    """Every poll shows the watcher's state; the lists are built again only when the journal, a workflow
+    or a listing changed, or half a minute passed."""
+    import time
+    from gcws.ui.docks.automation import AutomationDock
+    wf, jr, job, batch, local = _overview_setup(data)
+    dock = AutomationDock(journal=jr, control=NoWatcher(), poll_ms=10 ** 8)
+    qtbot.addWidget(dock)
+    dock.show()
+    built = []
+    monkeypatch.setattr(dock, "_refresh_queue", lambda: built.append(1))
+    dock._poll()                                           # the first poll: the journal is new to it
+    built.clear()
+    dock._poll()
+    assert built == []
+    jr.update_job(job.id, reason="changed")
+    dock._poll()
+    assert built == [1]
+    dock._poll()
+    wf.name = "Renamed"
+    time.sleep(0.02)
+    wf.save()
+    dock._poll()
+    assert built == [1, 1]
+    dock._refreshed -= 31
+    dock._poll()
+    assert built == [1, 1, 1]

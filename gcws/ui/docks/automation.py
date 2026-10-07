@@ -8,6 +8,8 @@ from the automation journal, which it reads every few seconds while visible.
 from __future__ import annotations
 
 import json
+import os
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -34,6 +36,8 @@ class AutomationDock(QWidget):
         self._journal = journal
         self._control = control
         self.editors: dict = {}
+        self._refreshed = 0.0                   # when the lists were built last
+        self._files = None                      # the workflow files and the watcher's listings then
         lay = QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
         # the watcher
@@ -187,10 +191,35 @@ class AutomationDock(QWidget):
         return self._control
 
     def _poll(self):
-        if self.isVisible():
+        """Every few seconds: the watcher's state; the lists only when something changed (the journal, a
+        workflow, a look of the watcher) or half a minute passed (times like "in about 5 min")."""
+        if not self.isVisible():
+            return
+        try:
+            changed = self.journal.changed("automation")
+        except Exception:  # noqa: BLE001
+            changed = True
+        if changed or self._file_stamp() != self._files or time.time() - self._refreshed > 30:
             self.refresh()
+        else:
+            self._refresh_status()
+
+    @staticmethod
+    def _file_stamp() -> tuple:
+        """The workflow files and the watcher's listings (names and times): a few entries of a local folder."""
+        from gcws.automation import store
+        out = []
+        for folder in (store.workflows_dir(), store.root() / "listing"):
+            try:
+                with os.scandir(folder) as it:
+                    out += sorted((e.name, e.stat().st_mtime_ns) for e in it)
+            except OSError:
+                pass
+        return tuple(out)
 
     def refresh(self):
+        self._refreshed = time.time()
+        self._files = self._file_stamp()
         self._refresh_status()
         self._refresh_workflows()
         self._refresh_queue()

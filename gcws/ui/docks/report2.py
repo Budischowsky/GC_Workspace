@@ -184,6 +184,7 @@ class Report2Dock(QWidget):
         self._building = False
         self._stamp = None
         self._refreshed = 0.0
+        self._facts_cache: dict = {}               # (job id, findings, evidence) -> what its row shows
         lay = QVBoxLayout(self)
         lay.setContentsMargins(6, 6, 6, 6)
         # To do / Archive and the filters
@@ -491,22 +492,18 @@ class Report2Dock(QWidget):
                                      j.group_name.casefold()))
 
     def _stamp_now(self):
-        con = self.journal.con
-        a = con.execute("SELECT COUNT(*), MAX(COALESCE(finished,0)), MAX(COALESCE(reviewed_at,0)), "
-                        "MAX(COALESCE(created,0)), SUM(LENGTH(state)), SUM(deleted), SUM(export_pending), "
-                        "SUM(LENGTH(COALESCE(export_state,'')))  FROM jobs").fetchone()
-        b = con.execute("SELECT COUNT(*), SUM(deleted), MAX(COALESCE(reopened,0)), "
-                        "SUM(LENGTH(COALESCE(plan_json,''))) FROM batches").fetchone()
-        return tuple(a) + tuple(b) + (con.execute("SELECT MAX(id) FROM events").fetchone()[0],)
+        return self.journal.stamp()
 
     def _poll(self):
         if not self.isVisible():
             return
+        stale = time.time() - self._refreshed > 60                           # "5 min ago" moves on
         try:
-            stamp = self._stamp_now()
+            # nothing written (the usual case): not even the stamp is read
+            stamp = self._stamp_now() if self.journal.changed("report2") or stale else self._stamp
         except Exception:  # noqa: BLE001 - the watcher may be writing
             return
-        if stamp != self._stamp or time.time() - self._refreshed > 60:      # "5 min ago" moves on
+        if stamp != self._stamp or stale:
             self.refresh()
         self._update_watcher()
 
@@ -700,7 +697,7 @@ class Report2Dock(QWidget):
         accepted = [j for j in live if j.state in J.ACCEPTED]
         sent = sum(delivered(j)[0] == "✓" for j in accepted)
         last = max((activity(j) for j in self._by_batch.get(bid, [])), default=0)
-        findings = sum(len(j.findings or []) for j in samples)
+        findings = sum(self._facts(j)[0] for j in samples)
         deleted = bool(b.get("deleted"))
         it = QTreeWidgetItem([b.get("name", "?"), "Deleted" if deleted else text, str(findings) if findings else "",
                               f"{sent}/{len(accepted)}" if accepted else "", J.ago(last)])
@@ -720,6 +717,29 @@ class Report2Dock(QWidget):
         self._items[f"b:{bid}"] = it
         return it
 
+    def _facts(self, j: J.Job) -> tuple:
+        """``(number of findings, their text, lights)`` of a report, decoded only when its findings or evidence
+        changed (they are large; hashing the text is far cheaper): lights = ``[(label, level, count, tooltip)]``."""
+        key = (j.id, hash(j.row.get("findings_json")), hash(j.row.get("evidence_json")))
+        facts = self._facts_cache.get(key)
+        if facts is None:
+            findings = j.findings or []
+            lights = []
+            # expanded: how many substances the double determination marked red and yellow (not every finding)
+            features = (j.evidence or {}).get("features") or []
+            if features:
+                for light, label, level in (("red", "Red - to decide", "bad"), ("yellow", "Yellow - to check", "warn")):
+                    rows = [f for f in features if f.get("light") == light]
+                    names = [f"{f.get('rt'):.3f}  {f.get('name') or f.get('feature_id') or ''}"
+                             if isinstance(f.get("rt"), (int, float)) else str(f.get("name") or "") for f in rows]
+                    lights.append((label, level, len(rows), "\n".join(
+                        names[:25] + ([f"... {len(names) - 25} more"] if len(names) > 25 else []))))
+            facts = (len(findings), "\n".join(f.get("text") or "" for f in findings), lights)
+            if len(self._facts_cache) > 20000:
+                self._facts_cache.clear()
+            self._facts_cache[key] = facts
+        return facts
+
     def _job_item(self, j: J.Job) -> QTreeWidgetItem:
         label = j.group_name
         if self._is_pair(j):
@@ -728,7 +748,7 @@ class Report2Dock(QWidget):
         if j.deleted:
             status = f"Deleted ({status.lower()})"
         sent, sent_level = delivered(j)
-        n = len(j.findings or [])
+        n, finding_text, lights = self._facts(j)
         it = QTreeWidgetItem([label, status, str(n) if n else "", sent, J.ago(j.finished or j.created)])
         it.setData(0, ROLE_KIND, "job")
         it.setData(0, Qt.UserRole, j.id)
@@ -752,23 +772,16 @@ class Report2Dock(QWidget):
         if j.reason:
             it.setToolTip(1, j.reason)
         if n:
-            it.setToolTip(2, "\n".join(f.get("text") or "" for f in j.findings))
-        # expanded: how many substances the double determination marked red and yellow (not every finding)
-        features = (j.evidence or {}).get("features") or []
-        if features:
-            for light, label, level in (("red", "Red - to decide", "bad"), ("yellow", "Yellow - to check", "warn")):
-                rows = [f for f in features if f.get("light") == light]
-                child = QTreeWidgetItem([label, str(len(rows))])
-                child.setData(0, ROLE_KIND, "finding")
-                child.setFlags(Qt.ItemIsEnabled)
-                child.setIcon(0, _dot(level if rows else "neutral"))
-                if rows:
-                    child.setBackground(1, theme.status_brush(level))
-                    names = [f"{f.get('rt'):.3f}  {f.get('name') or f.get('feature_id') or ''}"
-                             if isinstance(f.get("rt"), (int, float)) else str(f.get("name") or "") for f in rows]
-                    child.setToolTip(0, "\n".join(names[:25] + ([f"... {len(names) - 25} more"]
-                                                                  if len(names) > 25 else [])))
-                it.addChild(child)
+            it.setToolTip(2, finding_text)
+        for label, level, count, tip in lights:
+            child = QTreeWidgetItem([label, str(count)])
+            child.setData(0, ROLE_KIND, "finding")
+            child.setFlags(Qt.ItemIsEnabled)
+            child.setIcon(0, _dot(level if count else "neutral"))
+            if count:
+                child.setBackground(1, theme.status_brush(level))
+                child.setToolTip(0, tip)
+            it.addChild(child)
         self._items[f"j:{j.id}"] = it
         return it
 

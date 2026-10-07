@@ -119,9 +119,11 @@ class Job:
         if name + "_json" in row:
             raw = row[name + "_json"]
             try:
-                return json.loads(raw) if raw else None
+                value = json.loads(raw) if raw else None
             except ValueError:
-                return None
+                value = None
+            self.__dict__[name] = value                 # decoded once (a report's evidence is ~30 KB)
+            return value
         raise AttributeError(name)
 
     @property
@@ -194,13 +196,41 @@ class Journal:
                 self.con.execute(f"ALTER TABLE runs ADD COLUMN {col} {kind}")
         if "census" not in {r["name"] for r in self.con.execute("PRAGMA table_info(watched)")}:
             self.con.execute("ALTER TABLE watched ADD COLUMN census REAL")
+        # what :meth:`stamp` reads, so that it never reads the reports' large columns
+        self.con.execute("CREATE INDEX IF NOT EXISTS jobs_stamp ON jobs(state, finished, reviewed_at, created, "
+                         "deleted, export_pending, export_state, revision, edited)")
+        # jobs() lists in this order: without the index every report's large columns were sorted
+        self.con.execute("CREATE INDEX IF NOT EXISTS jobs_created ON jobs(created)")
         self.con.execute(f"PRAGMA user_version={SCHEMA}")
+        self._data_version: dict = {}
 
     def close(self):
         try:
             self.con.close()
         except sqlite3.Error:
             pass
+
+    def changed(self, who: str = "") -> bool:
+        """True when anything was written since ``who`` last asked (by any program; nearly free). The
+        panels look at :meth:`stamp` only then."""
+        try:
+            now = (self.con.execute("PRAGMA data_version").fetchone()[0], self.con.total_changes)
+        except sqlite3.Error:
+            return True
+        old = self._data_version.get(who)
+        self._data_version[who] = now
+        return now != old
+
+    def stamp(self) -> tuple:
+        """Changes when a report, a batch or the log changes (not with the watcher's heartbeat). Read
+        from an index: a fraction of a millisecond also with thousands of reports."""
+        a = self.con.execute("SELECT COUNT(*), MAX(COALESCE(finished,0)), MAX(COALESCE(reviewed_at,0)), "
+                             "MAX(COALESCE(created,0)), SUM(LENGTH(state)), SUM(deleted), SUM(export_pending), "
+                             "SUM(LENGTH(COALESCE(export_state,''))), SUM(revision), SUM(edited) FROM jobs").fetchone()
+        b = self.con.execute("SELECT COUNT(*), SUM(deleted), MAX(COALESCE(reopened,0)), SUM(missing), "
+                             "SUM(LENGTH(COALESCE(force_json,''))), SUM(LENGTH(COALESCE(plan_json,''))) "
+                             "FROM batches").fetchone()
+        return tuple(a) + tuple(b) + (self.con.execute("SELECT MAX(id) FROM events").fetchone()[0],)
 
     @contextmanager
     def tx(self):
@@ -380,6 +410,14 @@ class Journal:
 
     def runs(self, batch_id: int) -> dict[str, dict]:
         return {r["stem"]: r for r in self._rows("SELECT * FROM runs WHERE batch_id=?", (batch_id,))}
+
+    def runs_by_batch(self, workflow_id: str) -> dict[int, dict[str, dict]]:
+        """:meth:`runs` of every batch of a workflow, in one query."""
+        out: dict = {}
+        for r in self._rows("SELECT * FROM runs WHERE batch_id IN (SELECT id FROM batches WHERE workflow_id=?)",
+                            (workflow_id,)):
+            out.setdefault(r["batch_id"], {})[r["stem"]] = r
+        return out
 
     def upsert_run(self, batch_id: int, stem: str, **fields):
         cur = self._rows("SELECT id FROM runs WHERE batch_id=? AND stem=?", (batch_id, stem))

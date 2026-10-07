@@ -51,6 +51,11 @@ def _runs_in(folder) -> list[str]:
         return []
 
 
+def _name(run: dict, stem: str) -> str:
+    """A run's file name (os.path: thousands of runs are listed at each refresh)."""
+    return os.path.basename(run.get("path") or stem)
+
+
 def _worst(levels) -> str:
     levels = set(levels)
     return next((lv for lv in WORST if lv in levels), "neutral")
@@ -100,6 +105,7 @@ def _workflow(journal: J.Journal, wf, jobs: list, now: float) -> Item:
     for j in jobs:
         by_batch.setdefault(j.batch_id, []).append(j)
     keys = list(entries) + [k for k in batches if k not in entries]
+    runs = journal.runs_by_batch(wf.id)
     local_seen = set()
     for key in keys:
         f, b = entries.get(key, {}), batches.get(key, {})
@@ -115,7 +121,8 @@ def _workflow(journal: J.Journal, wf, jobs: list, now: float) -> Item:
             if lp:
                 local_seen.add(SC.folder_key(lp))
             continue
-        item = _batch(journal, wf, f, b, by_batch.get(b.get("id"), []), root, local_root, now)
+        item = _batch(journal, wf, f, b, by_batch.get(b.get("id"), []), root, local_root, now,
+                      runs.get(b.get("id"), {}))
         if item is None:
             continue
         if item.local_path:
@@ -138,7 +145,7 @@ def _workflow(journal: J.Journal, wf, jobs: list, now: float) -> Item:
 
 
 def _batch(journal: J.Journal, wf, f: dict, b: dict, jobs: list, root: str, local_root: str,
-           now: float) -> Optional[Item]:
+           now: float, known: Optional[dict] = None) -> Optional[Item]:
     src = wf.source
     path = f.get("path") or b.get("folder") or ""
     if not path:
@@ -154,9 +161,10 @@ def _batch(journal: J.Journal, wf, f: dict, b: dict, jobs: list, root: str, loca
         item.watched = "watched" + (" (sequence log)" if f.get("has_log") else " (no sequence log)")
     else:
         item.watched = "seen at an earlier look"
-    known = journal.runs(b["id"]) if b.get("id") is not None else {}
+    if known is None:
+        known = journal.runs(b["id"]) if b.get("id") is not None else {}
     runs = {s: r for s, r in known.items() if not r.get("gone")}           # deleted runs are not listed
-    gone = {Path(r.get("path") or s).name.casefold() for s, r in known.items() if r.get("gone")}
+    gone = {_name(r, s).casefold() for s, r in known.items() if r.get("gone")}
     lp = b.get("local_folder") or (str(LC.local_batch(local_root, root, path)) if local_root else "")
     local_names = set(_runs_in(lp)) if lp and os.path.isdir(lp) else set()
     if local_root:
@@ -193,8 +201,8 @@ def _batch(journal: J.Journal, wf, f: dict, b: dict, jobs: list, root: str, loca
             for m in names:
                 by_blank.setdefault(str(m).casefold(), []).append(j)
     names_seen = set()
-    for stem, r in sorted(runs.items(), key=lambda kv: Path(kv[1].get("path") or kv[0]).name.casefold()):
-        name = Path(r.get("path") or stem).name
+    for stem, r in sorted(runs.items(), key=lambda kv: _name(kv[1], kv[0]).casefold()):
+        name = _name(r, stem)
         names_seen.add(name.casefold())
         if name.casefold() in hidden and name.casefold() not in by_member:
             continue
@@ -210,7 +218,7 @@ def _batch(journal: J.Journal, wf, f: dict, b: dict, jobs: list, root: str, loca
         if r.get("readded"):
             run.watched += ", put in again"
         if local_root:
-            run.local_path = str(Path(lp) / name) if lp else ""
+            run.local_path = os.path.join(lp, name) if lp else ""
             if r.get("copied_fp") and r.get("copied_fp") == r.get("fingerprint"):
                 run.local = "copied"
             elif r.get("copy_error"):

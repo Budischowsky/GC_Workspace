@@ -216,3 +216,26 @@ def test_pairs_accepted_by_hand(tmp_path):
     back = listed("Pair (2)", replace=MA.entry(jr, b["id"], "Pair (2)").id)
     assert back.id == job.id and not back.deleted and back.revision == 3
     assert J.batch_closed(jr.batch_by_id(b["id"]), [back])          # nothing pending: it can be archived
+
+
+def test_change_check_and_stamp_are_cheap_and_ignore_the_heartbeat(tmp_path):
+    """The panels poll every few seconds: changed() is nearly free, stamp() reads an index only and does
+    not move with the watcher's heartbeat; decoded JSON is kept with the job."""
+    J, jr, b = _journal(tmp_path)
+    other = J.Journal(jr.path)                              # another program (the watcher)
+    assert jr.changed("a") and not jr.changed("a")
+    assert jr.changed("b")                                  # every caller on its own
+    stamp = jr.stamp()
+    other.heartbeat("running")
+    assert jr.changed("a") and jr.stamp() == stamp          # written, but nothing a panel shows
+    job = _done(J, jr, b, "S1", J.CONTROL, findings=[{"rule": "x", "text": "t"}])
+    assert jr.changed("a") and jr.stamp() != stamp
+    stamp = jr.stamp()
+    jr.update_job(job.id, edited=1)                         # saved changes: Accept now makes it again
+    assert jr.stamp() != stamp
+    plan = jr.con.execute("EXPLAIN QUERY PLAN SELECT COUNT(*), SUM(edited), SUM(revision) FROM jobs").fetchall()
+    assert "COVERING INDEX jobs_stamp" in " ".join(str(tuple(r)) for r in plan)
+    job = jr.job(job.id)
+    assert job.findings is job.findings                     # decoded once
+    other.close()
+    jr.close()
