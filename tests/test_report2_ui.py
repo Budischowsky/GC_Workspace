@@ -345,7 +345,7 @@ def test_context_menus_of_a_sample_and_a_batch(qtbot, data, tmp_path, monkeypatc
     row = dock._items[f"j:{ids['S-control']}"]
     menu = dock._tree_context_menu(dock.tree.visualItemRect(row).center())
     texts = [a.text() for a in menu.actions() if not a.isSeparator()]
-    for t in ("Open report", "Open in GC Workspace", "Accept", "Accept with comment...", "Reject",
+    for t in ("Open report", "Edit in GC Workspace", "Accept", "Accept with comment...", "Reject",
               "Process again", "Remove from the queue...", "Deliver to the target folders now",
               "Show history...", "Open the job folder", "Copy sample name", "Delete..."):
         assert t in texts, t
@@ -868,3 +868,77 @@ def test_accepted_pair_is_listed_in_report2(qtbot, win, samples, tmp_path, monke
     from gcws.ui.docks.report2 import can_reprocess
     assert not can_reprocess(third)
     ws.dirty = False
+
+
+def test_edit_an_accepted_report_and_update_it(qtbot, win, data, tmp_path, monkeypatch):
+    """Edit in GC Workspace works for any report (here a single determination, accepted automatically);
+    Update report in the status bar makes it again: accepted by the analyst, delivered again."""
+    from gcws.automation import journal as J
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    job = jr.job(ids["S-auto"])
+    project = tmp_path / "s-auto.gcws"
+    project.write_text("original")
+    jr.update_job(job.id, project_path=str(project))
+    win.report2._journal = jr
+    launcher = FakeLauncher()
+    monkeypatch.setattr("gcws.automation.watcher.ProcessLauncher", lambda parent=None: launcher)
+    monkeypatch.setattr("gcws.automation.control.WatcherControl", lambda *a, **k: NoWatcher())
+    routed, bind = [], win.open_report2_job
+    monkeypatch.setattr(win, "open_report2_job", lambda jid: routed.append(jid) or True)
+    win.report2.select(job.id)
+    assert win.report2.b_project.text() == "Edit in GC Workspace" and win.report2.b_project.isEnabled()
+    win.report2.open_project()
+    assert routed == [job.id]                              # bound to the report, not just opened
+    monkeypatch.setattr(win, "open_report2_job", bind)
+    assert not win.r2_bar.isVisibleTo(win)
+    win._report2_job = (job.id, job.revision, project)
+    win._report2_baseline = {"quant": {"limit": 1}}
+    win.ws.project_path, win.ws.dirty = project, True
+    assert win.r2_bar.isVisibleTo(win) and "S-auto" in win.r2_label.text() and "accepted" in win.r2_label.text()
+    monkeypatch.setattr("gcws.ui.main_window.P.to_dict", lambda ws, path: {"quant": {"limit": 2}})
+    monkeypatch.setattr("gcws.ui.main_window.P.save", lambda ws, path: (Path(path).write_text("edited"), path)[1])
+    try:
+        assert win.update_report2()
+        assert project.read_text() == "edited"
+        queued = jr.job(job.id)
+        assert queued.state == J.PROCESSING and queued.review_pending and queued.revision == 2
+        assert not win.b_r2_update.isEnabled()             # being made
+        job_id, spec, _kind = launcher.started[-1]
+        assert spec["mode"] == "rereport" and spec["project_path"] == str(project)
+        rep = wf.by_type("report")[0]
+        files = {}
+        for fmt in ("xlsx", "docx", "pdf"):
+            p = Path(spec["out_dir"]) / f"S-auto_NIAS_Report.{fmt}"
+            p.write_text("updated " + fmt)
+            files[fmt] = str(p)
+        newer = Path(spec["out_dir"]) / "S-auto.gcws"
+        newer.write_text("regenerated")
+        launcher.complete({"state": "accepted_auto", "reason": "", "files": {rep.id: files}, "project": str(newer),
+                           "evidence": {}, "findings": [], "warnings": [], "timings": {}})
+        after = jr.job(job.id)
+        assert after.state == J.ACCEPTED_MANUAL and after.revision == 2 and after.export_state == "done"
+        assert (tmp_path / "B" / batch.name / "S-auto_NIAS_Report.docx").read_text() == "updated docx"
+        assert win._report2_job == (job.id, 2, newer) and win.ws.project_path == newer   # still editing it
+        assert win.b_r2_update.isEnabled()
+        assert not win.update_report2()                    # nothing changed since: nothing to update
+        asked = []
+        from PySide6.QtWidgets import QMessageBox
+        monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: asked.append(a) or QMessageBox.No)
+        win.ws.dirty = True
+        assert win.stop_report2_edit()
+        assert asked and win._report2_job is None and not win.r2_bar.isVisibleTo(win)
+        assert win.ws.project_path is None                 # never saved into the report's project by accident
+        assert jr.job(job.id).state == J.ACCEPTED_MANUAL
+    finally:
+        win._report2_job = None
+        win.ws.dirty = False
+
+
+def test_edit_is_not_offered_for_a_batch_report_or_a_missing_project(qtbot, win, data, tmp_path, monkeypatch):
+    from gcws.automation import journal as J
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    win.report2._journal = jr
+    assert not win.open_report2_job(ids["S-auto"])         # no project file
+    report = jr.ensure_job(wf.id, wf.methods()[0].id, jr.batch(wf.id, batch)["id"], J.BATCH_KEY, "Batch", [], {},
+                           "fp", state=J.QUEUED)
+    assert not win.open_report2_job(report.id)

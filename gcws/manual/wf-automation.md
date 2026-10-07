@@ -117,7 +117,7 @@ Double-click it and choose the **Local folder** on this PC.
 - Only the watched folder is watched. As soon as a run is finished there, it is copied to the local folder,
   together with the files beside the runs (the sequence log). One copy runs at a time, beside the processing.
 - A sample is processed once its runs and blanks are copied; the queue says *being copied* meanwhile. The
-  method reads the copy, and the project saved with the report points to it, so **Open in GC Workspace** is
+  method reads the copy, and the project saved with the report points to it, so **Edit in GC Workspace** is
   fast too.
 - The copies are **kept**: nothing is deleted, and files you add to a copy stay. You can open the copies
   yourself as you would any batch. If a copy needed for **Process again** has been deleted, it is copied again
@@ -238,7 +238,7 @@ decide** and **Yellow - to check** (hover for their names); the details are in *
 | **Accept** | Accepts the report with your name and time - one click, no comment needed (the arrow beside it: **Accept with comment...**). If you changed the sample, GC Workspace makes the report again from the saved project at once - the watcher is not needed - and it stays accepted by you as a new revision (new findings of the updated report are listed with it); then it is delivered. The next report needing control is selected. |
 | **Reject** | Rejects it: choose a reason, or **Other...** for a comment of your own (optional). **View > Reject reasons...** changes the list. A rejected report can still be accepted. |
 | **Open report** | Opens the Word, Excel or PDF file. |
-| **Open in GC Workspace** | Opens the sample exactly as it was processed - runs, integration, names, internal standards, blanks - to check or correct it. |
+| **Edit in GC Workspace** | Opens the sample exactly as it was processed - runs, integration, names, internal standards, blanks - to check or correct it, whatever its state: also an accepted or a rejected report, a single determination or a group of three. See [Editing a report](wf-automation.md#editing-a-report). |
 | **Preview** | Shows the selected report beside the list (a batch row: its batch report). A report without a PDF is converted from its Word report by Microsoft Word the first time (a few seconds); the preview is kept in the job folder and is not delivered. A report with Excel only is opened with **Open report**. |
 | **Undo** | For a few seconds after an accept, a reject or a delete, under the list. An accepted report is delivered only after that time. |
 | **Rules...** | The rules, see below. |
@@ -249,7 +249,7 @@ decide** and **Yellow - to check** (hover for their names); the details are in *
 | Item | What it does |
 |---|---|
 | **Open report** | One of its files. |
-| **Open in GC Workspace**, **Open in Replicates / results** | The sample as processed; an A/B pair in its double determination. |
+| **Edit in GC Workspace**, **Open in Replicates / results** | The sample as processed, to change it; an A/B pair in its double determination. |
 | **Accept**, **Accept with comment...**, **Reject** | As the buttons. |
 | **Process again > Report again from the (edited) project** | After you corrected the sample and saved the project: makes the report again from it. |
 | **Process again > Process again from the raw data** | Starts over from the raw data. |
@@ -267,7 +267,7 @@ decide** and **Yellow - to check** (hover for their names); the details are in *
 **Reject batch** (with a reason), **Process batch again...**, **Reopen** (in the archive), **Delete batch...**
 (hides the batch with all its reports; the watcher no longer looks at the folder) and **Restore batch**.
 
-Keys in the list: `A` accept, `R` reject, `Enter` open the report, `Ctrl+O` open in GC Workspace, `H` history,
+Keys in the list: `A` accept, `R` reject, `Enter` open the report, `Ctrl+O` edit in GC Workspace, `H` history,
 `Del` delete, `Ctrl+Z` undo.
 
 The usual way through a report that needs control: open its double determination, correct what the finding names,
@@ -275,6 +275,25 @@ then **Accept**. Switching to another pair with **Load from Report²…** beside
 current project. The updated report is made in GC Workspace, also when the watcher is stopped (the list says
 *Updating report* meanwhile); if GC Workspace is closed before it is done, the watcher makes it. Only a report
 that cannot be made goes back to **Control needed**, with the reason.
+
+## Editing a report
+
+Any report can be changed afterwards, also one already accepted and delivered: select it in Report² and press
+**Edit in GC Workspace** (`Ctrl+O`). Its project opens - an A/B pair in its double determination, otherwise
+with its first determination shown - and the status bar says **Editing the Report² report** with its name and
+state. Change what is needed: integration, names, internal standards, blanks, the double determination.
+
+- **Update report** saves your changes and makes the report again at once, in GC Workspace (the watcher is not
+  needed). It is accepted by you as a new revision - new findings of the updated report are listed with it -
+  and delivered to the target folders again, by the folder's **File exists** rule. You can go on editing and
+  update again.
+- **Stop editing** leaves the report as it is. Changes you have not saved yet: **Yes** saves them to the
+  report's project (the report then waits in **Control needed** until you accept it, which makes it again),
+  **No** keeps them open here only - **Save project** then asks where to save.
+
+Saving the project (`Ctrl+S`) while editing also saves into the report's project, and the report goes back to
+**Control needed** until it is updated or accepted. An entry **Accepted by hand** is listed again from its
+double determination.
 
 ## The rules
 

@@ -477,8 +477,9 @@ analyst), need control, were not processed, are waiting or failed - per workflow
 - **Accept** is one click, **Reject** takes a reason from a list you can edit (*Other...* for a comment); both
   record your name and the time, act on all selected reports and can be undone for a few seconds - an
   accepted report is delivered along the arrows only after that. *Open report* opens Word / Excel / PDF;
-  **Open in GC Workspace** opens the sample as processed (runs, integration, names, ISTDs, blanks) to check or
-  correct it: save the project, then right-click > *Process again > Report again from the (edited) project*.
+  **Edit in GC Workspace** opens the sample as processed (runs, integration, names, ISTDs, blanks) to check or
+  correct it - also an accepted report: **Update report** in the status bar makes it again in GC Workspace
+  (no watcher needed); it stays accepted by you as a new revision and is delivered again.
 - Right-click a sample or a batch for everything else (process again, remove from the queue, deliver, delete,
   accept or reject a whole batch). **Delete** only hides: *View > Show deleted reports* brings it back.
 - Keys: `A` accept, `R` reject, `Enter` open, `Ctrl+O` GC Workspace, `H` history, `Del` delete, `Ctrl+Z` undo.

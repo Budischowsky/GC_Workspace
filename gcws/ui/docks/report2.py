@@ -140,6 +140,7 @@ class _BatchBar(QStyledItemDelegate):
 class Report2Dock(QWidget):
     openProject = Signal(str)                    # path of a job's .gcws project
     openDetermination = Signal(str)              # Report² job id, resolved by the main window
+    regenerated = Signal(str)                    # an edited report was made again here (job id)
     _converted = Signal(str, str)                # Word report, error ("" = the preview PDF is written)
 
     #: seconds Word may take for a preview before it is given up
@@ -283,9 +284,10 @@ class Report2Dock(QWidget):
         self.b_open = QToolButton()
         self.b_open.setText("Open report")
         self.b_open.setPopupMode(QToolButton.InstantPopup)
-        self.b_project = QPushButton("Open in GC Workspace")
+        self.b_project = QPushButton("Edit in GC Workspace")
         self.b_project.setToolTip("Open the sample as processed (runs, integration, identifications, ISTDs) to "
-                                  "check or correct it; then 'Report again' (Ctrl+O)")
+                                  "check or correct it - also an accepted report; then Update report in the "
+                                  "status bar makes it again (Ctrl+O)")
         self.b_project.clicked.connect(self.open_project)
         for b in (self.b_accept, self.b_reject, self.b_open, self.b_project):
             acts.addWidget(b)
@@ -369,7 +371,7 @@ class Report2Dock(QWidget):
         self.a_accept = act("Accept", lambda: self.review(True), "Accept the selected reports (A)", "A")
         self.a_accept_comment = act("Accept with comment...", self.accept_with_comment)
         self.a_replicates = act("Open in Replicates / results", lambda: self.open_determination(self.current))
-        self.a_project = act("Open in GC Workspace", self.open_project, key="Ctrl+O")
+        self.a_project = act("Edit in GC Workspace", self.open_project, key="Ctrl+O")
         self.a_rereport = act("Report again from the (edited) project", lambda: self.reprocess("rereport"))
         self.a_reprocess = act("Process again from the raw data", lambda: self.reprocess("full"))
         self.a_noblank = act("Process without a blank...", self.process_without_blank)
@@ -952,7 +954,8 @@ class Report2Dock(QWidget):
         self.a_accept.setEnabled(any(can_accept(j) for j in jobs))
         self.a_accept_comment.setEnabled(self.a_accept.isEnabled())
         self.b_reject.setEnabled(any(can_reject(j) for j in jobs))
-        self.b_project.setEnabled(one is not None and bool(one.project_path) and Path(one.project_path).exists())
+        self.b_project.setEnabled(one is not None and not one.is_batch and not one.review_pending and
+                                  bool(one.project_path) and Path(one.project_path).exists())
         self.a_project.setEnabled(self.b_project.isEnabled())
         self.a_replicates.setEnabled(one is not None and self._is_pair(one) and not one.review_pending)
         self.a_rereport.setEnabled(any(bool(j.project_path) and not j.is_batch and can_reprocess(j) for j in jobs))
@@ -1225,6 +1228,7 @@ class Report2Dock(QWidget):
             self._deliver.add(job_id)
             self.deliver_due()
         self.refresh()
+        self.regenerated.emit(job_id)
         if state in J.ACCEPTED:
             self.notify(f"{job.group_name}: the updated report is made and accepted" +
                         (f" ({job.reason})" if job.reason else "") + ".")

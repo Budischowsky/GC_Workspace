@@ -301,6 +301,6 @@ Described in [Unattended processing](wf-automation.md#report²-what-needs-your-c
 | **Accept** | Your decision, one click; the arrow: **Accept with comment...**. |
 | **Reject** | With a reason, or **Other...** for a comment. |
 | **Open report** | Opens one of its files. |
-| **Open in GC Workspace** | Opens the sample as it was processed. |
+| **Edit in GC Workspace** | Opens the sample as it was processed, to change it - also an accepted report; **Update report** in the status bar makes it again. |
 | **Preview** | Shows the selected report beside the list (its PDF, or its Word report converted once by Microsoft Word). |
 | **Undo** | Takes back the last accept, reject or delete for a few seconds. |

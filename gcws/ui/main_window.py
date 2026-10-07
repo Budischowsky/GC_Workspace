@@ -56,6 +56,16 @@ def _report_inputs(data: dict) -> dict:
 
 
 class MainWindow(QMainWindow):
+    @property
+    def _report2_job(self):
+        """(job id, journal revision, project path) of the Report² report being edited here, or None."""
+        return self.__dict__.get("_report2_edit")
+
+    @_report2_job.setter
+    def _report2_job(self, value):
+        self.__dict__["_report2_edit"] = value
+        self._update_report2_bar()
+
     def __init__(self):
         from gcws.ui import theme
         theme.ensure_applied()
@@ -629,6 +639,24 @@ class MainWindow(QMainWindow):
         sb.addPermanentWidget(self.activity)
         sb.addPermanentWidget(self.progress)
         sb.addPermanentWidget(self.cancel_btn)
+        # editing a Report² report: make it again, or leave it
+        from PySide6.QtWidgets import QHBoxLayout
+        self.r2_bar = QWidget()
+        h = QHBoxLayout(self.r2_bar)
+        h.setContentsMargins(6, 0, 0, 0)
+        self.r2_label = QLabel()
+        self.b_r2_update = QPushButton("Update report")
+        theme.set_primary(self.b_r2_update)
+        self.b_r2_update.setToolTip("Save your changes and make the report again: it is accepted by you as a new "
+                                    "revision and delivered to the target folders again")
+        self.b_r2_update.clicked.connect(lambda: self.update_report2())
+        self.b_r2_stop = QPushButton("Stop editing")
+        self.b_r2_stop.setToolTip("Leave the report as it is in Report²")
+        self.b_r2_stop.clicked.connect(lambda: self.stop_report2_edit())
+        for w in (self.r2_label, self.b_r2_update, self.b_r2_stop):
+            h.addWidget(w)
+        sb.insertPermanentWidget(0, self.r2_bar)
+        self._update_report2_bar()
 
     def begin_activity(self, key: str, label: str) -> None:
         """Show ongoing processing in the bottom status bar."""
@@ -701,6 +729,7 @@ class MainWindow(QMainWindow):
         self.report2.openProject.connect(self._open_report2_selected_project)
         self.report2.openDetermination.connect(self.open_report2_job)
         self.report2.prepare_review = self._save_report2_project
+        self.report2.regenerated.connect(self._report2_regenerated)
         self.replicates.report2Requested.connect(self._show_report2_pair_menu)
         self.replicates.duplicate.acceptRequested.connect(self._accept_pair)
         self.quant.hs_panel.roleRequested.connect(self.set_role)            # HS: a calibration run ticked
@@ -1800,14 +1829,18 @@ class MainWindow(QMainWindow):
 
     def _open_report2_selected_project(self, path):
         job = self.report2.journal.job(self.report2.current) if self.report2.current else None
-        if job is not None and job.project_path == path and self.report2._is_pair(job):
-            self.open_report2_job(job.id)
+        if job is not None and job.project_path == path:
+            self.open_report2_job(job.id)                  # edited here: Report² follows the changes
         else:
             self.open_project(path)
 
     def open_report2_job(self, job_id: str) -> bool:
+        """Edit a Report² report in GC Workspace: its project is opened and bound to the report, so that
+        saved changes return it to control and **Update report** makes it again (any number of
+        determinations; an A/B pair opens in its double determination)."""
         job = self.report2.journal.job(job_id)
-        if job is None or not self.report2._is_pair(job) or job.review_pending:
+        if job is None or job.is_batch or job.review_pending or not job.project_path or \
+                not Path(job.project_path).is_file():
             return False
         path = Path(job.project_path)
         if self.loading:
@@ -1844,12 +1877,112 @@ class MainWindow(QMainWindow):
             return
         by_name = {st.run.path.name.casefold(): st.id for st in self.ws.states()}
         members = [by_name.get(name.casefold()) for name in job.members or []]
-        if len(members) != 2 or any(m is None for m in members):
-            QMessageBox.warning(self, "Report²", "The project's A/B determinations could not be loaded.")
+        if not members or any(m is None for m in members):
+            QMessageBox.warning(self, "Report²", "The project's determinations could not be loaded.")
             return
-        self._show_dock("replicates")
-        self.replicates.show_pair(*members, processed=True)
+        if len(members) == 2:
+            self._show_dock("replicates")
+            self.replicates.show_pair(*members, processed=True)
+        else:
+            self.ws.set_active(members[0])
         self.report2.select(job_id)
+        self.statusBar().showMessage(f"Editing {job.group_name} from Report²: change what is needed, then Update "
+                                     "report (status bar).", 10000)
+
+    # -- editing a Report² report ---------------------------------------------------------------------
+
+    def _update_report2_bar(self):
+        bar = getattr(self, "r2_bar", None)
+        if bar is None:
+            return
+        job = None
+        if self._report2_job is not None:
+            try:
+                job = self.report2.journal.job(self._report2_job[0])
+            except Exception:  # noqa: BLE001 - no journal
+                job = None
+        bar.setVisible(job is not None)
+        if job is not None:
+            from gcws.automation import journal as J
+            state = "updating" if job.review_pending else J.STATE_LABELS.get(job.state, job.state).lower()
+            self.r2_label.setText(f"Editing the Report² report <b>{job.group_name}</b> ({state})")
+            self.b_r2_update.setEnabled(not job.review_pending)
+
+    def update_report2(self) -> bool:
+        """Update report: the changes are saved and the report is made again here; the analyst accepts it with
+        that (a new revision), and it is delivered to the target folders again."""
+        from gcws.automation import manual as MA
+        if self._report2_job is None:
+            return False
+        jid = self._report2_job[0]
+        jr = self.report2.journal
+        job = jr.job(jid)
+        if job is None:
+            return False
+        if MA.is_manual(job):                              # no workflow: listed again as accepted by hand
+            names = sorted(str(m).casefold() for m in job.members or [])
+            g = next((g for g in self.ws.replicate_groups if sorted(
+                self.ws.runs[m].run.path.name.casefold() for m in g["members"] if m in self.ws.runs) == names), None)
+            if g is None:
+                self.statusBar().showMessage(f"{job.group_name}: its double determination is not in the project.", 8000)
+                return False
+            return self._list_in_report2(g, job)
+        if not self._save_report2_project(jid):
+            return False
+        job = jr.job(jid)
+        if not job.edited:
+            self.statusBar().showMessage(f"{job.group_name}: no changes since the report - nothing to update.", 8000)
+            return False
+        ok = self.report2.review(True, job_ids=[jid])
+        self.statusBar().showMessage(f"{job.group_name}: the report is made again; it stays accepted by you and is "
+                                     "delivered again." if ok else
+                                     f"{job.group_name}: Report² could not take the update - look at it there.", 10000)
+        self._update_report2_bar()
+        return ok
+
+    def stop_report2_edit(self, ask: bool = True) -> bool:
+        """Stop editing: the project is no longer bound to the report. Changes not saved yet are saved to it
+        (the report then waits for acceptance in Report²) or kept here only, as the analyst chooses."""
+        if self._report2_job is None:
+            return False
+        jid, _revision, path = self._report2_job
+        try:
+            changed = _report_inputs(P.to_dict(self.ws, path)) != self._report2_baseline
+        except Exception:  # noqa: BLE001
+            changed = False
+        if ask and (changed or self.ws.dirty):
+            r = QMessageBox.question(
+                self, "Stop editing", "Save your changes to the report's project?\n\nYes: they are saved; the report "
+                "then needs your acceptance in Report² (Accept makes it again).\nNo: the report stays as it is; your "
+                "changes stay open here only (Save project asks where).",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+            if r == QMessageBox.Cancel:
+                return False
+            if r == QMessageBox.Yes:
+                if not self._save_report2_project(jid):
+                    return False
+            else:
+                self.ws.project_path = None            # never written into the report's project by accident
+        self._report2_job = None
+        self._report2_baseline = None
+        self.statusBar().showMessage("Stopped editing the Report² report.", 6000)
+        return True
+
+    def _report2_regenerated(self, job_id: str):
+        """The report being edited here was made again: the project stays bound to its new revision."""
+        if self._report2_job is None or self._report2_job[0] != job_id:
+            return
+        job = self.report2.journal.job(job_id)
+        if job is None or not job.project_path or not Path(job.project_path).is_file():
+            self._update_report2_bar()
+            return
+        path = Path(job.project_path)
+        self.ws.project_path = path
+        self._report2_job = (job_id, job.revision, path)
+        try:
+            self._report2_baseline = _report_inputs(P.to_dict(self.ws, path))
+        except Exception:  # noqa: BLE001
+            pass
 
     def _save_report2_project(self, job_id: str | None = None) -> bool:
         """Save report-affecting edits before leaving or accepting the loaded Report² pair."""
