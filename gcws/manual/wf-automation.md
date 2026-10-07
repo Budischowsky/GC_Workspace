@@ -246,7 +246,7 @@ decide** and **Yellow - to check** (hover for their names); the details are in *
 
 | Button | What it does |
 |---|---|
-| **Accept** | Accepts the report with your name and time - one click, no comment needed (the arrow beside it: **Accept with comment...**). If you changed the sample, GC Workspace makes the report again from the saved project at once - the watcher is not needed - and it stays accepted by you as a new revision (new findings of the updated report are listed with it); then it is delivered. The next report needing control is selected. |
+| **Accept** | Accepts the report with your name and time - one click, no comment needed (the arrow beside it: **Accept with comment...**). If you changed the sample, GC Workspace first makes the report again from the saved project at once - the watcher is not needed - and the updated report comes back as **Control needed** (new findings of it are listed): check it, then accept it. The next report needing control is selected. |
 | **Reject** | Rejects it: choose a reason, or **Other...** for a comment of your own (optional). **View > Reject reasons...** changes the list. A rejected report can still be accepted. |
 | **Open report** | Opens the Word, Excel or PDF file. |
 | **Save as** | **Save as Word...** or **Save as Excel...**: a copy of the report where you choose - also when the workflow delivers it nowhere. A report the workflow wrote without Word gets its Word report made from the Excel report. With a batch row (or its batch report) selected: the batch report, as below. |
@@ -264,6 +264,7 @@ decide** and **Yellow - to check** (hover for their names); the details are in *
 | **Save as Word...**, **Save as Excel...** | As the **Save as** button. |
 | **Edit in GC Workspace**, **Open in Replicates / results** | The sample as processed, to change it; an A/B pair in its double determination. |
 | **Accept**, **Accept with comment...**, **Reject** | As the buttons. |
+| **Set status > Accepted**, **Set status > Control needed** | **Accepted** accepts the report (as **Accept**). **Control needed** sets an accepted (or rejected) report back to control: it is checked again and accepted again. Files delivered already stay in the target folders; accepting it again delivers what is missing. |
 | **Process again > Report again from the (edited) project** | After you corrected the sample and saved the project: makes the report again from it. |
 | **Process again > Process again from the raw data** | Starts over from the raw data. |
 | **Process again > Process without a blank...** | Processes a sample that has no blank in its batch. |
@@ -294,8 +295,9 @@ Keys in the list: `A` accept, `R` reject, `Enter` open the report, `Ctrl+O` edit
 The usual way through a report that needs control: open its double determination, correct what the finding names,
 then **Accept**. Switching to another pair with **Load from Report²…** beside **Compare** saves changes to the
 current project. The updated report is made in GC Workspace, also when the watcher is stopped (the list says
-*Updating report* meanwhile); if GC Workspace is closed before it is done, the watcher makes it. Only a report
-that cannot be made goes back to **Control needed**, with the reason.
+*Updating report* meanwhile); if GC Workspace is closed before it is done, the watcher makes it. The updated
+report is never accepted by itself: it comes back as **Control needed** - look at it, then **Accept** it. A report
+that cannot be made stays in **Control needed** with the reason.
 
 ## Editing a report
 
@@ -305,16 +307,16 @@ with its first determination shown - and the status bar says **Editing the Repor
 state. Change what is needed: integration, names, internal standards, blanks, the double determination.
 
 - **Update report** saves your changes and makes the report again at once, in GC Workspace (the watcher is not
-  needed). It is accepted by you as a new revision - new findings of the updated report are listed with it -
-  and delivered to the target folders again, by the folder's **File exists** rule. You can go on editing and
-  update again.
+  needed), as a new revision. Updating never accepts it: the updated report comes back in Report² as **Control
+  needed** - new findings of it are listed - and once you accept it there it is delivered to the target folders
+  again, by the folder's **File exists** rule. You can go on editing and update again.
 - **Stop editing** leaves the report as it is. Changes you have not saved yet: **Yes** saves them to the
-  report's project (the report then waits in **Control needed** until you accept it, which makes it again),
+  report's project (the report then waits in **Control needed**; **Accept** makes it again, to be checked),
   **No** keeps them open here only - **Save project** then asks where to save.
 
 Saving the project (`Ctrl+S`) while editing also saves into the report's project, and the report goes back to
 **Control needed** until it is updated or accepted. An entry **Accepted by hand** is listed again from its
-double determination.
+double determination. A report accepted by mistake goes back with right-click > **Set status > Control needed**.
 
 ## The rules
 

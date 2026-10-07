@@ -1,7 +1,7 @@
 """Running one job: what the job process gets (its spec) and what becomes of its result.
 
 Shared by the watcher, which processes the queue, and GC Workspace, which makes an edited report again
-itself as soon as the analyst accepts it (:class:`LocalJobs`), so that this never waits for the watcher.
+itself as soon as the analyst updates it (:class:`LocalJobs`), so that this never waits for the watcher.
 """
 from __future__ import annotations
 
@@ -102,7 +102,8 @@ def job_spec(journal: J.Journal, wf: W.Workflow, job: J.Job, method: Callable[[s
             "method_node": m.id, "method": meth, "batch_folder": batch_folder, "source_folder": source_folder,
             "group": {"key": job.group_key, "name": job.group_name, "members": job.members or []},
             "blanks": job.blanks or {}, "reports": reports, "rules": rules,
-            "auto_accept": bool(review.p("auto_accept")) if review is not None else True,
+            # a report made again from the (edited) project is checked by the analyst, never accepted by itself
+            "auto_accept": job.mode != "rereport" and (bool(review.p("auto_accept")) if review is not None else True),
             "has_review": review is not None, "out_dir": str(out_dir), "project_path": prev_project,
             "require_blank": blank_requirement(m, meth), "search": bool(m.p("search")),
             "istd_detect": bool(m.p("istd_detect")), "min_confidence": m.p("min_confidence") or "high",
@@ -167,20 +168,15 @@ def finish(journal: J.Journal, job_id: str, out_dir: Path, tail: str = "", timed
                            or "; ".join(res.get("warnings") or []) or "no report was made"),
                           files=job.files or {}, findings=job.findings or [], evidence=job.evidence or {},
                           edited=1, export_pending=0)
-        elif new_keys - old_keys and not pending.get("keep"):
-            state = J.CONTROL
-            fields.update(reason="New findings in the regenerated report; review them before accepting",
-                          edited=0, export_pending=0)
         else:
-            # the analyst accepted the edited report: it stays accepted (new findings are listed with it)
-            state = J.ACCEPTED_MANUAL
+            # made again: never accepted by that - the analyst checks the updated report and accepts it
+            state = J.CONTROL
             new = len(new_keys - old_keys)
-            fields.update(reason=f"the updated report has {new} new finding(s)" if new else "", edited=0,
-                          reviewer=pending.get("user") or "", comment=pending.get("comment") or "",
-                          reviewed_at=now, export_pending=1)
-            journal.event("info", f"{job.group_name}: updated report accepted by {fields['reviewer']}"
-                          + (f" ({new} new finding(s))" if new else ""), job_id=job.id,
-                          workflow_id=job.workflow_id, batch_id=job.batch_id, user=fields["reviewer"])
+            fields.update(reason="updated report: check it and accept it" +
+                          (f" ({new} new finding(s))" if new else ""), edited=0, export_pending=1)
+            journal.event("info", f"{job.group_name}: updated report made" +
+                          (f" ({new} new finding(s))" if new else "") + "; it needs control", job_id=job.id,
+                          workflow_id=job.workflow_id, batch_id=job.batch_id, user=pending.get("user") or "")
     if state not in (J.CONTROL, J.ACCEPTED_AUTO, J.ACCEPTED_MANUAL, J.NOT_PROCESSED, J.FAILED):
         state = J.FAILED
     if state in (J.CONTROL, J.ACCEPTED_AUTO) and not pending:
@@ -206,7 +202,7 @@ def cannot_start(journal: J.Journal, job: J.Job, reason: str, now: Optional[floa
 
 
 class LocalJobs(QObject):
-    """GC Workspace makes an edited report again itself, as soon as the analyst accepts it: one job at a
+    """GC Workspace makes an edited report again itself, as soon as the analyst updates it: one job at a
     time, each in its own process like the watcher's, so the analyst never waits for the watcher (or for
     it to be started). A job left when GC Workspace closes goes back to the queue."""
     finished = Signal(str, str)                              # job id, its state afterwards

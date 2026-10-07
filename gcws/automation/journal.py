@@ -558,23 +558,44 @@ class Journal:
                                 f"{job.group_name}: analyst changes saved; report needs review", user)
             return cur.rowcount == 1
 
-    def accept_edited(self, job_id: str, comment: str = "", user: Optional[str] = None) -> bool:
-        """Queue regeneration; persist the analyst's acceptance across watcher restarts."""
+    def update_edited(self, job_id: str, comment: str = "", user: Optional[str] = None) -> bool:
+        """Update report: the edited report is made again (queued as a new revision). It is never accepted
+        by that - the updated report comes back as "control needed" for the analyst to check and accept."""
         user = user or _user()
         with self.tx():
             job = self.job(job_id)
             if job is None or job.state not in (CONTROL, REJECTED) or not job.edited or not job.project_path:
                 return False
-            # keep: the analyst accepted the edited report, so it stays accepted when the regenerated one has
-            # new findings (they are listed with it)
-            intent = {"user": user, "comment": comment, "keep": True,
+            intent = {"user": user, "comment": comment,
                       "findings": [finding_key(f) for f in (job.findings or []) if f.get("level", "control") == "control"]}
             ok = self.transition(job_id, job.state, QUEUED, mode="rereport", revision=job.revision + 1,
                                  queued_at=time.time(), not_before=0, attempts=0, export_pending=0,
                                  reviewer=None, comment=None, reviewed_at=None, review_pending=intent)
             if ok:
                 self._event_raw("info", job.workflow_id, job.batch_id, job_id,
-                                f"{job.group_name}: accepted by {user}; regenerating the edited report", user)
+                                f"{job.group_name}: report update requested by {user}; making the edited report "
+                                "again", user)
+            return ok
+
+    accept_edited = update_edited                  # the name before Oct 2026 (it accepted the result as well)
+
+    def set_control(self, job_id: str, user: Optional[str] = None) -> bool:
+        """Set status > Control needed: an accepted (or rejected) report is to be checked again. The decision
+        is taken back (the history keeps it); files delivered already stay where they are, and accepting it
+        again delivers what is missing."""
+        user = user or _user()
+        with self.tx():
+            j = self.job(job_id)
+            if j is None or j.is_batch or j.deleted or j.review_pending or j.state not in (*ACCEPTED, REJECTED):
+                return False
+            deliver = j.workflow_id != MANUAL_WORKFLOW
+            ok = self.transition(job_id, j.state, CONTROL, reviewer=None, comment=None, reviewed_at=None,
+                                 export_pending=1 if deliver else 0, deliver_after=0,
+                                 reason=f"set back to control needed by {user}")
+            if ok:
+                self._event_raw("info", j.workflow_id, j.batch_id, job_id,
+                                f"{j.group_name}: set back to control needed by {user} (was "
+                                f"{STATE_LABELS.get(j.state, j.state).lower()})", user)
             return ok
 
     def review(self, job_id: str, accept: bool, comment: str = "", user: Optional[str] = None,

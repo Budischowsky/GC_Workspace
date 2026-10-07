@@ -239,8 +239,8 @@ class FakeLauncher:
 
 
 def test_edited_accept_makes_the_report_again_here(qtbot, data, tmp_path, monkeypatch):
-    """Accepting an edited report makes it again in GC Workspace at once (no watcher needed); it stays
-    accepted and is delivered."""
+    """Accepting an edited report makes it again in GC Workspace at once (no watcher needed); the updated
+    report is not accepted by that - it needs control, and is delivered once it is accepted."""
     import os
     from gcws.automation import journal as J
     wf, jr, ids, batch = _seed(data, tmp_path)
@@ -268,11 +268,17 @@ def test_edited_accept_makes_the_report_again_here(qtbot, data, tmp_path, monkey
     launcher.complete({"state": "control", "reason": "", "files": {rep.id: files}, "project": str(project),
                        "evidence": {}, "findings": list(job.findings) + [new], "warnings": [], "timings": {}})
     after = jr.job(job.id)
-    assert after.state == J.ACCEPTED_MANUAL and after.revision == 2 and after.review_pending is None
-    assert "1 new finding" in after.reason and after.export_pending == 0 and after.export_state == "done"
+    assert after.state == J.CONTROL and after.revision == 2 and after.review_pending is None
+    assert after.edited == 0 and after.reviewer is None
+    assert "1 new finding" in after.reason and "check it and accept it" in dock.bar_text.text()
+    assert _names(dock, "control") == ["S-control"]
+    dock.select(job.id)
+    assert dock.review(True)                                   # now the analyst accepts the updated report
+    dock.deliver_due()
+    after = jr.job(job.id)
+    assert after.state == J.ACCEPTED_MANUAL and after.export_pending == 0 and after.export_state == "done"
     assert (tmp_path / "A" / batch.name / "S-control_NIAS_Report.xlsx").is_file()
     assert (tmp_path / "B" / batch.name / "S-control_NIAS_Report.docx").is_file()
-    assert "updated report is made and accepted" in dock.bar_text.text()
 
 
 def test_edited_report_left_when_gc_workspace_closes_goes_back_to_the_queue(qtbot, data, tmp_path, monkeypatch):
@@ -365,6 +371,35 @@ def test_context_menus_of_a_sample_and_a_batch(qtbot, data, tmp_path, monkeypatc
         assert {jr.job(ids[n]).state for n in ("S-control", "S-auto")} == {J.REJECTED}
         assert dock.reprocess_batch(bid)
         assert jr.job(ids["S-failed"]).state == J.QUEUED and jr.job(ids["S-control"]).state == J.QUEUED
+
+
+def test_set_status_takes_an_accepted_report_back_to_control(qtbot, data, tmp_path, monkeypatch):
+    """Right-click > Set status > Control needed / Accepted."""
+    from gcws.automation import journal as J
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    dock = _dock(jr, monkeypatch, qtbot)
+
+    def status_menu(name):
+        menu = dock._tree_context_menu(dock.tree.visualItemRect(dock._items[f"j:{ids[name]}"]).center())
+        sub = next(a.menu() for a in menu.actions() if a.text() == "Set status")
+        return {a.text(): a for a in sub.actions()}
+
+    acts = status_menu("S-auto")                               # accepted automatically
+    assert set(acts) == {"Accepted", "Control needed"}
+    assert acts["Control needed"].isEnabled() and not acts["Accepted"].isEnabled()
+    acts["Control needed"].trigger()
+    job = jr.job(ids["S-auto"])
+    assert job.state == J.CONTROL and job.reviewer is None
+    assert "control needed" in dock.bar_text.text().lower() and "S-auto" in _names(dock, "control")
+    dock.set_filter("control")                                 # all again
+    acts = status_menu("S-auto")
+    assert acts["Accepted"].isEnabled() and not acts["Control needed"].isEnabled()
+    acts["Accepted"].trigger()
+    assert jr.job(ids["S-auto"]).state == J.ACCEPTED_MANUAL
+    assert status_menu("S-auto")["Control needed"].isEnabled()  # and back again, also accepted by the analyst
+    assert dock.set_control([ids["S-auto"]]) == [ids["S-auto"]]
+    assert dock.set_control([ids["S-wait"]]) == []              # nothing decided yet: stays as it is
+    assert jr.job(ids["S-wait"]).state == J.WAITING
 
 
 def test_delete_hides_and_show_deleted_restores(qtbot, data, tmp_path, monkeypatch):
@@ -873,7 +908,8 @@ def test_accepted_pair_is_listed_in_report2(qtbot, win, samples, tmp_path, monke
 
 def test_edit_an_accepted_report_and_update_it(qtbot, win, data, tmp_path, monkeypatch):
     """Edit in GC Workspace works for any report (here a single determination, accepted automatically);
-    Update report in the status bar makes it again: accepted by the analyst, delivered again."""
+    Update report in the status bar makes it again: it needs control then, and is delivered again once
+    the analyst accepts it."""
     from gcws.automation import journal as J
     wf, jr, ids, batch = _seed(data, tmp_path)
     job = jr.job(ids["S-auto"])
@@ -917,9 +953,14 @@ def test_edit_an_accepted_report_and_update_it(qtbot, win, data, tmp_path, monke
         launcher.complete({"state": "accepted_auto", "reason": "", "files": {rep.id: files}, "project": str(newer),
                            "evidence": {}, "findings": [], "warnings": [], "timings": {}})
         after = jr.job(job.id)
-        assert after.state == J.ACCEPTED_MANUAL and after.revision == 2 and after.export_state == "done"
-        assert (tmp_path / "B" / batch.name / "S-auto_NIAS_Report.docx").read_text() == "updated docx"
+        assert after.state == J.CONTROL and after.revision == 2 and after.reviewer is None
+        assert "control" in win.r2_label.text()
         assert win._report2_job == (job.id, 2, newer) and win.ws.project_path == newer   # still editing it
+        assert win.report2.review(True, job_ids=[job.id])
+        win.report2.deliver_due()
+        after = jr.job(job.id)
+        assert after.state == J.ACCEPTED_MANUAL and after.export_state == "done"
+        assert (tmp_path / "B" / batch.name / "S-auto_NIAS_Report.docx").read_text() == "updated docx"
         assert win.b_r2_update.isEnabled()
         assert not win.update_report2()                    # nothing changed since: nothing to update
         asked = []

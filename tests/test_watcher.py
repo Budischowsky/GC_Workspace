@@ -101,9 +101,9 @@ def _result(spec, state="control", findings=1):
             "timings": {}}
 
 
-@pytest.mark.parametrize("scenario,expected", [("same", "accepted_manual"), ("new", "accepted_manual"),
-                                               ("failed", "control"), ("partial", "control")])
-def test_edited_accept_waits_for_rereport_and_checks_new_findings(env, scenario, expected):
+@pytest.mark.parametrize("scenario", ["same", "new", "failed", "partial"])
+def test_updated_report_comes_back_as_control_needed(env, scenario):
+    """Update report never accepts: the report made again waits for the analyst's control."""
     from gcws.automation import journal as J
     from gcws.automation.watcher import WatcherCore
 
@@ -123,7 +123,7 @@ def test_edited_accept_waits_for_rereport_and_checks_new_findings(env, scenario,
     jr.transition(job.id, J.PROCESSING, J.CONTROL, project_path=str(project), findings=old)
 
     assert jr.mark_edited(job.id, 1)
-    assert jr.accept_edited(job.id, user="analyst")
+    assert jr.update_edited(job.id, user="analyst")
     queued = jr.job(job.id)
     assert queued.state == J.QUEUED and queued.review_pending["user"] == "analyst"
     assert queued.mode == "rereport" and queued.revision == 2
@@ -143,14 +143,62 @@ def test_edited_accept_waits_for_rereport_and_checks_new_findings(env, scenario,
         result.update(state="failed", files={}, reason="renderer crashed")
     launcher.complete(result)
     reviewed = jr.job(job.id)
-    assert reviewed.state == expected and reviewed.review_pending is None
-    assert reviewed.reviewer == ("analyst" if scenario in ("same", "new") else None)
-    if scenario == "new":                                  # accepted as edited; the new finding is listed
+    assert reviewed.state == J.CONTROL and reviewed.review_pending is None
+    assert reviewed.reviewer is None and not reviewed.reviewed_at
+    if scenario == "new":                                  # the new finding is listed
         assert "1 new finding" in reviewed.reason and len(reviewed.findings) == 2
-    assert reviewed.export_pending == 0
-    if scenario in ("failed", "partial"):
+    if scenario in ("same", "new"):                        # made: checked and accepted like any report
+        assert reviewed.edited == 0 and "check it and accept it" in reviewed.reason
+        assert jr.review(job.id, True, user="analyst")
+        assert jr.job(job.id).state == J.ACCEPTED_MANUAL and jr.job(job.id).export_pending == 1
+    else:
+        assert reviewed.export_pending == 0
         assert reviewed.edited == 1 and reviewed.project_path == str(project)
         assert ("renderer crashed" if scenario == "failed" else "missing") in reviewed.reason
+
+
+def test_report_again_is_never_accepted_by_itself(env):
+    from gcws.automation import journal as J
+    from gcws.automation import runner as RN
+
+    jr = env["journal"]
+    batch = jr.batch(env["wf"].id, env["watch"])
+    job = jr.ensure_job(env["wf"].id, env["wf"].methods()[0].id, batch["id"], "sample", "Sample",
+                        ["Sample_A.D", "Sample_B.D"], {}, "fp", state=J.QUEUED)
+    spec, _ = RN.job_spec(jr, env["wf"], jr.job(job.id), method=lambda name: {})
+    jr.transition(job.id, J.QUEUED, J.PROCESSING)
+    jr.transition(job.id, J.PROCESSING, J.ACCEPTED_AUTO, project_path=str(env["tmp"] / "p.gcws"))
+    assert jr.request(job.id, "rereport")
+    again, _ = RN.job_spec(jr, env["wf"], jr.job(job.id), method=lambda name: {})
+    assert again["auto_accept"] is False and again["mode"] == "rereport"
+    assert spec["auto_accept"] == (env["wf"].review_node(env["wf"].methods()[0].id) is None or
+                                   bool(env["wf"].review_node(env["wf"].methods()[0].id).p("auto_accept")))
+
+
+def test_set_back_to_control_needed(env):
+    from gcws.automation import journal as J
+
+    jr = env["journal"]
+    batch = jr.batch(env["wf"].id, env["watch"])
+    job = jr.ensure_job(env["wf"].id, env["wf"].methods()[0].id, batch["id"], "sample", "Sample",
+                        ["Sample_A.D", "Sample_B.D"], {}, "fp", state=J.QUEUED)
+    assert not jr.set_control(job.id)                      # only a decided report
+    jr.transition(job.id, J.QUEUED, J.PROCESSING)
+    jr.transition(job.id, J.PROCESSING, J.CONTROL, export_pending=0)
+    assert not jr.set_control(job.id)
+    assert jr.review(job.id, True, user="analyst", grace=10)
+    assert jr.set_control(job.id, user="analyst")
+    back = jr.job(job.id)
+    assert back.state == J.CONTROL and back.reviewer is None and not back.reviewed_at
+    assert back.deliver_after == 0 and back.revision == 1
+    assert "set back to control needed by analyst" in jr.events(job_id=job.id)[-1]["text"]
+    assert jr.review(job.id, True, user="analyst")         # and accepted again
+    jr.transition(job.id, J.ACCEPTED_MANUAL, J.ACCEPTED_AUTO)
+    assert jr.set_control(job.id)                          # also one accepted automatically
+    assert jr.review(job.id, False, "bad", user="analyst")
+    assert jr.set_control(job.id)                          # and a rejected one
+    jr.delete([job.id])
+    assert not jr.set_control(job.id)                      # not a deleted one
 
 
 def test_editing_accepted_report_returns_it_to_control(env):
@@ -189,13 +237,13 @@ def test_pending_accept_spec_failure_returns_to_control(env, monkeypatch):
     jr.transition(job.id, J.QUEUED, J.PROCESSING)
     jr.transition(job.id, J.PROCESSING, J.CONTROL, project_path=str(env["tmp"] / "edited.gcws"))
     assert jr.mark_edited(job.id, job.revision)
-    assert jr.accept_edited(job.id)
+    assert jr.update_edited(job.id)
     monkeypatch.setattr(core, "spec_for", lambda *args: (_ for _ in ()).throw(ValueError("workflow missing")))
     core.pump()
     failed = jr.job(job.id)
     assert failed.state == J.CONTROL and failed.edited == 1 and failed.review_pending is None
     assert "workflow missing" in failed.reason
-    assert jr.accept_edited(job.id)
+    assert jr.update_edited(job.id)
     core.workflows.clear()
     core.pump()
     missing = jr.job(job.id)

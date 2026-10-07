@@ -1917,8 +1917,8 @@ class MainWindow(QMainWindow):
             self.b_r2_update.setEnabled(not job.review_pending)
 
     def update_report2(self) -> bool:
-        """Update report: the changes are saved and the report is made again here; the analyst accepts it with
-        that (a new revision), and it is delivered to the target folders again."""
+        """Update report: the changes are saved and the report is made again here (a new revision). It is not
+        accepted by that: it comes back in Report² as "control needed", to be checked and accepted."""
         from gcws.automation import manual as MA
         if self._report2_job is None:
             return False
@@ -1941,9 +1941,9 @@ class MainWindow(QMainWindow):
         if not job.edited:
             self.statusBar().showMessage(f"{job.group_name}: no changes since the report - nothing to update.", 8000)
             return False
-        ok = self.report2.review(True, job_ids=[jid])
-        self.statusBar().showMessage(f"{job.group_name}: the report is made again; it stays accepted by you and is "
-                                     "delivered again." if ok else
+        ok = self.report2.update_report(jid)
+        self.statusBar().showMessage(f"{job.group_name}: the report is made again; check it in Report², then accept "
+                                     "it." if ok else
                                      f"{job.group_name}: Report² could not take the update - look at it there.", 10000)
         self._update_report2_bar()
         return ok
@@ -1961,7 +1961,8 @@ class MainWindow(QMainWindow):
         if ask and (changed or self.ws.dirty):
             r = QMessageBox.question(
                 self, "Stop editing", "Save your changes to the report's project?\n\nYes: they are saved; the report "
-                "then needs your acceptance in Report² (Accept makes it again).\nNo: the report stays as it is; your "
+                "then needs control in Report² (Accept there makes it again, to be checked).\nNo: the report stays "
+                "as it is; your "
                 "changes stay open here only (Save project asks where).",
                 QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
             if r == QMessageBox.Cancel:

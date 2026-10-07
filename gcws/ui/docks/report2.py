@@ -70,6 +70,11 @@ def can_reject(job: J.Job) -> bool:
     return not job.deleted and not job.review_pending and job.state in (J.CONTROL, *J.ACCEPTED)
 
 
+def can_set_control(job: J.Job) -> bool:
+    """Set status > Control needed: an accepted (or rejected) report is checked again."""
+    return not job.deleted and not job.is_batch and not job.review_pending and job.state in (*J.ACCEPTED, J.REJECTED)
+
+
 def can_reprocess(job: J.Job) -> bool:
     """Process or report again: a workflow does it, so never an entry accepted by hand (accept it again in
     Replicates instead)."""
@@ -428,6 +433,10 @@ class Report2Dock(QWidget):
             return a
         self.a_accept = act("Accept", lambda: self.review(True), "Accept the selected reports (A)", "A")
         self.a_accept_comment = act("Accept with comment...", self.accept_with_comment)
+        self.a_status_accepted = act("Accepted", lambda: self.review(True), "Accept the selected reports")
+        self.a_status_control = act("Control needed", lambda: self.set_control(),
+                                    "Set accepted (or rejected) reports back to control needed: they are checked "
+                                    "and accepted again")
         self.a_replicates = act("Open in Replicates / results", lambda: self.open_determination(self.current))
         self.a_project = act("Edit in GC Workspace", self.open_project, key="Ctrl+O")
         self.a_rereport = act("Report again from the (edited) project", lambda: self.reprocess("rereport"))
@@ -966,7 +975,10 @@ class Report2Dock(QWidget):
                 os.replace(tmp, target)
             except Exception as exc:  # noqa: BLE001 - no Word, a damaged file, ...
                 err = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
-            self._converted.emit(docx, err)
+            try:
+                self._converted.emit(docx, err)
+            except RuntimeError:                       # the panel was closed meanwhile (GC Workspace quit)
+                pass
 
         threading.Thread(target=work, daemon=True, name="report2-preview").start()
         QTimer.singleShot(int(self.WORD_TIMEOUT * 1000), lambda d=docx: self._convert_timeout(d))
@@ -1054,6 +1066,8 @@ class Report2Dock(QWidget):
         live = [j for j in jobs if not j.deleted]
         self.a_accept.setEnabled(any(can_accept(j) for j in jobs))
         self.a_accept_comment.setEnabled(self.a_accept.isEnabled())
+        self.a_status_accepted.setEnabled(self.a_accept.isEnabled())
+        self.a_status_control.setEnabled(any(can_set_control(j) for j in jobs))
         self.b_reject.setEnabled(any(can_reject(j) for j in jobs))
         self.b_project.setEnabled(one is not None and not one.is_batch and not one.review_pending and
                                   bool(one.project_path) and Path(one.project_path).exists())
@@ -1119,6 +1133,10 @@ class Report2Dock(QWidget):
         rm = menu.addMenu("Reject")
         rm.aboutToShow.connect(lambda: self._fill_reject_menu(rm, self.reject))
         rm.setEnabled(any(can_reject(j) for j in jobs))
+        sm = menu.addMenu("Set status")
+        sm.addAction(self.a_status_accepted)
+        sm.addAction(self.a_status_control)
+        sm.setEnabled(self.a_status_accepted.isEnabled() or self.a_status_control.isEnabled())
         menu.addSeparator()
         again = menu.addMenu("Process again")
         for a in (self.a_rereport, self.a_reprocess, self.a_noblank):
@@ -1355,7 +1373,7 @@ class Report2Dock(QWidget):
         ids, self._deliver = self._deliver, set()
         for jid in ids:
             job = self.journal.job(jid)
-            if job is None or not job.export_pending or job.state not in J.ACCEPTED:
+            if job is None or not job.export_pending or job.state not in (J.CONTROL, *J.ACCEPTED):
                 continue
             wf = W.find(job.workflow_id)
             if wf is not None:
@@ -1391,8 +1409,8 @@ class Report2Dock(QWidget):
                 continue
             job = self.journal.job(jid)
             snap = {k: job.row.get(k) for k in J.Journal.REVIEW_FIELDS} | {"revision": job.revision}
-            if accept and job.edited:
-                ok = self.journal.accept_edited(jid, comment)
+            if accept and job.edited:                # made again first: it comes back as control needed
+                ok = self.journal.update_edited(jid, comment)
                 if ok:
                     regenerated.append(jid)
             else:
@@ -1414,11 +1432,44 @@ class Report2Dock(QWidget):
         if nxt and nxt in self.jobs:
             self.select(nxt)
         verb = "Accepted" if accept else "Rejected"
-        text = f"{verb} {self._names(done)}" + (f" ({comment})" if comment and not accept else "")
+        decided = [j for j in done if j.id not in regenerated]
+        parts = [f"{verb} {self._names(decided)}" + (f" ({comment})" if comment and not accept else "")] \
+            if decided else []
         if regenerated:
-            text += " - the edited report is made again now and then delivered"
-        self.notify(text + ".", self._undo_review(before) if before else None)
+            parts.append(f"{self._names([j for j in done if j.id in regenerated])}: the edited report is made "
+                         "again now - check it, then accept it")
+        self.notify("; ".join(parts) + ".", self._undo_review(before) if before else None)
         return True
+
+    def update_report(self, job_id: str) -> bool:
+        """Update report (GC Workspace status bar): the edited report is made again here. It is not accepted
+        by that - it comes back as "control needed", to be checked and accepted."""
+        self.dismiss_message()
+        if not self.journal.update_edited(job_id):
+            self.refresh()
+            return False
+        self.local.run(job_id)
+        self.refresh()
+        job = self.journal.job(job_id)
+        self.notify(f"{job.group_name}: the edited report is made again now - check it, then accept it.")
+        return True
+
+    def set_control(self, job_ids: Optional[list] = None) -> list:
+        """Set status > Control needed: accepted (or rejected) reports are checked again and accepted again
+        (what was delivered already stays in the target folders)."""
+        ids = list(job_ids) if job_ids is not None else [j.id for j in self.selected_jobs()]
+        self.dismiss_message()
+        done = [jid for jid in ids if (job := self.journal.job(jid)) is not None and can_set_control(job)
+                and self.journal.set_control(jid)]
+        if done and not self._watcher_running():
+            self._deliver.update(done)
+            self.deliver_due()
+        self.refresh()
+        if done:
+            self.notify(f"Set back to control needed: {self._names([self.journal.job(j) for j in done])}.")
+        else:
+            self.notify("Only accepted or rejected reports can be set back to control needed.", level="warn")
+        return done
 
     @property
     def local(self):
@@ -1434,14 +1485,13 @@ class Report2Dock(QWidget):
         job = self.journal.job(job_id)
         if job is None:
             return
-        if state in J.ACCEPTED and job.export_pending and not self._watcher_running():
+        if job.export_pending and not self._watcher_running():
             self._deliver.add(job_id)
             self.deliver_due()
         self.refresh()
         self.regenerated.emit(job_id)
-        if state in J.ACCEPTED:
-            self.notify(f"{job.group_name}: the updated report is made and accepted" +
-                        (f" ({job.reason})" if job.reason else "") + ".")
+        if state == J.CONTROL and not job.edited:
+            self.notify(f"{job.group_name}: {job.reason or 'updated report: check it and accept it'}.")
         else:
             self.notify(f"{job.group_name}: the updated report could not be made - {job.reason}", level="warn")
 
