@@ -150,6 +150,7 @@ class Report2Dock(QWidget):
         self._journal = journal
         self.jobs: dict[str, J.Job] = {}         # the reports of the current view (before the chip filter)
         self._batches: dict = {}
+        self._targets: dict = {}                 # job id -> the files its current revision delivered
         self._by_batch: dict = {}
         self._items: dict[str, QTreeWidgetItem] = {}
         self._expanded: dict[str, bool] = {}
@@ -473,6 +474,7 @@ class Report2Dock(QWidget):
         since = time.time() - days * 86400 if days else 0
         text = self.search.text().strip().casefold()
         self._batches = {b["id"]: b for b in self.journal.batches()}
+        self._targets = self.journal.targets()
         by_batch: dict = {}
         for j in self.journal.jobs(workflow_id=self.workflow.currentData() or None):
             by_batch.setdefault(j.batch_id, []).append(j)
@@ -640,6 +642,8 @@ class Report2Dock(QWidget):
         if j.workflow_id == J.MANUAL_WORKFLOW:
             it.setToolTip(0, "Accepted by hand in Replicates (no workflow processed it)")
             it.setToolTip(3, "Not delivered: no workflow delivers an entry accepted by hand")
+        elif self._targets.get(j.id):
+            it.setToolTip(3, "Delivered to:\n" + "\n".join(self._targets[j.id]))
         if j.deleted or j.state == J.REMOVED:
             for c in range(len(COLUMNS)):
                 it.setForeground(c, theme.status_color("neutral"))
@@ -1365,8 +1369,11 @@ class Report2Dock(QWidget):
         if wf is None:
             return []
         self._deliver.discard(job.id)
-        lines = export.deliver(self.journal, wf, job)
+        lines = export.deliver(self.journal, wf, job, force=True)        # also what was delivered before
         self.refresh()
+        self.notify(f"{job.group_name}: delivered {len(lines)} file(s)." if lines else
+                    f"{job.group_name}: nothing to deliver (no arrow lets its files through).",
+                    level="info" if lines else "warn")
         return lines
 
     def open_determination(self, job_id: Optional[str]):

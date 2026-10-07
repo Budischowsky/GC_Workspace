@@ -166,6 +166,7 @@ class WatcherCore(QObject):
         self.reload()
         self.heartbeat()
         self.journal.event("info", "Watcher started" + (" (paused)" if self.paused else ""))
+        self.recover()
         self.timer.start()
         self.hb.start()
         QTimer.singleShot(0, self.tick)
@@ -175,6 +176,10 @@ class WatcherCore(QObject):
         self.hb.stop()
         self.journal.heartbeat("stopped", "", "")
         self.journal.event("info", "Watcher stopped")
+
+    def recover(self) -> list[str]:
+        """Samples left "processing" by a watcher (or GC Workspace) that stopped go back to the queue."""
+        return self.journal.recover_orphans(keep=[self.current["job"]] if self.current else [])
 
     def status(self) -> str:
         return "paused" if self.paused else ("processing" if self.current else "running")
@@ -256,6 +261,7 @@ class WatcherCore(QObject):
                     self._last_scan[wf.id] = now
                     self.scan(wf, now)
             self._scan_now = False
+            self.recover()
             self.deliver_pending()
             self.check_timeout(now)
             if not self.paused:
@@ -527,7 +533,7 @@ class WatcherCore(QObject):
                 continue
             spec_path = store.atomic_write_json(Path(spec["out_dir"]) / "spec.json", spec)
             if not self.journal.transition(job.id, J.QUEUED, J.PROCESSING, started=now, job_dir=spec["out_dir"],
-                                           reason=""):
+                                           reason="", pid=os.getpid()):
                 continue
             timeout = float(wf.node(job.method_node).p("timeout_min") or 30) * 60
             self.current = {"job": job.id, "started": now, "timeout": timeout, "kind": kind,

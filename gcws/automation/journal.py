@@ -566,6 +566,23 @@ class Journal:
                        f"requested", job_id=job_id, workflow_id=j.workflow_id, batch_id=j.batch_id, user=user)
         return ok
 
+    def recover_orphans(self, alive=None, keep: Iterable[str] = ()) -> list[str]:
+        """Jobs left "processing" by a program that stopped meanwhile (a watcher or GC Workspace that
+        crashed, a PC shut down) go back to the queue. ``alive(pid, started)`` tells whether the owner
+        still runs; ``keep``: jobs the caller is processing itself."""
+        alive = alive or store.alive
+        keep = set(keep)
+        done = []
+        for j in self.jobs(states=[PROCESSING]):
+            if j.id in keep or alive(j.pid, j.started):
+                continue
+            if self.transition(j.id, PROCESSING, QUEUED, reason="the program processing it stopped; "
+                               "processed again", pid=None, not_before=0, queued_at=time.time()):
+                done.append(j.id)
+                self.event("warning", f"{j.group_name}: the program processing it stopped; it is processed "
+                           "again", job_id=j.id, workflow_id=j.workflow_id, batch_id=j.batch_id)
+        return done
+
     def remove(self, job_ids: Iterable[str], user: Optional[str] = None) -> list[str]:
         """Take jobs out of the queue (they cannot be processed and would hold the batch up): the
         watcher skips them, rescans do not add them again and the batch report does not wait for
@@ -589,6 +606,23 @@ class Journal:
         return {(r["folder_node"], r["report_node"], r["fmt"]) for r in self._rows(
             "SELECT folder_node, report_node, fmt FROM exports WHERE job_id=? AND revision=? AND state='done'",
             (job_id, revision))}
+
+    def delivered(self, job_id: str, revision: int) -> dict:
+        """``{(folder node, report node, format): path}`` of what this revision delivered last ("" when the
+        file found there was kept)."""
+        return {(r["folder_node"], r["report_node"], r["fmt"]): "" if r["error"] else r["dst"] for r in self._rows(
+            "SELECT folder_node, report_node, fmt, dst, error FROM exports WHERE job_id=? AND revision=? AND "
+            "state='done' ORDER BY ts, id", (job_id, revision))}
+
+    def targets(self) -> dict[str, list[str]]:
+        """``{job id: [file delivered, ...]}`` of each job's current revision (the Delivered column)."""
+        out: dict = {}
+        for r in self._rows("SELECT e.job_id, e.dst FROM exports e JOIN jobs j ON j.id=e.job_id "
+                            "WHERE e.revision=j.revision AND e.state='done' AND e.fmt<>'register' AND e.dst<>'' "
+                            "ORDER BY e.ts, e.id"):
+            if r["dst"] not in out.setdefault(r["job_id"], []):
+                out[r["job_id"]].append(r["dst"])
+        return out
 
     def add_export(self, job_id: str, revision: int, folder_node: str, report_node: str, fmt: str, src, dst,
                    state: str = "done", error: str = ""):

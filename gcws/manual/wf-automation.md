@@ -146,7 +146,8 @@ Windows tray and keeps running when GC Workspace is closed.
 
 It processes one sample at a time, each in its own process, so that a crash or a hanging Office program cannot
 stop the watcher. The raw data are only read. Beside the state, the Automation panel shows what the watcher is
-processing and copying.
+processing and copying. If the watcher or the PC stops while a sample is being processed, the sample goes back
+to the queue and is processed again as soon as the watcher runs.
 
 ## When a sample is processed
 
@@ -188,7 +189,7 @@ click it again for all. The chip at the right shows whether the watcher is runni
 
 Select a report to act on it and see its preview. Expand a sample in the list to see how many substances its double determination marked **Red - to
 decide** and **Yellow - to check** (hover for their names); the details are in **Replicates / results**. **Delivered** shows ✓,
-*pending*, *partly* or *failed*. Several reports can be selected (Ctrl / Shift); the buttons act on all of them.
+*pending*, *partly* or *failed* (hover for the files and where they went). Several reports can be selected (Ctrl / Shift); the buttons act on all of them.
 
 | Button | What it does |
 |---|---|
@@ -213,7 +214,7 @@ decide** and **Yellow - to check** (hover for their names); the details are in *
 | **Process again > Process without a blank...** | Processes a sample that has no blank in its batch. |
 | (an entry **Accepted by hand**) | A double determination accepted in Replicates that no workflow processed: **Process again** and **Deliver to the target folders now** are not offered - open it in Replicates, change it and accept it again. |
 | **Remove from the queue...** | As **Remove from queue** in the Automation panel. |
-| **Deliver to the target folders now** | Delivers the files again. |
+| **Deliver to the target folders now** | Delivers all its files again, also those delivered before (the earlier copy of this revision is replaced). A delivered file that was deleted from a target folder is delivered again by itself the next time the report is delivered. |
 | **Show history...** | What happened to the report - processed, accepted, rejected, delivered, by whom and when - and its files with where they were delivered. |
 | **Open the job folder** | The folder with everything the job wrote. |
 | **Copy sample name** | The names of the selected samples. |

@@ -454,3 +454,79 @@ def test_autostart_shortcut(tmp_path, monkeypatch):
     assert link.is_file() and autostart.is_installed()
     autostart.remove()
     assert not autostart.is_installed()
+
+
+# -- repairs (Oct 2026): stuck "processing", delivery again -------------------------------------------
+
+def test_alive_knows_running_and_reused_process_numbers():
+    import subprocess
+    import sys
+    from gcws.automation.store import alive
+    assert alive(os.getpid()) and alive(os.getpid(), time.time())
+    assert not alive(os.getpid(), time.time() - 3 * 86400)     # created after that job started: a reused number
+    assert not alive(0) and not alive(None) and not alive("x")
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    assert not alive(proc.pid)
+
+
+def test_job_left_processing_by_a_stopped_watcher_is_queued_again(env, qapp):
+    from gcws.automation import journal as J
+    from gcws.automation.watcher import WatcherCore
+    jr = env["journal"]
+    batch = jr.batch(env["wf"].id, env["watch"])
+    method = env["wf"].methods()[0].id
+    jobs = {}
+    for key, pid, started in (("dead", 0, time.time()), ("old", os.getpid(), time.time() - 3 * 86400),
+                              ("mine", os.getpid(), time.time()), ("none", None, None)):
+        j = jr.ensure_job(env["wf"].id, method, batch["id"], key, key, [f"{key}.D"], {}, "fp", state=J.QUEUED)
+        jr.transition(j.id, J.QUEUED, J.PROCESSING, pid=pid, started=started)
+        jobs[key] = j.id
+    core = WatcherCore(jr, FakeLauncher())
+    core.start()
+    core.stop()
+    states = {k: jr.job(v).state for k, v in jobs.items()}
+    assert states == {"dead": J.QUEUED, "old": J.QUEUED, "mine": J.PROCESSING, "none": J.QUEUED}
+    assert "stopped" in jr.job(jobs["dead"]).reason and jr.job(jobs["dead"]).pid is None
+    assert any("processed again" in e["text"] for e in jr.events(job_id=jobs["none"]))
+
+
+def _accepted_with_files(env, name="26016606_x"):
+    from gcws.automation import journal as J
+    jr = env["journal"]
+    folder = env["watch"] / "26016605_TEST"
+    folder.mkdir(exist_ok=True)
+    batch = jr.batch(env["wf"].id, folder)
+    method = env["wf"].methods()[0]
+    rep = next(n for n in env["wf"].nodes if n.type == "report")
+    out = env["tmp"] / "job" / name
+    out.mkdir(parents=True)
+    files = {}
+    for fmt in ("xlsx", "docx"):
+        p = out / f"{name}_NIAS_Report.{fmt}"
+        p.write_text(fmt)
+        files[fmt] = str(p)
+    j = jr.ensure_job(env["wf"].id, method.id, batch["id"], name, name, [f"{name}_A.D"], {}, "fp", state=J.QUEUED)
+    jr.transition(j.id, J.QUEUED, J.PROCESSING)
+    jr.transition(j.id, J.PROCESSING, J.ACCEPTED_AUTO, files={rep.id: files}, export_pending=1)
+    return jr.job(j.id), folder
+
+
+def test_delivered_file_deleted_in_the_target_is_delivered_again(env):
+    from gcws.automation import export
+    jr = env["journal"]
+    job, folder = _accepted_with_files(env)
+    export.deliver(jr, env["wf"], job)
+    a = env["tmp"] / "A" / folder.name / "26016606_x_NIAS_Report.xlsx"
+    b = env["tmp"] / "B" / folder.name / "26016606_x_NIAS_Report.docx"
+    assert a.is_file() and b.is_file()
+    assert export.deliver(jr, env["wf"], jr.job(job.id)) == []        # delivered and still there
+    a.unlink()
+    lines = export.deliver(jr, env["wf"], jr.job(job.id))
+    assert len(lines) == 1 and a.is_file()
+    b.write_text("changed by someone")
+    lines = export.deliver(jr, env["wf"], jr.job(job.id), force=True)  # "Deliver now": everything again
+    assert len(lines) == 2 and b.read_text() == "docx"
+    assert not (b.parent / "26016606_x_NIAS_Report_2.docx").exists()   # its own copy replaced, not versioned
+    assert jr.job(job.id).export_state == "done"
+    assert set(jr.targets()[job.id]) == {str(a), str(b)}

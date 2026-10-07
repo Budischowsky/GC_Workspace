@@ -82,6 +82,49 @@ def is_network(path) -> bool:
         return False
 
 
+def alive(pid, started: float | None = None) -> bool:
+    """True while the process ``pid`` runs. ``started``: when it took a job; a process created after
+    that only got the number of one that ended (Windows reuses process numbers)."""
+    try:
+        pid = int(pid or 0)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)                          # POSIX: signal 0 only checks
+        except PermissionError:
+            return True
+        except OSError:
+            return False
+        return True
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    k32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+    k32.GetProcessTimes.argtypes = (wintypes.HANDLE,) + (ctypes.POINTER(wintypes.FILETIME),) * 4
+    k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    handle = k32.OpenProcess(0x1000, False, pid)        # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return ctypes.get_last_error() == 5             # access denied: it exists (another user's)
+    try:
+        code = wintypes.DWORD()
+        if not k32.GetExitCodeProcess(handle, ctypes.byref(code)) or code.value != 259:     # STILL_ACTIVE
+            return False
+        if started:
+            times = [wintypes.FILETIME() for _ in range(4)]
+            if k32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+                created = ((times[0].dwHighDateTime << 32) | times[0].dwLowDateTime) / 1e7 - 11644473600.0
+                if created > float(started) + 2.0:
+                    return False
+        return True
+    finally:
+        k32.CloseHandle(handle)
+
+
 def is_inside(path, folder) -> bool:
     """True when ``path`` is ``folder`` or lies below it (case-insensitive on Windows)."""
     try:

@@ -25,8 +25,10 @@ def copy_atomic(src: Path, dst: Path) -> Path:
     return dst
 
 
-def deliver(journal: J.Journal, wf, job: J.Job) -> list[str]:
-    """Copy what the arrows let through for ``job`` (not yet delivered in this revision).
+def deliver(journal: J.Journal, wf, job: J.Job, force: bool = False) -> list[str]:
+    """Copy what the arrows let through for ``job`` (not yet delivered in this revision, or delivered
+    but no longer in the target folder). ``force``: deliver everything again (the analyst's "Deliver
+    now"); a copy this revision delivered before is replaced, any other file follows the folder's rule.
 
     Returns a line per file (for the log). Updates the job's export state."""
     if job.state not in DELIVERABLE:
@@ -36,18 +38,23 @@ def deliver(journal: J.Journal, wf, job: J.Job) -> list[str]:
     ctx = {"status": job.state, "name": None if job.is_batch else job.group_name, "batch": batch.get("name", "")}
     tokens = {"batch": batch.get("name", ""), "sample": "" if job.is_batch else job.group_name,
               "date": datetime.now().strftime("%Y-%m-%d")}
-    done = journal.exported(job.id, job.revision)
+    done = journal.delivered(job.id, job.revision)
     lines, errors = [], 0
     for d in routing.deliveries(wf, job.method_node, ctx, job.files or {}, tokens):
-        if (d.folder_node, d.report_node, d.fmt) in done:
-            continue
+        key = (d.folder_node, d.report_node, d.fmt)
+        before = done.get(key)
+        if key in done and not force and (not before or Path(before).exists()):
+            continue                                   # delivered and still there
         folder = wf.node(d.folder_node)
         try:
             if src_root and store.is_inside(d.dst, src_root) and not folder.p("allow_inside_source"):
                 raise PermissionError("the target lies inside the watched raw-data folder")
             if not d.src.is_file():
                 raise FileNotFoundError(f"{d.src.name} is missing")
-            dst = routing.resolve_collision(d.dst, folder.p("overwrite") or "version")
+            if before and Path(before).is_file() and Path(before).parent == d.dst.parent:
+                dst = Path(before)                     # this revision's own copy: replaced
+            else:
+                dst = routing.resolve_collision(d.dst, folder.p("overwrite") or "version")
             if dst is None:
                 journal.add_export(job.id, job.revision, d.folder_node, d.report_node, d.fmt, d.src, d.dst,
                                    "done", "kept the existing file")
