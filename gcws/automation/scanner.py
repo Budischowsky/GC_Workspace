@@ -173,18 +173,110 @@ def other_files(folder, limit: int = 40) -> list[str]:
     return names[:limit] + ([f"... {len(names) - limit} more"] if len(names) > limit else [])
 
 
-def observe(folder) -> list[RunObs]:
-    """Every run in the batch ``folder`` (finished or not)."""
+def _entry_stat(entry: os.DirEntry):
+    """The entry's times and size; on Windows from the folder listing itself (no extra file access,
+    which over a network drive costs a round trip each)."""
+    try:
+        return entry.stat()
+    except OSError:
+        return None
+
+
+def _file_fingerprint(st) -> tuple[str, float, bool, bool]:
+    h = hashlib.sha1()
+    h.update(f"{st.st_size}:{st.st_mtime_ns}".encode())
+    return h.hexdigest()[:16], st.st_mtime, True, False
+
+
+class LookCache:
+    """What the watcher saw at its earlier looks, so that a look does not read everything again (it
+    looks every minute, also into batches finished long ago, and over a network drive every file
+    access is a round trip).
+
+    A finished run - its marker is written and two walks gave the same fingerprint - is not walked
+    again while its entry in the batch folder's listing (time and creation time) stays the same; a
+    run deleted and copied in again is a new entry. Windows updates that entry's time late, so a
+    finished run is walked again every ``reverify_s``: a file added or rewritten inside it is noticed
+    then at the latest. A batch folder's sequence log is
+    read again when the files beside the runs or the runs present change; a log found in a
+    neighbouring folder (the search lists up to 200 of them) also every ``reverify_s / 2``."""
+
+    def __init__(self, reverify_s: float = 600.0):
+        self.reverify_s = reverify_s
+        self._runs: dict[str, dict] = {}
+        self._others: dict[str, tuple] = {}            # folder key -> (names, signature)
+        self._seqs: dict[str, tuple] = {}              # folder key -> (signature, info, read at, own log)
+        self.walked = 0                                # runs walked (tests)
+        self.read = 0                                  # sequence logs read (tests)
+
+    def fingerprint(self, path: Path, st, now: float) -> tuple[str, float, bool, bool]:
+        key = folder_key(path)
+        entry = None if st is None else (st.st_mtime_ns, getattr(st, "st_birthtime", None))
+        old = self._runs.get(key)
+        if old is not None and entry is not None and old["entry"] == entry and old["stable"] and                 old["result"][2] and not old["result"][3] and now - old["walked"] < self.reverify_s:
+            return old["result"]
+        self.walked += 1
+        result = fingerprint(path)
+        stable = old is not None and old["entry"] == entry and old["result"][0] == result[0]
+        self._runs[key] = {"entry": entry, "result": result, "stable": stable, "walked": now}
+        return result
+
+    def note_others(self, folder, entries: list) -> None:
+        """The files and folders beside the runs of a batch folder (sequence log, method, ...)."""
+        sig = []
+        for e in entries:
+            st = _entry_stat(e)
+            sig.append((e.name.casefold(), st.st_size if st else -1, st.st_mtime_ns if st else -1))
+        self._others[folder_key(folder)] = (sorted((e.name for e in entries), key=str.casefold), tuple(sorted(sig)))
+
+    def other_names(self, folder) -> Optional[list[str]]:
+        got = self._others.get(folder_key(folder))
+        return None if got is None else list(got[0])
+
+    def sequence(self, folder, present: list[str], now: float):
+        from gcws.io import sequence as SQ
+        key = folder_key(folder)
+        others = self._others.get(key)
+        sig = (others[1] if others else None, tuple(sorted(n.casefold() for n in present)))
+        old = self._seqs.get(key)
+        if old is not None and others is not None and old[0] == sig and                 (old[3] or now - old[2] < self.reverify_s / 2):
+            return old[1]
+        self.read += 1
+        info = SQ.read_sequence(folder, present=present)
+        own = info.tsv is not None and folder_key(Path(info.tsv).parent) == key
+        self._seqs[key] = (sig, info, now, own)
+        return info
+
+
+def observe(folder, cache: Optional[LookCache] = None, now: Optional[float] = None) -> list[RunObs]:
+    """Every run in the batch ``folder`` (finished or not). With ``cache``, finished runs seen before
+    are not read again (see :class:`LookCache`)."""
     out = []
     try:
         with os.scandir(folder) as it:
-            entries = [e for e in it if _is_run(e)]
+            listing = list(it)
     except OSError:
         return out
+    entries = [e for e in listing if _is_run(e)]
+    now = time.time() if now is None else now
+    if cache is not None:
+        runs = {id(e) for e in entries}
+        cache.note_others(folder, [e for e in listing if id(e) not in runs])
     for e in sorted(entries, key=lambda e: e.name.casefold()):
         p = Path(e.path)
-        fp, newest, marker, busy = fingerprint(p)
-        out.append(RunObs(p, p.stem.casefold(), p.name, fp, newest, marker, busy, birth(p)))
+        st = _entry_stat(e)
+        try:
+            is_file = e.is_file()
+        except OSError:
+            is_file = False
+        if st is not None and is_file:
+            fp, newest, marker, busy = _file_fingerprint(st)
+        elif cache is not None:
+            fp, newest, marker, busy = cache.fingerprint(p, st, now)
+        else:
+            fp, newest, marker, busy = fingerprint(p)
+        born = getattr(st, "st_birthtime", None) if st is not None else birth(p)
+        out.append(RunObs(p, p.stem.casefold(), p.name, fp, newest, marker, busy, born))
     return out
 
 
@@ -203,7 +295,8 @@ def readiness(prev: Optional[dict], obs: RunObs, now: float, cfg: Readiness, *, 
     if obs.busy:
         return "acquiring", 0
     same = prev is not None and prev.get("fingerprint") == obs.fingerprint
-    count = (int(prev.get("stable_count") or 0) + 1) if same else 1
+    # counted up to what is needed: an unchanged run then leaves its journal row unchanged
+    count = min((int(prev.get("stable_count") or 0) + 1) if same else 1, max(1, cfg.stable_scans))
     old_enough = now - (obs.mtime or now) >= cfg.min_age_s
     ended = obs.marker or successor_started or seq_finished or folder_quiet
     ready = count >= max(1, cfg.stable_scans) and old_enough and ended

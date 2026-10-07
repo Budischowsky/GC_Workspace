@@ -15,7 +15,9 @@ import hashlib
 import json
 import logging
 import os
+import queue
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -107,14 +109,28 @@ class ProcessLauncher(QObject):
 # -- the watcher ------------------------------------------------------------------------------------
 
 class WatcherCore(QObject):
-    """Scanning, planning, the job queue and delivery. No widgets (the tray is in :class:`WatcherApp`)."""
+    """Scanning, planning, the job queue and delivery. No widgets (the tray is in :class:`WatcherApp`).
+
+    With ``threaded`` the watched folders are looked at in a thread of its own (with its own journal
+    connection, like another process writing): a slow network drive then never holds up the control
+    socket, the heartbeat or the job queue."""
     changed = Signal()
     notify = Signal(str, str)                        # title, text
+    looked = Signal()                                # a look in the looking thread is done
 
     def __init__(self, journal: Optional[J.Journal] = None, launcher=None, clock=time.time, parent=None,
-                 tick_ms: int = 5000, copier=None):
+                 tick_ms: int = 5000, copier=None, threaded: bool = False):
         super().__init__(parent)
+        self._main_thread = threading.get_ident()
+        self._local = threading.local()
         self.journal = journal or J.Journal()
+        self.looks = SC.LookCache()                  # what earlier looks saw (finished runs are not read again)
+        self.threaded = threaded
+        self.looking = False                         # a look is under way in the looking thread
+        self._look_queue: queue.Queue = queue.Queue()
+        self._looker: Optional[threading.Thread] = None
+        self._copy_lock = threading.Lock()
+        self.looked.connect(self.tick)
         self.launcher = launcher or ProcessLauncher(self)
         self.launcher.finished.connect(self._job_finished)
         # the local copy runs in its own process beside the jobs
@@ -138,6 +154,20 @@ class WatcherCore(QObject):
         self.hb = QTimer(self)
         self.hb.setInterval(HEARTBEAT_S * 1000)
         self.hb.timeout.connect(self.heartbeat)
+
+    @property
+    def journal(self) -> J.Journal:
+        """The journal connection of the calling thread (the looking thread has its own)."""
+        if threading.get_ident() == self._main_thread:
+            return self._journal
+        jr = getattr(self._local, "journal", None)
+        if jr is None:
+            jr = self._local.journal = J.Journal(self._journal.path)
+        return jr
+
+    @journal.setter
+    def journal(self, value: J.Journal) -> None:
+        self._journal = value
 
     def start(self) -> None:
         self.reload()
@@ -232,12 +262,16 @@ class WatcherCore(QObject):
         now = self.clock()
         try:
             self.reload()
-            for wf in list(self.workflows.values()):
-                interval = max(1.0, float(wf.source.p("interval_min") or 5)) * 60
-                if self._scan_now or now - self._last_scan.get(wf.id, 0) >= interval:
-                    self._last_scan[wf.id] = now
-                    self.scan(wf, now)
-            self._scan_now = False
+            if not self.looking:
+                due = []
+                for wf in list(self.workflows.values()):
+                    interval = max(1.0, float(wf.source.p("interval_min") or 5)) * 60
+                    if self._scan_now or now - self._last_scan.get(wf.id, 0) >= interval:
+                        self._last_scan[wf.id] = now
+                        due.append(wf)
+                self._scan_now = False
+                if due:
+                    self.look(due, now)
             self.recover()
             self.deliver_pending()
             self.check_timeout(now)
@@ -250,6 +284,36 @@ class WatcherCore(QObject):
         self.changed.emit()
 
     # -- scanning and planning ------------------------------------------------------------------------
+
+    def look(self, workflows: list, now: float) -> None:
+        """Look at the watched folders of ``workflows``: at once, or in the looking thread."""
+        if not self.threaded:
+            for wf in workflows:
+                self.scan(wf, now)
+            return
+        if self._looker is None or not self._looker.is_alive():
+            self._looker = threading.Thread(target=self._look_loop, name="gcws-look", daemon=True)
+            self._looker.start()
+        self.looking = True
+        self._look_queue.put((workflows, now))
+
+    def _look_loop(self) -> None:
+        while True:
+            workflows, now = self._look_queue.get()
+            try:
+                for wf in workflows:
+                    try:
+                        self.scan(wf, now)
+                    except Exception:  # noqa: BLE001 - the watcher keeps going
+                        import traceback
+                        log.error(traceback.format_exc())
+                    # the interval counts from the end of a look: a slow drive is not looked at nonstop
+                    # (0: a finished copy asked for the next look at once)
+                    if self._last_scan.get(wf.id, 0):
+                        self._last_scan[wf.id] = max(self._last_scan[wf.id], self.clock())
+            finally:
+                self.looking = False
+                self.looked.emit()                     # the main thread starts what became ready
 
     def scan(self, wf: W.Workflow, now: Optional[float] = None) -> None:
         now = self.clock() if now is None else now
@@ -361,8 +425,8 @@ class WatcherCore(QObject):
         if b.get("deleted"):
             return {"batch_id": b["id"]}               # deleted in Report²: not looked at any more
         prev = self.journal.runs(b["id"])
-        obs = SC.observe(folder)
-        seq = SQ.read_sequence(folder, present=[o.name for o in obs])
+        obs = SC.observe(folder, self.looks, now)
+        seq = self.looks.sequence(folder, [o.name for o in obs], now)
         changed = any(prev.get(o.stem, {}).get("fingerprint") != o.fingerprint for o in obs)
         last_change = now if changed or not b.get("last_change") else float(b["last_change"])
         quiet = now - last_change >= cfg.quiet_s
@@ -392,7 +456,8 @@ class WatcherCore(QObject):
                     readded.add(o.name)
                     self.journal.event("info", f"{b['name']}: {o.name} was put in again; its sample is processed "
                                        "again", workflow_id=wf.id, batch_id=b["id"])
-            self.journal.upsert_run(b["id"], o.stem, **fields)
+            if row is None or any(row.get(k) != v for k, v in fields.items()):
+                self.journal.upsert_run(b["id"], o.stem, **fields)     # written only when something changed
             present[o.stem] = {"name": o.name, "ready": state == "ready"}
             if not o.busy and row is not None and row.get("fingerprint") == o.fingerprint:
                 unchanged.add(o.stem)
@@ -405,8 +470,9 @@ class WatcherCore(QObject):
                                        if set(j.members or []) & readded])
         runs = self.journal.runs(b["id"])
         baseline = {s for s, r in runs.items() if r.get("baseline")}
-        self.journal.update_batch(b["id"], last_change=last_change, has_log=int(bool(seq.lines)),
-                                  seq_completed=int(seq.finished))
+        looked = {"last_change": last_change, "has_log": int(bool(seq.lines)), "seq_completed": int(seq.finished)}
+        if any(b.get(k) != v for k, v in looked.items()):
+            self.journal.update_batch(b["id"], **looked)
         fps = {s: (r.get("fingerprint") or "") + (f"#{r['readded']}" if r.get("readded") else "")
                for s, r in runs.items()}
         names = {s: r.get("path") and Path(r["path"]).name for s, r in runs.items()}
@@ -462,7 +528,7 @@ class WatcherCore(QObject):
                             self.journal.event("warning", f"{g.name}: not processed - {g.reason}", job_id=job.id,
                                                workflow_id=wf.id, batch_id=b["id"])
                             self.notify.emit("Not processed", f"{g.name}: {g.reason}")
-                    else:
+                    elif (job.reason or "") != (g.reason or ""):
                         self.journal.update_job(job.id, reason=g.reason)
             if plan.finished:
                 # planned samples whose runs never came (the sequence ended or was stopped)
@@ -483,9 +549,12 @@ class WatcherCore(QObject):
                 complete = not pending and all(j.state not in (J.WAITING, J.QUEUED, J.PROCESSING) for j in
                                                self.journal.jobs(workflow_id=wf.id, batch_id=b["id"],
                                                                  include_batch=False) if j.method_node == m.id)
-            self.journal.update_batch(b["id"], plan={"complete": complete, "groups": [
+            plan_json = json.dumps({"complete": complete, "groups": [
                 {"key": g.key, "name": g.name, "state": "removed" if g.key in removed else g.state,
-                 "reason": g.reason} for g in plan.groups]})
+                 "reason": g.reason} for g in plan.groups]}, default=str)
+            if plan_json != b.get("plan_json"):
+                self.journal.update_batch(b["id"], plan_json=plan_json)
+                b["plan_json"] = plan_json
             if complete:
                 self._batch_report(wf, m, b, folder)
         if force:
@@ -496,7 +565,13 @@ class WatcherCore(QObject):
             self._plan_copy(wf, wf.copy_step, b, folder, runs, present_stems, needed)
         return {"batch_id": b["id"], "has_log": bool(seq.lines), "quiet": quiet,
                 "quiet_in": 0 if quiet else max(0.0, cfg.quiet_s - (now - last_change)),
-                "other": SC.other_files(folder)}
+                "other": self._other_files(folder)}
+
+    def _other_files(self, folder: Path, limit: int = 40) -> list[str]:
+        names = self.looks.other_names(folder)
+        if names is None:
+            return SC.other_files(folder, limit)
+        return names[:limit] + ([f"... {len(names) - limit} more"] if len(names) > limit else [])
 
     # -- the local copy --------------------------------------------------------------------------------
 
@@ -515,24 +590,27 @@ class WatcherCore(QObject):
         has_copies = any(runs[s].get("copied_fp") for s in present)
         extras = LC.extras_signature(folder)
         if not todo and (not has_copies or extras == (b.get("copied_extras") or "")):
-            self._copy_queue.pop(b["id"], None)
+            with self._copy_lock:
+                self._copy_queue.pop(b["id"], None)
             return
         dst = LC.local_batch(cp.p("folder"), wf.source.p("folder"), folder)
         if b.get("local_folder") != str(dst):
             self.journal.update_batch(b["id"], local_folder=str(dst))
-        self._copy_queue[b["id"]] = {
-            "batch_id": b["id"], "workflow_id": wf.id, "name": b.get("name") or folder.name, "src": str(folder),
-            "dst": str(dst), "extras": True,
-            "runs": [{"stem": s, "name": Path(runs[s]["path"]).name, "fingerprint": runs[s]["fingerprint"]}
-                     for s in todo]}
+        spec = {"batch_id": b["id"], "workflow_id": wf.id, "name": b.get("name") or folder.name, "src": str(folder),
+                "dst": str(dst), "extras": True,
+                "runs": [{"stem": s, "name": Path(runs[s]["path"]).name, "fingerprint": runs[s]["fingerprint"]}
+                         for s in todo]}
+        with self._copy_lock:
+            self._copy_queue[b["id"]] = spec
 
     def pump_copies(self, now: Optional[float] = None) -> None:
         """Starts the next copy pass (one at a time, beside the job process)."""
         now = self.clock() if now is None else now
-        if self.copying is not None or self.copier.running() or not self._copy_queue:
-            return
-        bid = next(iter(self._copy_queue))
-        spec = self._copy_queue.pop(bid)
+        with self._copy_lock:
+            if self.copying is not None or self.copier.running() or not self._copy_queue:
+                return
+            bid = next(iter(self._copy_queue))
+            spec = self._copy_queue.pop(bid)
         out = store.root() / "copies" / f"batch{bid}"
         try:
             (out / "result.json").unlink()
@@ -843,7 +921,7 @@ def main(argv) -> int:
     app.setQuitOnLastWindowClosed(False)
     from gcws.ui import theme
     theme.apply(app)
-    core = WatcherCore()
+    core = WatcherCore(threaded=True)
     core.paused = "--paused" in argv
     watcher = WatcherApp(core)
     if not watcher.listen():

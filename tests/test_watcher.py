@@ -956,3 +956,120 @@ def test_restart_ends_a_watcher_that_hangs(env, lock_name, monkeypatch):
         assert proc.wait(10) is not None and len(started) == 1
     finally:
         _end(proc)
+
+
+# -- little work per look: finished runs are not read again (Oct 2026) -----------------------------------
+
+def test_finished_runs_are_not_read_again_until_they_change(tmp_path):
+    from gcws.automation import scanner as SC
+    batch = tmp_path / "26016605_TEST"
+    _acquire(batch, "06_EtOH_ISTD")
+    live = batch / "07_26016606_x_A.D"
+    live.mkdir()
+    (live / "data.ms").write_bytes(b"x")                   # still being acquired: no checksum.xml yet
+    cache, now = SC.LookCache(reverify_s=600), 1000.0
+    for _ in range(3):
+        SC.observe(batch, cache, now)                      # the folder listing may lag behind: walked
+    n = cache.walked
+    SC.observe(batch, cache, now)
+    assert cache.walked == n + 1                           # only the run still being acquired
+    (batch / "06_EtOH_ISTD.D" / "data.ms").write_bytes(b"y" * 99)       # rewritten in place
+    (batch / "06_EtOH_ISTD.D" / "report.txt").write_text("new file")
+    obs = {o.stem: o for o in SC.observe(batch, cache, now + 601)}
+    assert obs["06_etoh_istd"].fingerprint == SC.fingerprint(batch / "06_EtOH_ISTD.D")[0]   # seen at the re-check
+    assert [(o.stem, o.fingerprint) for o in SC.observe(batch)] == \
+        [(o.stem, o.fingerprint) for o in SC.observe(batch, cache, now + 602)]             # same as without cache
+    # deleted and copied in again: a new entry, read at once
+    import shutil
+    shutil.copytree(batch / "06_EtOH_ISTD.D", tmp_path / "keep.D")
+    shutil.rmtree(batch / "06_EtOH_ISTD.D")
+    (tmp_path / "keep.D" / "extra.txt").write_text("x")
+    shutil.copytree(tmp_path / "keep.D", batch / "06_EtOH_ISTD.D")
+    obs = {o.stem: o for o in SC.observe(batch, cache, now + 603)}
+    assert obs["06_etoh_istd"].fingerprint == SC.fingerprint(batch / "06_EtOH_ISTD.D")[0]
+
+
+def test_the_sequence_log_is_read_again_only_when_it_changes(tmp_path):
+    from gcws.automation import scanner as SC
+    batch = tmp_path / "w" / "26016605_TEST"
+    batch.mkdir(parents=True)
+    _log(batch, BATCH)
+    for n in BATCH[:2]:
+        _acquire(batch, n)
+    cache = SC.LookCache(reverify_s=600)
+    names = [o.name for o in SC.observe(batch, cache, 0)]
+    assert not cache.sequence(batch, names, 0).finished and cache.read == 1
+    SC.observe(batch, cache, 10)
+    cache.sequence(batch, names, 10)
+    assert cache.read == 1                                 # nothing changed: not read again
+    _log(batch, BATCH, completed=True)
+    SC.observe(batch, cache, 20)
+    assert cache.sequence(batch, names, 20).finished and cache.read == 2
+    # no log of its own: the neighbours' logs are searched, again every reverify_s / 2 at the latest
+    other = tmp_path / "w" / "26016606_COPY"
+    _acquire(other, "01_EtOH")
+    SC.observe(other, cache, 0)
+    cache.sequence(other, ["01_EtOH.D"], 0)
+    cache.sequence(other, ["01_EtOH.D"], 200)
+    assert cache.read == 3
+    cache.sequence(other, ["01_EtOH.D"], 301)
+    assert cache.read == 4
+
+
+def test_a_look_that_finds_nothing_new_writes_nothing(env, qapp):
+    """Every look used to rewrite every run and take a write lock per sample (also making Report²
+    refresh); now an unchanged folder leaves the journal untouched."""
+    jr = env["journal"]
+    core, launcher, now = _core(env)
+    core.tick()
+    batch = env["watch"] / "26016605_TEST"
+    batch.mkdir()
+    _log(batch, BATCH, completed=True)
+    for n in BATCH:
+        _acquire(batch, n)
+    for _ in range(4):
+        now[0] += 61
+        core.tick()
+        _processed(jr, launcher)
+    before = jr.con.total_changes
+    for _ in range(3):
+        now[0] += 61
+        core.tick()
+    assert jr.con.total_changes == before
+
+
+def test_the_folders_are_looked_at_in_a_thread_of_their_own(env, qapp, qtbot, monkeypatch):
+    """A slow network drive must not hold up the watcher: while it looks, it answers and keeps its
+    heartbeat; what the look found is processed afterwards."""
+    import threading
+    from gcws.automation import scanner as SC
+    from gcws.automation.watcher import WatcherCore
+    batch = env["watch"] / "26016605_TEST"
+    batch.mkdir()
+    _log(batch, BATCH, completed=True)
+    for n in BATCH:
+        _acquire(batch, n)
+    slow, threads = threading.Event(), set()
+    real = SC.batch_folders
+
+    def batch_folders(*a, **k):
+        threads.add(threading.get_ident())
+        slow.wait(10)                                      # the drive takes its time
+        return real(*a, **k)
+
+    monkeypatch.setattr(SC, "batch_folders", batch_folders)
+    launcher = FakeLauncher()
+    core = WatcherCore(env["journal"], launcher, threaded=True)
+    env["wf"].source.params.update(process_existing=True)
+    env["wf"].save()
+    core.reload()
+    t0 = time.monotonic()
+    core.tick()
+    assert time.monotonic() - t0 < 1 and core.looking and threading.get_ident() not in threads
+    core.heartbeat()
+    core.tick()                                            # no second look while one is under way
+    assert env["journal"].watcher_status()["state"] == "running"
+    slow.set()
+    qtbot.waitUntil(lambda: bool(launcher.started), timeout=10000)
+    assert not core.looking and launcher.started[0][2] == "job"
+    assert {j.group_name for j in env["journal"].jobs()} == {"26016606_x", "26016607_y"}

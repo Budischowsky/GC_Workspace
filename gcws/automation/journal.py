@@ -133,6 +133,20 @@ class Job:
         return self.group_key == BATCH_KEY
 
 
+def _ensure_changes_nothing(cur: "Job", members: list, blanks: dict, input_fp: str, group_name: str, state: str,
+                            reason: str) -> bool:
+    """True when :meth:`Journal.ensure_job` would leave the job ``cur`` as it is."""
+    if cur.state == REMOVED or cur.deleted:
+        return True
+    if cur.input_fp != input_fp and cur.state not in (QUEUED, PROCESSING, WAITING):
+        return False                                   # a new revision
+    if cur.state == WAITING:
+        return (state == WAITING and cur.input_fp == input_fp and (cur.members or []) == list(members)
+                and (cur.blanks or {}) == dict(blanks) and cur.group_name == group_name
+                and (cur.reason or "") == (reason or ""))
+    return not (cur.state == NOT_PROCESSED and cur.input_fp != input_fp)
+
+
 class Journal:
     def __init__(self, path: Optional[Path] = None, timeout: float = 10.0):
         self.path = Path(path) if path else store.journal_path()
@@ -375,6 +389,10 @@ class Journal:
         Report² stays as it is (hidden) until it is restored."""
         from gcws.automation.workflow import new_id
         now = time.time()
+        # the watcher asks at every look: nothing to change is answered without a write transaction
+        cur = self.find_job(workflow_id, method_node, batch_id, group_key)
+        if cur is not None and _ensure_changes_nothing(cur, members, blanks, input_fp, group_name, state, reason):
+            return cur
         with self.tx():
             cur = self.find_job(workflow_id, method_node, batch_id, group_key)
             if cur is None:
