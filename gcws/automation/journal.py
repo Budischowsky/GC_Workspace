@@ -166,7 +166,8 @@ class Journal:
         for col in ("local_folder", "copied_extras"):
             if col not in columns:
                 self.con.execute(f"ALTER TABLE batches ADD COLUMN {col} TEXT")
-        for col, kind in (("folder_birth", "REAL"), ("missing", "INTEGER DEFAULT 0")):
+        for col, kind in (("folder_birth", "REAL"), ("missing", "INTEGER DEFAULT 0"), ("force_json", "TEXT"),
+                          ("manual", "INTEGER DEFAULT 0")):
             if col not in columns:
                 self.con.execute(f"ALTER TABLE batches ADD COLUMN {col} {kind}")
         columns = {r["name"] for r in self.con.execute("PRAGMA table_info(runs)")}
@@ -259,6 +260,46 @@ class Journal:
             self.con.execute("UPDATE batches SET deleted=0, missing=0, reopened=0, plan_json=NULL, seq_completed=0, "
                              "last_change=? WHERE id=?", (time.time(), batch_id))
         return done
+
+    def request_samples(self, workflow_id: str, folder, runs: Optional[Iterable[str]] = None, *,
+                        outside: bool = False, user: Optional[str] = None) -> dict:
+        """The analyst adds samples to the queue: the runs ``runs`` of the batch folder (their samples), or
+        all of it (``None``). The watcher processes them at its next look - without waiting for the quiet
+        time, also runs there before watching started or processed already. ``outside``: the folder is not
+        below the workflow's watched folder (the watcher then looks at it for this request only)."""
+        user = user or _user()
+        b = self.batch(workflow_id, Path(folder))
+        stems = {"*"} if runs is None else {Path(str(r)).stem.casefold() if str(r).lower().endswith((".d", ".qgd"))
+                                             else str(r).casefold() for r in runs}
+        before = set(json.loads(b.get("force_json") or "[]") or [])
+        force = sorted({"*"} if "*" in stems | before else stems | before)
+        self.update_batch(b["id"], force_json=json.dumps(force), manual=1 if outside or b.get("manual") else 0,
+                          deleted=0)
+        what = "all samples" if force == ["*"] else f"{len(stems)} run(s)"
+        self.event("info", f"{b['name']}: {what} added to the queue by {user}", workflow_id=workflow_id,
+                   batch_id=b["id"], user=user)
+        return self.batch_by_id(b["id"])
+
+    def forced(self, batch: dict) -> set:
+        try:
+            return set(json.loads(batch.get("force_json") or "[]") or [])
+        except ValueError:
+            return set()
+
+    def enqueue(self, job_id: str, user: Optional[str] = None) -> bool:
+        """A sample the analyst added to the queue: queued now (a processed, removed or deleted one as a
+        new revision, and shown again)."""
+        j = self.job(job_id)
+        if j is None:
+            return False
+        if j.deleted:
+            self.con.execute("UPDATE jobs SET deleted=0 WHERE id=?", (job_id,))
+        if j.state in (QUEUED, PROCESSING):
+            return True
+        if j.state == WAITING:
+            return self.transition(job_id, WAITING, QUEUED, queued_at=time.time(), not_before=0,
+                                   reason="added to the queue by hand")
+        return self.request(job_id, "full", user=user)
 
     def put_in_again(self, job_ids: Iterable[str]) -> list[str]:
         """A run of these samples was deleted and copied in again: a sample deleted in Report² is shown

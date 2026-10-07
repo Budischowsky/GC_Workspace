@@ -48,6 +48,8 @@ def main(argv=None):
     sys.excepthook = excepthook
     win = MainWindow()
     win.show()
+    from PySide6.QtCore import QTimer
+    QTimer.singleShot(1500, win.automation.start_with_app)      # Automation > Start with GC Workspace
     if "--report2" in argv and "report2" in getattr(win, "docks", {}):
         win._show_dock("report2")              # opened from the watcher's tray icon
     for arg in argv[1:]:

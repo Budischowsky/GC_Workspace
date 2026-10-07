@@ -283,6 +283,8 @@ class WatcherCore(QObject):
                 self._unreachable.add(wf.id)
                 self.journal.event("warning", f"Workflow '{wf.name}': the watched folder {root} cannot be reached; "
                                    "looking again at every check", workflow_id=wf.id)
+            last = store.read_json(store.listing_path(wf.id)) or {}
+            self._write_listing(wf, dict(last, root=root, reachable=False, checked=now))
             return
         if wf.id in self._unreachable:
             self._unreachable.discard(wf.id)
@@ -303,13 +305,35 @@ class WatcherCore(QObject):
             for folder, why in skipped:
                 if why == "old":
                     self._baseline_folder(wf, folder)
+        listing = [{"path": str(f), "name": f.name, "status": why} for f, why in skipped]
         for folder in folders:
             # runs lying loose above the batch folders count since this version: those there already
             # when it first looks are not processed (like everything at a workflow's first look)
             loose = census and SC.folder_key(folder) not in known and len(folder.relative_to(root).parts) < depth
-            self._scan_batch(wf, folder, now, cfg,
-                             baseline_new=(first and not src.p("process_existing")) or loose)
+            info = self._scan_batch(wf, folder, now, cfg,
+                                    baseline_new=(first and not src.p("process_existing")) or loose)
+            listing.append(dict(info or {}, path=str(folder), name=folder.name, status="batch"))
+        self._scan_requested(wf, {SC.folder_key(f) for f in folders}, now, cfg)
         self._check_missing(wf, root, seen)
+        self._write_listing(wf, {"root": root, "reachable": True, "scanned": now, "checked": now,
+                                 "folders": sorted(listing, key=lambda d: d["path"].casefold())})
+
+    def _scan_requested(self, wf: W.Workflow, done: set, now: float, cfg: SC.Readiness) -> None:
+        """Batch folders with samples the analyst added to the queue that the look at the watched folder
+        did not cover (too old, a name the workflow skips, outside the watched folder), and folders
+        outside it until their batch is closed."""
+        for b in self.journal.batches(wf.id):
+            if b["folder_key"] in done or b.get("deleted") or not os.path.isdir(b["folder"]):
+                continue
+            if self.journal.forced(b) or (b.get("manual") and not J.batch_closed(
+                    b, self.journal.jobs(workflow_id=wf.id, batch_id=b["id"]))):
+                self._scan_batch(wf, Path(b["folder"]), now, cfg, baseline_new=False)
+
+    def _write_listing(self, wf: W.Workflow, listing: dict) -> None:
+        try:
+            store.atomic_write_json(store.listing_path(wf.id), dict(listing, workflow_id=wf.id, workflow=wf.name))
+        except OSError as exc:
+            log.warning("listing of %s not written: %s", wf.name, exc)
 
     def _baseline_folder(self, wf: W.Workflow, folder: Path) -> None:
         """A batch folder too old to look into at the workflow's first look: its runs (names only, nothing
@@ -357,7 +381,7 @@ class WatcherCore(QObject):
         if born and b.get("folder_birth") != born:
             self.journal.update_batch(b["id"], folder_birth=born)
         if b.get("deleted"):
-            return                                     # deleted in Report²: not looked at any more
+            return {"batch_id": b["id"]}               # deleted in Report²: not looked at any more
         prev = self.journal.runs(b["id"])
         obs = SC.observe(folder)
         seq = SQ.read_sequence(folder, present=[o.name for o in obs])
@@ -368,7 +392,7 @@ class WatcherCore(QObject):
                                                key=lambda s: SQ.order_key(s))
         present_stems = {o.stem for o in obs}
         present = {}
-        readded = set()
+        readded, unchanged = set(), set()
         for o in obs:
             i = order.index(o.stem) if o.stem in order else -1
             successor = i >= 0 and any(s in present_stems for s in order[i + 1:])
@@ -392,6 +416,8 @@ class WatcherCore(QObject):
                                        "again", workflow_id=wf.id, batch_id=b["id"])
             self.journal.upsert_run(b["id"], o.stem, **fields)
             present[o.stem] = {"name": o.name, "ready": state == "ready"}
+            if not o.busy and row is not None and row.get("fingerprint") == o.fingerprint:
+                unchanged.add(o.stem)
         newest = max((o.mtime for o in obs), default=0.0)
         if not quiet and obs and not changed and all(v["ready"] for v in present.values()) and \
                 now - newest >= cfg.quiet_s:
@@ -411,12 +437,25 @@ class WatcherCore(QObject):
         local_present = {s: dict(v, ready=v["ready"] and s in copied, copying=v["ready"] and s not in copied)
                          for s, v in present.items()}
         needed = set()                                 # runs a sample processed from the copy needs
+        force = self.journal.forced(b)                 # run stems (or "*") the analyst added to the queue
+        pending = set()
         for m in wf.methods():
             method = self.method(m.p("method"))
             via, edges = wf.feed(m.id)
             plan = PN.plan_batch(present if via is None else local_present, seq, quiet=quiet,
                                  require=blank_requirement(m, method), baseline=baseline)
-            for g in plan.groups:
+            forced = {}
+            if force:
+                # a run counts as finished when it did not change since the last look
+                fpres = {s: dict(v, ready=v["ready"] or s in unchanged) for s, v in present.items()}
+                if via is not None:
+                    fpres = {s: dict(v, ready=v["ready"] and s in copied, copying=v["ready"] and s not in copied)
+                             for s, v in fpres.items()}
+                fplan = PN.plan_batch(fpres, seq, quiet=True, require=blank_requirement(m, method))
+                forced = {g.key: g for g in fplan.groups if "*" in force or set(g.members) & force}
+            groups = [forced.get(g.key, g) for g in plan.groups if not b.get("manual") or g.key in forced]
+            groups += [g for k, g in forced.items() if k not in {x.key for x in plan.groups}]
+            for g in groups:
                 if g.state == PN.BASELINE:
                     continue
                 if not all(W.passes(e.filter, {"name": g.name, "batch": folder.name}) for e in edges):
@@ -430,6 +469,13 @@ class WatcherCore(QObject):
                                   ).hexdigest()[:16]
                 job = self.journal.ensure_job(wf.id, m.id, b["id"], g.key, g.name, members, blanks, fp,
                                               reason=g.reason)
+                if g.key in forced:
+                    if g.state == PN.WAITING:              # a run still being written or copied
+                        pending.update(g.members)
+                        self.journal.update_job(job.id, reason="added to the queue; " + g.reason)
+                    else:
+                        self.journal.enqueue(job.id)
+                    continue
                 if job.state == J.WAITING:
                     if g.state == PN.READY:
                         self.journal.transition(job.id, J.WAITING, J.QUEUED, queued_at=now, reason="")
@@ -455,13 +501,24 @@ class WatcherCore(QObject):
                        if j.method_node == m.id}
             complete = (plan.finished or bool(seq.lines)) and all(
                 g.state != PN.WAITING or g.key in removed for g in plan.groups) if removed else plan.complete
+            if b.get("manual"):                        # outside the watched folder: only what was added
+                complete = not pending and all(j.state not in (J.WAITING, J.QUEUED, J.PROCESSING) for j in
+                                               self.journal.jobs(workflow_id=wf.id, batch_id=b["id"],
+                                                                 include_batch=False) if j.method_node == m.id)
             self.journal.update_batch(b["id"], plan={"complete": complete, "groups": [
                 {"key": g.key, "name": g.name, "state": "removed" if g.key in removed else g.state,
                  "reason": g.reason} for g in plan.groups]})
             if complete:
                 self._batch_report(wf, m, b, folder)
+        if force:
+            left = ({"*"} if pending else set()) if "*" in force else force & pending
+            if left != force:
+                self.journal.update_batch(b["id"], force_json=json.dumps(sorted(left)) if left else None)
         if wf.copy_step is not None:
             self._plan_copy(wf, wf.copy_step, b, folder, runs, present_stems, needed)
+        return {"batch_id": b["id"], "has_log": bool(seq.lines), "quiet": quiet,
+                "quiet_in": 0 if quiet else max(0.0, cfg.quiet_s - (now - last_change)),
+                "other": SC.other_files(folder)}
 
     # -- the local copy --------------------------------------------------------------------------------
 

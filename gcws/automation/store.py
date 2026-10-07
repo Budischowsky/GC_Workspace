@@ -30,6 +30,12 @@ def journal_path() -> Path:
     return root() / "journal.sqlite"
 
 
+def listing_path(workflow_id: str) -> Path:
+    """What the watcher saw in a workflow's watched folder at its last look (the Folders tab reads it,
+    so that GC Workspace never has to read a slow network drive itself)."""
+    return root() / "listing" / f"{safe_name(workflow_id)}.json"
+
+
 def default_rules_path() -> Path:
     return root() / "default_rules.json"
 

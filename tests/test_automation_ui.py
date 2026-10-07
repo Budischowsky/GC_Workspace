@@ -199,3 +199,156 @@ def test_view_menu_stays_open_while_panels_are_switched(qtbot, win):
         qtbot.waitUntil(lambda: not menu.isVisible())
     finally:
         menu.close()
+
+
+def _overview_setup(data):
+    """A workflow with a local copy, the watcher's last look and a journal with one processed sample."""
+    import json
+    import os
+    import time
+    from gcws.automation import journal as J, store, templates
+    watch, local = data / "watch", data / "local"
+    batch = watch / "26016605_TEST"
+    batch.mkdir(parents=True)
+    for n in ("06_EtOH_ISTD", "07_26016606_x_A", "08_EtOH", "11_26016606_x_B"):
+        (batch / f"{n}.D").mkdir()
+    (batch / "S Sequence Log .TSV").write_text("x")
+    wf = templates.make("nias", "Lab", source=str(watch), method="NIAS", folder_a=str(data / "A"))
+    wf.insert_copy(folder=str(local))
+    wf.enabled = True
+    wf.save()
+    jr = J.Journal(data / "automation" / "journal.sqlite")
+    b = jr.batch(wf.id, batch)
+    for n, role in (("06_EtOH_ISTD", "blank_istd"), ("07_26016606_x_A", "sample"), ("08_EtOH", "blank"),
+                    ("11_26016606_x_B", "sample")):
+        jr.upsert_run(b["id"], n.casefold(), path=str(batch / f"{n}.D"), fingerprint="fp", state="ready", role=role,
+                      copied_fp="fp" if n != "11_26016606_x_B" else None)
+    m = wf.methods()[0]
+    job = jr.ensure_job(wf.id, m.id, b["id"], "26016606:x", "26016606_x", ["07_26016606_x_A.D", "11_26016606_x_B.D"],
+                        {"blank": ["08_EtOH.D"], "blank_istd": ["06_EtOH_ISTD.D"]}, "fp", reason="waiting for quiet")
+    (local / "26016605_TEST" / "07_26016606_x_A.D").mkdir(parents=True)
+    (local / "26016605_TEST" / "05_old_copy.D").mkdir()
+    (local / "26010000_OLDER" / "01_y_A.D").mkdir(parents=True)
+    store.atomic_write_json(store.listing_path(wf.id), {
+        "root": str(watch), "reachable": True, "scanned": time.time(), "checked": time.time() - 120,
+        "folders": [{"path": str(batch), "name": batch.name, "status": "batch", "batch_id": b["id"],
+                     "has_log": False, "quiet": False, "quiet_in": 600, "other": ["S Sequence Log .TSV"]},
+                    {"path": str(watch / "Archive"), "name": "Archive", "status": "old"}]})
+    return wf, jr, job, batch, local
+
+
+def test_folders_overview_shows_both_sides(qtbot, data):
+    from gcws.automation import overview as OV
+    wf, jr, job, batch, local = _overview_setup(data)
+    [top] = OV.overview(jr, [wf])
+    assert top.watched == str(data / "watch") and top.local == str(local) and "2 min ago" in top.why
+    items = {c.name: c for c in top.children}
+    assert set(items) == {"26016605_TEST", "Archive", "26010000_OLDER"}
+    assert "not looked at" in items["Archive"].watched
+    assert items["26010000_OLDER"].local == "only in the local copy"
+    b = items["26016605_TEST"]
+    assert b.watched == "watched (no sequence log)" and b.local == "3 of 4 finished run(s) copied"
+    assert b.sample == "1 sample(s)" and "about 10 min" in b.why and b.state == "1 waiting"
+    runs = {c.name: c for c in b.children}
+    assert runs["07_26016606_x_A.D"].sample == "26016606_x" and runs["07_26016606_x_A.D"].job_id == job.id
+    assert runs["07_26016606_x_A.D"].local == "copied" and runs["11_26016606_x_B.D"].local == "waiting to be copied"
+    assert runs["08_EtOH.D"].sample == "blank of 26016606_x"
+    assert runs["05_old_copy.D"].local == "only in the local copy"
+    assert runs["S Sequence Log .TSV"].kind == "file"
+
+
+def test_folders_tab_in_the_panel(qtbot, data):
+    from gcws.ui.docks.automation import AutomationDock
+    wf, jr, job, batch, local = _overview_setup(data)
+    dock = AutomationDock(journal=jr, control=NoWatcher())
+    qtbot.addWidget(dock)
+    assert [dock.tabs.tabText(i) for i in range(dock.tabs.count())] == ["Workflows", "Folders", "Queue (1)",
+                                                                        "Activity"]
+    dock.tabs.setCurrentWidget(dock.folders)
+    tree = dock.folders.tree
+    top = tree.topLevelItem(0)
+    assert top.text(0) == "Lab" and top.isExpanded()
+    batch_item = next(top.child(i) for i in range(top.childCount()) if top.child(i).text(0) == "26016605_TEST")
+    run = next(batch_item.child(i) for i in range(batch_item.childCount())
+               if batch_item.child(i).text(0) == "07_26016606_x_A.D")
+    shown = []
+    dock.showJob.connect(shown.append)
+    tree.clearSelection()
+    run.setSelected(True)
+    assert dock.folders.b_report.isEnabled() and dock.folders.b_local.isEnabled()
+    dock.folders.show_in_report2()
+    assert shown == [job.id]
+    menu = dock.folders.context_menu(tree.visualItemRect(run).center())
+    assert menu is not None and "Show in Report²" in [a.text() for a in menu.actions()]
+    batch_item.setExpanded(True)
+    dock.folders._signature = None
+    dock.folders.refresh()                                 # rebuilt: what was open stays open
+    top = tree.topLevelItem(0)
+    again = next(top.child(i) for i in range(top.childCount()) if top.child(i).text(0) == "26016605_TEST")
+    assert again.isExpanded()
+
+
+def test_add_samples_by_hand(qtbot, data):
+    from PySide6.QtCore import Qt
+    from gcws.automation import journal as J, templates
+    from gcws.ui.automation.add_samples import AddSamplesDialog, folder_samples
+    from gcws.ui.docks.automation import AutomationDock
+    watch = data / "watch"
+    batch = data / "elsewhere" / "26016605_TEST"
+    batch.mkdir(parents=True)
+    watch.mkdir()
+    for n in ("06_EtOH_ISTD", "07_26016606_x_A", "08_EtOH", "09_26016607_y_A", "11_26016606_x_B"):
+        (batch / f"{n}.D").mkdir()
+    assert [(n, m) for n, m, _b in folder_samples(batch)] == [
+        ("26016606_x", ["07_26016606_x_A.D", "11_26016606_x_B.D"]), ("26016607_y", ["09_26016607_y_A.D"])]
+    wf = templates.make("simple", "Lab", source=str(watch), method="NIAS", folder_a=str(data / "A"))
+    wf.enabled = True
+    wf.save()
+
+    class Control(NoWatcher):
+        started = 0
+
+        def start(self, paused=False):
+            Control.started += 1
+            return True
+
+    jr = J.Journal(data / "automation" / "journal.sqlite")
+    dock = AutomationDock(journal=jr, control=Control())
+    qtbot.addWidget(dock)
+    dlg = AddSamplesDialog([wf], folder=str(batch))
+    qtbot.addWidget(dlg)
+    assert dlg.list.count() == 2 and dlg.ok.isEnabled()
+    dlg.list.item(1).setCheckState(Qt.Unchecked)
+    assert dlg.values() == (wf.id, str(batch), ["07_26016606_x_A.D", "11_26016606_x_B.D"])
+    b = dock.add_samples(dlg)
+    assert b["manual"] == 1 and jr.forced(b) == {"07_26016606_x_a", "11_26016606_x_b"}
+    assert Control.started == 1                            # no watcher was running: started
+    assert dock.tabs.currentWidget() is dock._queue_page and dock.queue.item(0, 3).text() == "Requested"
+    assert dock.tabs.tabText(dock.tabs.indexOf(dock._queue_page)) == "Queue (1)"
+    # from the Folders tab: a whole batch folder
+    from gcws.automation.overview import Item
+    out = dock.add_to_queue([Item("batch", batch.name, path=str(batch), workflow_id=wf.id)])
+    assert len(out) == 1 and jr.forced(out[0]) == {"*"}
+
+
+def test_watcher_starts_with_gc_workspace(qtbot, data):
+    from PySide6.QtCore import QSettings
+    from gcws.automation import templates
+    from gcws.ui.docks.automation import AutomationDock
+    calls = []
+
+    class Control(NoWatcher):
+        def start(self, paused=False):
+            calls.append(paused)
+            return True
+
+    dock = AutomationDock(control=Control())
+    qtbot.addWidget(dock)
+    assert not dock.start_with_app()                       # no active workflow
+    wf = templates.make("simple", "Lab", source=str(data), method="NIAS", folder_a=str(data / "A"))
+    wf.enabled = True
+    wf.save()
+    dock.with_app.setChecked(False)
+    assert not dock.start_with_app() and not QSettings().value("automation/start_with_app", True, type=bool)
+    dock.with_app.setChecked(True)
+    assert dock.start_with_app() and calls == [False]

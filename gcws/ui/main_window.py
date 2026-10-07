@@ -697,6 +697,7 @@ class MainWindow(QMainWindow):
         self.replicates.reportRequested.connect(lambda kind, gid: self.report(kind, gid))
         self.replicates.previewRequested.connect(lambda kind, gid: self.report(kind, gid, preview=True))
         self.automation.showReport2.connect(lambda: self._show_dock("report2"))
+        self.automation.showJob.connect(lambda jid: (self._show_dock("report2"), self.report2.reveal(jid)))
         self.report2.openProject.connect(self._open_report2_selected_project)
         self.report2.openDetermination.connect(self.open_report2_job)
         self.report2.prepare_review = self._save_report2_project

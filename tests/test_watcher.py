@@ -721,3 +721,110 @@ def test_copied_batch_without_log_does_not_wait_for_the_quiet_time(env, qapp):
     _processed(jr, launcher)
     assert not any(k == "job" and spec["batch_folder"] == str(live) for _, spec, k in launcher.started)
     assert any(j.state == "waiting" and "quiet" in j.reason for j in jr.jobs())
+
+
+def test_the_watcher_writes_what_it_saw(env, qapp):
+    """The Folders tab reads the watcher's last look instead of the (maybe slow) watched folder."""
+    from gcws.automation import store
+    jr = env["journal"]
+    core, launcher, now = _core(env)
+    core.tick()
+    batch = env["watch"] / "26016605_TEST"
+    batch.mkdir()
+    _log(batch, BATCH[:3])
+    for n in BATCH[:3]:
+        _acquire(batch, n)
+    other = env["watch"] / "Archive_2025"
+    other.mkdir()
+    _acquire(other, "01_x_A")
+    src = env["wf"].source
+    src.params.update(pattern="2601*")
+    env["wf"].save()
+    now[0] += 61
+    core.tick()
+    listing = store.read_json(store.listing_path(env["wf"].id))
+    assert listing["reachable"] and listing["root"] == str(env["watch"])
+    folders = {f["name"]: f for f in listing["folders"]}
+    assert folders["26016605_TEST"]["status"] == "batch" and folders["Archive_2025"]["status"] == "name"
+    assert folders["26016605_TEST"]["batch_id"] == jr.batch(env["wf"].id, batch)["id"]
+    assert "S Sequence Log .TSV" in folders["26016605_TEST"]["other"]
+    assert folders["26016605_TEST"]["has_log"]
+    import shutil
+    shutil.rmtree(env["watch"])                            # the network drive is gone
+    now[0] += 61
+    core.tick()
+    listing = store.read_json(store.listing_path(env["wf"].id))
+    assert not listing["reachable"] and {f["name"] for f in listing["folders"]} == set(folders)
+
+
+# -- samples added to the queue by hand (Oct 2026) ----------------------------------------------------
+
+def test_samples_added_by_hand_are_processed(env, qapp):
+    from gcws.automation import journal as J
+    jr = env["journal"]
+    old = env["watch"] / "26010000_OLD"                    # there before watching: not processed by itself
+    old.mkdir()
+    _log(old, BATCH, completed=True)
+    for n in BATCH:
+        _acquire(old, n)
+    core, launcher, now = _core(env)
+    core.tick()
+    assert jr.jobs() == []
+    jr.request_samples(env["wf"].id, old, ["07_26016606_x_A.D"], user="analyst")
+    assert jr.forced(jr.batch(env["wf"].id, old)) == {"07_26016606_x_a"}
+    now[0] += 61
+    core.tick()
+    jobs = {j.group_name: j for j in jr.jobs() if not j.is_batch}
+    assert set(jobs) == {"26016606_x"} and jobs["26016606_x"].state == J.PROCESSING   # only the one added
+    assert launcher.started[-1][1]["blanks"]["blank"] == ["08_EtOH.D", "13_EtOH.D"]
+    assert jr.forced(jr.batch(env["wf"].id, old)) == set()                            # taken up
+    _processed(jr, launcher)
+    # added again once processed (and deleted in Report² meanwhile): a new revision, shown again
+    jr.delete([jobs["26016606_x"].id])
+    jr.request_samples(env["wf"].id, old, None)
+    now[0] += 61
+    core.tick()
+    again = jr.job(jobs["26016606_x"].id)
+    assert again.revision == 2 and not again.deleted
+    assert {j.group_name for j in jr.jobs() if not j.is_batch} == {"26016606_x", "26016607_y"}
+
+
+def test_sample_added_by_hand_does_not_wait_for_the_quiet_time(env, qapp):
+    jr = env["journal"]
+    core, launcher, now = _core(env)
+    core.tick()
+    live = env["watch"] / "26016605_LIVE"
+    live.mkdir()
+    for n in BATCH[:3]:
+        _acquire(live, n)                                  # no sequence log, written 10 min ago
+    now[0] += 61
+    core.tick()
+    now[0] += 61
+    core.tick()
+    assert not launcher.started and "quiet" in jr.jobs()[0].reason
+    jr.request_samples(env["wf"].id, live, None)
+    core.scan_now()
+    core.tick()
+    assert launcher.started and launcher.started[0][1]["group"]["name"] == "26016606_x"
+
+
+def test_folder_outside_the_watched_folder_added_by_hand(env, qapp):
+    from gcws.automation import journal as J
+    jr = env["journal"]
+    core, launcher, now = _core(env)
+    core.tick()
+    outside = env["tmp"] / "elsewhere" / "26016605_OTHER"
+    outside.mkdir(parents=True)
+    _log(outside, BATCH, completed=True)
+    for n in BATCH:
+        _acquire(outside, n)
+    jr.request_samples(env["wf"].id, outside, ["09_26016607_y_A.D", "12_26016607_y_B.D"], outside=True)
+    now[0] += 61
+    core.tick()
+    jobs = [j for j in jr.jobs() if not j.is_batch]
+    assert [j.group_name for j in jobs] == ["26016607_y"] and jobs[0].state == J.PROCESSING
+    _processed(jr, launcher)
+    now[0] += 61
+    core.tick()                                            # only what was added: the batch report follows
+    assert launcher.started[-1][2] == "batch"
+    assert [e["name"] for e in launcher.started[-1][1]["entries"]] == ["26016607_y"]

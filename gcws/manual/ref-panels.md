@@ -273,12 +273,15 @@ goes back to the pair shown last.
 
 Described in [Unattended processing](wf-automation.md).
 
+The watcher box is on top; the rest is in four tabs.
+
 | Group | Controls |
 |---|---|
-| **Watcher (background processing)** | The state of the watcher; **Start**, **Pause**, **Check now**, **Stop**; **Start with Windows**. |
-| **Workflows** | The table of workflows (**Active**, **Name**, **Watched folder**, **Every**, **Waiting**, **To check**); **New**, **Edit chart...**, **Duplicate**, **Delete**, **Import...**, **Export...**, **Report²**. |
-| **Queue** | The samples waiting, in work, failed or not processed (**Sample**, **Batch**, **Workflow**, **State**, **Why**); **Remove from queue**, **Process again**, **Show removed**. |
-| **Activity** | What the watcher did, with the time. |
+| **Watcher (background processing)** | The state of the watcher; **Start**, **Pause**, **Check now**, **Stop**; **Start with Windows**, **Start with GC Workspace**. |
+| **Workflows** tab | The table of workflows (**Active**, **Name**, **Watched folder**, **Every**, **Waiting**, **To check**); **New**, **Edit chart...**, **Duplicate**, **Delete**, **Import...**, **Export...**, **Report²**. |
+| **Folders** tab | Every watched folder with its batch folders and runs (**Name**, **Watched folder**, **Local copy**, **Sample**, **State**, **Why**); **Add to queue**, **Open folder**, **Open local copy**, **Show in Report²**. See [What is in the watched folders](wf-automation.md#what-is-in-the-watched-folders). |
+| **Queue** tab | The samples waiting, in work, failed or not processed (**Sample**, **Batch**, **Workflow**, **State**, **Why**), with their number on the tab, and the samples you added that the watcher has not taken up yet (*Requested*); **Add samples...**, **Remove from queue**, **Process again**, **Show removed**. |
+| **Activity** tab | What the watcher did, with the time. |
 
 ## Report²
 

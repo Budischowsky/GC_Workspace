@@ -163,6 +163,16 @@ def fingerprint(path: Path) -> tuple[str, float, bool, bool]:
     return h.hexdigest()[:16], newest, marker, busy
 
 
+def other_files(folder, limit: int = 40) -> list[str]:
+    """The names of what lies in a batch folder beside the runs (sequence log, method, ...)."""
+    try:
+        with os.scandir(folder) as it:
+            names = sorted((e.name for e in it if not _is_run(e)), key=str.casefold)
+    except OSError:
+        return []
+    return names[:limit] + ([f"... {len(names) - limit} more"] if len(names) > limit else [])
+
+
 def observe(folder) -> list[RunObs]:
     """Every run in the batch ``folder`` (finished or not)."""
     out = []

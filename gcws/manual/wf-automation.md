@@ -143,6 +143,7 @@ Windows tray and keeps running when GC Workspace is closed.
 | **Check now** | Looks at the watched folders at once instead of waiting. |
 | **Stop** / **Automation > Stop the watcher** | Ends it. |
 | **Start with Windows** | Starts the watcher when you log on. |
+| **Start with GC Workspace** | On by default: starts the watcher when GC Workspace starts and a workflow is active, so that new data is never left waiting because nobody started it. |
 
 It processes one sample at a time, each in its own process, so that a crash or a hanging Office program cannot
 stop the watcher. The raw data are only read. Beside the state, the Automation panel shows what the watcher is
@@ -177,6 +178,40 @@ processed, with the reason.
 A sample that can never be completed - its B run was never measured - would hold up the batch report. Select
 it and press **Remove from queue**. The watcher then skips it and the batch report no longer waits for it.
 **Show removed** lists such samples, and **Process again** brings one back.
+
+**Add samples...** puts samples into the queue by hand, in the window **Add samples to the queue**: choose the
+**Workflow** (one that is active) and the **Batch folder**; its samples are listed as the watcher groups them
+(hover one for its blanks) - tick those to process (**Select all**, **Select none**) and press
+**Add to queue**. The batch folder may also lie outside the watched folder. The watcher processes them at its
+next look, with the blanks of the same folder:
+
+- without waiting for the quiet time,
+- also samples that were there before watching started, lie in a folder too old or with a name the workflow
+  skips,
+- and samples that were processed already - as a new revision; a report deleted in Report² is shown again.
+
+Until the watcher has taken them up they are listed as *Requested*. If the watcher is not running, it is
+started. **Add to queue** in the **Folders** tab does the same for the selected batch folders (all their
+samples) and runs. A sample without the blank it needs is still not processed; Report² then offers
+**Process without a blank...**.
+
+## What is in the watched folders
+
+The **Folders** tab of the **Automation** panel shows, for every workflow, its watched folder with the batch
+folders and runs below it, beside their local copy (with a **Local copy** step), and what became of each
+sample. It shows what the watcher saw at its last look - the top row says when that was - so GC Workspace
+never has to read a slow network drive itself; the local copy folder is listed directly.
+
+| Column | What it shows |
+|---|---|
+| **Name** | The workflow, a batch folder, a run, or another file in the batch folder (greyed, for example the sequence log). |
+| **Watched folder** | A batch folder: *watched* (with or without a sequence log), *not looked at* because it is older than **Skip folders older than** or its name does not match **Folder names**, *removed from the watched folder*, or *deleted in Report²*. A run: *finished*, *being written*, *there before watching: not processed*, *put in again*. |
+| **Local copy** | How many finished runs are copied; a run: *copied*, *waiting to be copied*, *not copied* with the reason, *an older copy*. Folders and runs that are *only in the local copy* are listed too. |
+| **Sample** | The sample a run belongs to, the samples a blank serves, or the number of samples of a batch. |
+| **State**, **Why** | The sample's state in the queue or in Report² and the reason - for example how long a batch without a sequence log still waits until it is quiet. |
+
+Select a row: **Open folder** opens it in the Explorer (double-click does the same), **Open local copy** its
+copy, **Show in Report²** the sample's report (a batch: its batch report). The same is on the right-click menu.
 
 ## Report²: what needs your control
 

@@ -11,10 +11,10 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QSettings, Qt, QTimer, Signal
 from PySide6.QtWidgets import (QCheckBox, QFileDialog, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QMenu,
-                               QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QToolButton, QVBoxLayout,
-                               QWidget)
+                               QMessageBox, QPushButton, QTableWidget, QTableWidgetItem, QTabWidget, QToolButton,
+                               QVBoxLayout, QWidget)
 
 from gcws.automation import journal as J
 from gcws.automation import templates
@@ -27,6 +27,7 @@ STATE_LEVEL = {"running": "ok", "processing": "info", "paused": "warn", "stopped
 
 class AutomationDock(QWidget):
     showReport2 = Signal()
+    showJob = Signal(str)                        # a Report² job (Folders tab: Show in Report²)
 
     def __init__(self, parent=None, journal: Optional[J.Journal] = None, control=None, poll_ms: int = 3000):
         super().__init__(parent)
@@ -62,14 +63,24 @@ class AutomationDock(QWidget):
         self.autostart.setToolTip("A shortcut in your Startup folder starts the watcher when you log on")
         self.autostart.toggled.connect(self._autostart)
         row.addWidget(self.autostart)
+        self.with_app = QCheckBox("Start with GC Workspace")
+        self.with_app.setToolTip("Start the watcher when GC Workspace starts and a workflow is active")
+        self.with_app.setChecked(QSettings().value("automation/start_with_app", True, type=bool))
+        self.with_app.toggled.connect(lambda on: QSettings().setValue("automation/start_with_app", on))
+        row.addWidget(self.with_app)
         bl.addLayout(row)
         bl.addWidget(theme.hint("The watcher keeps running when GC Workspace is closed (tray icon). It checks "
                                 "the watched folders, processes every finished sample and hands the reports "
                                 "to Report²."))
         lay.addWidget(box)
-        # workflows
-        box = QGroupBox("Workflows")
+        # workflows, folders, queue and activity: one tab each
+        self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
+        self.tabs.currentChanged.connect(lambda *_: self._refresh_tab())
+        lay.addWidget(self.tabs, 1)
+        box = QWidget()
         wl = QVBoxLayout(box)
+        wl.setContentsMargins(0, 4, 0, 0)
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["Active", "Name", "Watched folder", "Every", "Waiting", "To check"])
         self.table.verticalHeader().setVisible(False)
@@ -103,10 +114,17 @@ class AutomationDock(QWidget):
         r2.clicked.connect(self.showReport2.emit)
         row.addWidget(r2)
         wl.addLayout(row)
-        lay.addWidget(box, 2)
+        self.tabs.addTab(box, "Workflows")
+        # what is in the watched folders and their local copies
+        from gcws.ui.automation.folders import FoldersView
+        self.folders = FoldersView(lambda: self.journal)
+        self.folders.showJob.connect(self.showJob.emit)
+        self.folders.addToQueue.connect(self.add_to_queue)
+        self.tabs.addTab(self.folders, "Folders")
         # the queue: samples not processed yet, or whose processing could not finish
-        box = QGroupBox("Queue")
+        box = QWidget()
         ql = QVBoxLayout(box)
+        ql.setContentsMargins(0, 4, 0, 0)
         self.queue = QTableWidget(0, 5)
         self.queue.setHorizontalHeaderLabels(["Sample", "Batch", "Workflow", "State", "Why"])
         self.queue.verticalHeader().setVisible(False)
@@ -128,22 +146,27 @@ class AutomationDock(QWidget):
         self.b_again.clicked.connect(self.process_again)
         self.show_removed = QCheckBox("Show removed")
         self.show_removed.toggled.connect(lambda _on: self._refresh_queue())
-        for w in (self.b_remove, self.b_again):
+        self.b_add = QPushButton("Add samples...")
+        self.b_add.setToolTip("Choose a batch folder and the samples the watcher should process now")
+        self.b_add.clicked.connect(lambda: self.add_samples())
+        for w in (self.b_add, self.b_remove, self.b_again):
             row.addWidget(w)
         row.addStretch(1)
         row.addWidget(self.show_removed)
         ql.addLayout(row)
-        lay.addWidget(box, 2)
+        self._queue_page = box
+        self.tabs.addTab(box, "Queue")
         # activity
-        box = QGroupBox("Activity")
+        box = QWidget()
         al = QVBoxLayout(box)
+        al.setContentsMargins(0, 4, 0, 0)
         self.log = QTableWidget(0, 3)
         self.log.setHorizontalHeaderLabels(["When", "", "What"])
         self.log.verticalHeader().setVisible(False)
         self.log.setEditTriggers(QTableWidget.NoEditTriggers)
         self.log.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         al.addWidget(self.log)
-        lay.addWidget(box, 2)
+        self.tabs.addTab(box, "Activity")
         self.timer = QTimer(self)
         self.timer.setInterval(poll_ms)
         self.timer.timeout.connect(self._poll)
@@ -175,6 +198,13 @@ class AutomationDock(QWidget):
         self._refresh_workflows()
         self._refresh_queue()
         self._refresh_log()
+        self._refresh_tab()
+
+    def _refresh_tab(self):
+        """The Folders tab is built only while it is shown."""
+        folders = getattr(self, "folders", None)
+        if folders is not None and self.tabs.currentWidget() is folders:
+            folders.refresh()
 
     def _refresh_status(self):
         try:
@@ -261,7 +291,24 @@ class AutomationDock(QWidget):
             self.queue.item(r, 3).setBackground(theme.status_brush(level.get(j.state, "neutral")))
             if j.id in keep:
                 self.queue.selectRow(r)
+        # samples added by hand that the watcher has not taken up yet
+        requests = [b for b in batches.values() if self.journal.forced(b) and not b.get("deleted")]
+        stopped = self.status.get("state") in ("stopped", "not responding")
+        for b in requests:
+            r = self.queue.rowCount()
+            self.queue.insertRow(r)
+            force = sorted(self.journal.forced(b))
+            vals = ["all samples" if "*" in force else ", ".join(force), b.get("name", ""),
+                    names.get(b.get("workflow_id"), ""), "Requested",
+                    "added by you; processed at the watcher's next look" + (" - start the watcher" if stopped else "")]
+            for c, v in enumerate(vals):
+                it = QTableWidgetItem(v)
+                it.setToolTip(v)
+                self.queue.setItem(r, c, it)
+            self.queue.item(r, 3).setBackground(theme.status_brush("info"))
         self.queue.blockSignals(False)
+        n = sum(1 for j in jobs if j.state != J.REMOVED) + len(requests)
+        self.tabs.setTabText(self.tabs.indexOf(self._queue_page), f"Queue ({n})" if n else "Queue")
         self._queue_buttons()
 
     def queue_selection(self) -> list[str]:
@@ -291,6 +338,76 @@ class AutomationDock(QWidget):
         self.control.send("scan_now", 500)
         self.refresh()
         return done
+
+    # -- adding samples by hand ------------------------------------------------------------------------
+
+    def add_samples(self, dialog=None) -> Optional[dict]:
+        """Queue > Add samples...: a batch folder and its samples, for one of the active workflows."""
+        from gcws.ui.automation.add_samples import AddSamplesDialog
+        wfs = [w for w in W.list_workflows() if w.enabled and w.source is not None]
+        if not wfs:
+            QMessageBox.information(self, "Add samples", "No workflow is active: switch one on in the Workflows tab "
+                                    "first; its method processes the samples.")
+            return None
+        dlg = dialog or AddSamplesDialog(wfs, workflow_id=self.selected_id() or "", parent=self)
+        if dialog is None and not dlg.exec():
+            return None
+        wf_id, folder, runs = dlg.values()
+        if not wf_id or not folder or not runs:
+            return None
+        return self.request(wf_id, folder, runs)
+
+    def add_to_queue(self, items: list) -> list[dict]:
+        """Folders tab > Add to queue: the selected batch folders (all their samples) and runs."""
+        wanted: dict = {}
+        for it in items:
+            folder = it.path if it.kind == "batch" else str(Path(it.path).parent)
+            runs = wanted.setdefault((it.workflow_id, folder), set())
+            runs.add(None if it.kind == "batch" else Path(it.path).name)
+        out = []
+        for (wf_id, folder), runs in wanted.items():
+            wf = W.find(wf_id)
+            if wf is None or not wf.enabled:
+                QMessageBox.information(self, "Add to queue", f"The workflow '{wf.name if wf else wf_id}' is not "
+                                        "active: switch it on in the Workflows tab first.")
+                continue
+            b = self.request(wf_id, folder, None if None in runs else sorted(runs))
+            if b is not None:
+                out.append(b)
+        return out
+
+    def request(self, workflow_id: str, folder: str, runs) -> Optional[dict]:
+        from gcws.automation import store
+        wf = W.find(workflow_id)
+        if wf is None or wf.source is None:
+            return None
+        outside = not store.is_inside(folder, wf.source.p("folder") or "")
+        b = self.journal.request_samples(workflow_id, folder, runs, outside=outside)
+        self.wake_watcher()
+        self.tabs.setCurrentWidget(self._queue_page)
+        self.refresh()
+        return b
+
+    def wake_watcher(self) -> bool:
+        """The watcher looks at once; one that is not running is started."""
+        if self.control.send("scan_now", 800) is not None:
+            return True
+        ok = bool(self.control.start())
+        self.state_text.setText("Starting the watcher ..." if ok else "The watcher could not be started.")
+        QTimer.singleShot(1500, self.refresh)
+        return ok
+
+    def start_with_app(self) -> bool:
+        """GC Workspace has started: the watcher is started too (Start with GC Workspace) when a workflow is
+        active and none runs yet."""
+        if not self.with_app.isChecked() or not any(w.enabled for w in W.list_workflows()):
+            return False
+        try:
+            if self.control.status(self.journal).get("state") != "stopped":
+                return False
+            return bool(self.control.start())
+        except Exception:  # noqa: BLE001 - GC Workspace starts anyway
+            return False
 
     def process_again(self) -> list[str]:
         done = [j.id for j in self._queue_jobs() if j.state not in (J.QUEUED, J.PROCESSING)
