@@ -103,7 +103,13 @@ def _workflow(journal: J.Journal, wf, jobs: list, now: float) -> Item:
     local_seen = set()
     for key in keys:
         f, b = entries.get(key, {}), batches.get(key, {})
-        if b.get("deleted") or (b.get("missing") and not f):
+        # a folder the last look did not list and that is gone from this PC: deleted (the watcher may be off)
+        gone = not f and bool(b.get("folder")) and not store.is_network(b["folder"]) and \
+            not os.path.isdir(b["folder"])
+        # every report of it deleted in Report² (one by one): as deleted as the batch itself
+        reports = [j for j in by_batch.get(b.get("id"), []) if not j.is_batch]
+        emptied = bool(reports) and all(j.deleted for j in reports)
+        if b.get("deleted") or (b.get("missing") and not f) or gone or emptied:
             # deleted (from the disk, or in Report²): not listed, nor is its local copy
             lp = b.get("local_folder") or (str(LC.local_batch(local_root, root, b["folder"])) if local_root else "")
             if lp:
@@ -148,7 +154,9 @@ def _batch(journal: J.Journal, wf, f: dict, b: dict, jobs: list, root: str, loca
         item.watched = "watched" + (" (sequence log)" if f.get("has_log") else " (no sequence log)")
     else:
         item.watched = "seen at an earlier look"
-    runs = journal.runs(b["id"]) if b.get("id") is not None else {}
+    known = journal.runs(b["id"]) if b.get("id") is not None else {}
+    runs = {s: r for s, r in known.items() if not r.get("gone")}           # deleted runs are not listed
+    gone = {Path(r.get("path") or s).name.casefold() for s, r in known.items() if r.get("gone")}
     lp = b.get("local_folder") or (str(LC.local_batch(local_root, root, path)) if local_root else "")
     local_names = set(_runs_in(lp)) if lp and os.path.isdir(lp) else set()
     if local_root:
@@ -163,7 +171,9 @@ def _batch(journal: J.Journal, wf, f: dict, b: dict, jobs: list, root: str, loca
     samples = [j for j in jobs if not j.is_batch]
     live = [j for j in samples if not j.deleted]
     item.sample = f"{len(live)} sample(s)" if live else ""
-    item.state = _summary(samples)
+    item.state = _summary(live)
+    # the runs of reports deleted in Report² are not listed either
+    hidden = gone | {str(m).casefold() for j in samples if j.deleted for m in j.members or []}
     item.level = _worst(LEVEL.get(j.state, "neutral") for j in live)
     report = next((j for j in jobs if j.is_batch and not j.deleted), None)
     if report is not None:
@@ -176,7 +186,7 @@ def _batch(journal: J.Journal, wf, f: dict, b: dict, jobs: list, root: str, loca
         item.why = f"batch report: {report.label.lower()}"
     # the runs
     by_member, by_blank = {}, {}
-    for j in samples:
+    for j in live:
         for m in j.members or []:
             by_member.setdefault(str(m).casefold(), j)
         for names in (j.blanks or {}).values():
@@ -186,6 +196,8 @@ def _batch(journal: J.Journal, wf, f: dict, b: dict, jobs: list, root: str, loca
     for stem, r in sorted(runs.items(), key=lambda kv: Path(kv[1].get("path") or kv[0]).name.casefold()):
         name = Path(r.get("path") or stem).name
         names_seen.add(name.casefold())
+        if name.casefold() in hidden and name.casefold() not in by_member:
+            continue
         run = Item("run", name, path=r.get("path") or "", workflow_id=wf.id, batch_id=b.get("id"))
         if r.get("baseline"):
             run.watched = "there before watching: not processed"
@@ -212,9 +224,9 @@ def _batch(journal: J.Journal, wf, f: dict, b: dict, jobs: list, root: str, loca
         j = by_member.get(name.casefold())
         if j is not None:
             run.sample, run.job_id = j.group_name, j.id
-            run.state = ("deleted - " if j.deleted else "") + J.STATE_LABELS.get(j.state, j.state)
+            run.state = J.STATE_LABELS.get(j.state, j.state)
             run.why = j.reason or ""
-            run.level = "neutral" if j.deleted else LEVEL.get(j.state, "neutral")
+            run.level = LEVEL.get(j.state, "neutral")
         elif by_blank.get(name.casefold()):
             owners = by_blank[name.casefold()]
             run.sample = f"{ROLES.get(r.get('role'), 'blank')} of " + ", ".join(o.group_name for o in owners[:3]) + \
@@ -224,7 +236,7 @@ def _batch(journal: J.Journal, wf, f: dict, b: dict, jobs: list, root: str, loca
             if not r.get("baseline") and (r.get("role") or "sample") == "sample" and r.get("state") == "ready":
                 run.why = "no sample planned for it yet"
         item.children.append(run)
-    for name in sorted((n for n in local_names if n.casefold() not in names_seen), key=str.casefold):
+    for name in sorted((n for n in local_names if n.casefold() not in names_seen | hidden), key=str.casefold):
         item.children.append(Item("run", name, watched="—", local="only in the local copy",
                                   local_path=str(Path(lp) / name), workflow_id=wf.id, batch_id=b.get("id")))
     for name in f.get("other") or []:

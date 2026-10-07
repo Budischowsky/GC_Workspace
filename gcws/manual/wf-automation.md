@@ -207,7 +207,7 @@ never has to read a slow network drive itself; the local copy folder is listed d
 | Column | What it shows |
 |---|---|
 | **Name** | The workflow, a batch folder, a run, or another file in the batch folder (greyed, for example the sequence log). |
-| **Watched folder** | A batch folder: *watched* (with or without a sequence log), *not looked at* because it is older than **Skip folders older than** or its name does not match **Folder names**. Batch folders deleted from the disk or in Report² are not listed. A run: *finished*, *being written*, *there before watching: not processed*, *put in again*. |
+| **Watched folder** | A batch folder: *watched* (with or without a sequence log), *not looked at* because it is older than **Skip folders older than** or its name does not match **Folder names**. Batch folders deleted from the disk or in Report² are not listed - also those outside the watched folder that were added to the queue by hand or seen before the watched folder changed. A run: *finished*, *being written*, *there before watching: not processed*, *put in again*. |
 | **Local copy** | How many finished runs are copied; a run: *copied*, *waiting to be copied*, *not copied* with the reason, *an older copy*. Folders and runs that are *only in the local copy* are listed too. |
 | **Sample** | The sample a run belongs to, the samples a blank serves, or the number of samples of a batch. |
 | **State**, **Why** | The sample's state in the queue or in Report² and the reason - for example how long a batch without a sequence log still waits until it is quiet. |

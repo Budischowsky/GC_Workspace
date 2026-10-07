@@ -188,7 +188,8 @@ class Journal:
         for col in ("copied_fp", "copy_error"):
             if col not in columns:
                 self.con.execute(f"ALTER TABLE runs ADD COLUMN {col} TEXT")
-        for col, kind in (("birth", "REAL"), ("readded", "INTEGER DEFAULT 0")):
+        # gone: when the run was found deleted from its folder
+        for col, kind in (("birth", "REAL"), ("readded", "INTEGER DEFAULT 0"), ("gone", "REAL")):
             if col not in columns:
                 self.con.execute(f"ALTER TABLE runs ADD COLUMN {col} {kind}")
         if "census" not in {r["name"] for r in self.con.execute("PRAGMA table_info(watched)")}:

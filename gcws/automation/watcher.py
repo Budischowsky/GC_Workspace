@@ -365,11 +365,13 @@ class WatcherCore(QObject):
         did not cover (too old, a name the workflow skips, outside the watched folder), and folders
         outside it until their batch is closed."""
         for b in self.journal.batches(wf.id):
-            if b["folder_key"] in done or b.get("deleted") or b.get("missing"):
+            if b["folder_key"] in done or b.get("deleted"):
                 continue
+            if b.get("missing") and not self.journal.forced(b):
+                continue                               # gone; added to the queue again: looked at once it is back
             if not os.path.isdir(b["folder"]):
-                if (self.journal.forced(b) or b.get("manual")) and os.path.isdir(Path(b["folder"]).parent):
-                    self._gone(wf, b)                  # deleted (its drive is there): off the queue
+                if not b.get("missing") and os.path.isdir(Path(b["folder"]).parent):
+                    self._gone(wf, b)                  # deleted (its drive is there): off the queue and the list
                 continue
             if self.journal.forced(b) or (b.get("manual") and not J.batch_closed(
                     b, self.journal.jobs(workflow_id=wf.id, batch_id=b["id"]))):
@@ -449,7 +451,7 @@ class WatcherCore(QObject):
                                         seq_finished=seq.finished, folder_quiet=quiet)
             row = prev.get(o.stem)
             fields = {"path": str(o.path), "fingerprint": o.fingerprint, "stable_count": count, "state": state,
-                      "marker": int(o.marker), "role": SQ.classify_role(o.name)}
+                      "marker": int(o.marker), "role": SQ.classify_role(o.name), "gone": None}
             if row is None or row.get("fingerprint") != o.fingerprint:
                 fields["last_change"] = now
             if row is None and baseline_new:
@@ -468,6 +470,11 @@ class WatcherCore(QObject):
             present[o.stem] = {"name": o.name, "ready": state == "ready"}
             if not o.busy and row is not None and row.get("fingerprint") == o.fingerprint:
                 unchanged.add(o.stem)
+        if obs or os.path.isdir(folder):
+            # runs deleted from the folder: kept in the journal (one put in again is recognised), not listed
+            for stem in set(prev) - present_stems:
+                if not prev[stem].get("gone"):
+                    self.journal.upsert_run(b["id"], stem, gone=now)
         newest = max((o.mtime for o in obs), default=0.0)
         if not quiet and obs and not changed and all(v["ready"] for v in present.values()) and \
                 now - newest >= cfg.quiet_s:

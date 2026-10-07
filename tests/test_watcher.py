@@ -1179,3 +1179,48 @@ def test_deleted_batch_folder_leaves_the_queue(env, qapp):
     core.tick()
     b = jr.batch(env["wf"].id, outside)
     assert jr.forced(b) == set() and b["missing"] == 1
+
+
+def test_deleted_folders_outside_and_runs_are_marked_gone(env, qapp):
+    """A batch folder outside the watched folder that nobody asked for any more (e.g. watched before the
+    watched folder changed) is marked missing once deleted; a deleted run is marked gone, and one put
+    back counts again. A folder asked for again after it came back is looked at again."""
+    import shutil
+    from gcws.automation import journal as J
+    jr = env["journal"]
+    core, launcher, now = _core(env)
+    core.tick()
+    old = env["tmp"] / "elsewhere" / "26016605_OLD"
+    old.mkdir(parents=True)
+    b = jr.batch(env["wf"].id, old)                         # known, not requested, not manual
+    shutil.rmtree(old)
+    now[0] += 61
+    core.scan_now()
+    core.tick()
+    assert jr.batch(env["wf"].id, old)["missing"] == 1
+    old.mkdir()
+    jr.request_samples(env["wf"].id, old, None, outside=True)
+    now[0] += 61
+    core.scan_now()
+    core.tick()
+    assert jr.batch(env["wf"].id, old)["missing"] == 0      # back and asked for: looked at again
+    live = env["watch"] / "26016605_LIVE"
+    live.mkdir()
+    for n in BATCH[:3]:
+        _acquire(live, n)
+    now[0] += 61
+    core.scan_now()
+    core.tick()
+    bl = jr.batch(env["wf"].id, live)
+    stem = BATCH[0].casefold()
+    assert not jr.runs(bl["id"])[stem].get("gone")
+    shutil.rmtree(live / f"{BATCH[0]}.D")
+    now[0] += 61
+    core.scan_now()
+    core.tick()
+    assert jr.runs(bl["id"])[stem]["gone"]
+    _acquire(live, BATCH[0])
+    now[0] += 61
+    core.scan_now()
+    core.tick()
+    assert not jr.runs(bl["id"])[stem].get("gone")

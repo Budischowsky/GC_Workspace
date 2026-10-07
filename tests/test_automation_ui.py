@@ -395,6 +395,37 @@ def test_deleted_batch_folders_are_not_listed(qtbot, data):
     assert dock.queue.rowCount() == 0
 
 
+def test_gone_folders_runs_and_deleted_reports_are_not_listed(qtbot, data):
+    """Folders: a batch folder gone from this PC (also outside the watched folder, with no watcher running),
+    a batch whose reports were all deleted in Report², a deleted run and the runs of a deleted report are
+    not listed."""
+    import shutil
+    import time
+    from gcws.automation import overview as OV
+    wf, jr, job, batch, local = _overview_setup(data)
+    elsewhere = data / "elsewhere" / "26016698_AWAY"
+    elsewhere.mkdir(parents=True)
+    away = jr.batch(wf.id, elsewhere)
+    emptied = jr.batch(wf.id, data / "elsewhere")          # exists; its only report is deleted below
+    dead = jr.ensure_job(wf.id, wf.methods()[0].id, emptied["id"], "2:d", "26016697_d", ["02.D"], {}, "fp")
+    [top] = OV.overview(jr, [wf])
+    assert {"26016698_AWAY", "elsewhere"} <= {c.name for c in top.children}
+    shutil.rmtree(elsewhere)
+    jr.delete([dead.id])
+    [top] = OV.overview(jr, [wf])
+    names = {c.name for c in top.children}
+    assert "26016698_AWAY" not in names and "elsewhere" not in names
+    assert away["id"] != emptied["id"]
+    b = jr.batch(wf.id, batch)
+    jr.upsert_run(b["id"], "08_etoh", gone=time.time())     # deleted from the batch folder
+    [top] = OV.overview(jr, [wf])
+    runs = {c.name for c in next(c for c in top.children if c.name == batch.name).children}
+    assert "08_EtOH.D" not in runs and "07_26016606_x_A.D" in runs
+    jr.delete([job.id])                                    # its runs go with the report (and so the batch)
+    [top] = OV.overview(jr, [wf])
+    assert batch.name not in {c.name for c in top.children}
+
+
 def test_send_to_automation_from_the_folder_panel(qtbot, data, monkeypatch):
     """Folder panel > Send to Automation...: runs and batch folders into the queue of the chosen workflow."""
     from gcws.automation import journal as J, templates
