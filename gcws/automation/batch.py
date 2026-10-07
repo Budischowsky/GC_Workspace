@@ -63,6 +63,64 @@ def summary_workbook(batch_name: str, entries: list[dict], target: Path) -> Path
     return target
 
 
+def _sheet_title(name: str, used: set) -> str:
+    """A worksheet name Excel accepts (31 characters, no []:*?/\\), unique in the workbook."""
+    import re
+    base = (re.sub(r"[\[\]:*?/\\]+", "_", str(name)).strip("' ") or "Report")[:31]
+    title, n = base, 2
+    while title.casefold() in used:
+        tail = f" ({n})"
+        title, n = base[:31 - len(tail)] + tail, n + 1
+    used.add(title.casefold())
+    return title
+
+
+def combined_workbook(reports: list[tuple[str, Path]], target: Path) -> Path:
+    """One workbook with every sample's Excel report as a sheet of its own (``reports``: (sample name,
+    report workbook)): values, formats, merged cells, column widths and row heights of the report's
+    first visible sheet. A report that cannot be read is left out."""
+    from copy import copy
+    from openpyxl import Workbook, load_workbook
+    wb = Workbook()
+    wb.remove(wb.active)
+    used: set = set()
+    for name, path in reports:
+        try:
+            src = load_workbook(path)
+        except Exception:  # noqa: BLE001 - damaged or not a workbook: the others are still combined
+            continue
+        sheet = next((s for s in src.worksheets if s.sheet_state == "visible"), src.worksheets[0])
+        out = wb.create_sheet(_sheet_title(name, used))
+        for row in sheet.iter_rows():
+            for c in row:
+                if type(c).__name__ == "MergedCell":
+                    continue
+                d = out.cell(row=c.row, column=c.column, value=c.value)
+                if c.has_style:
+                    d.font, d.fill, d.border = copy(c.font), copy(c.fill), copy(c.border)
+                    d.alignment, d.protection = copy(c.alignment), copy(c.protection)
+                    d.number_format = c.number_format
+        for rng in sheet.merged_cells.ranges:
+            out.merge_cells(str(rng))
+        for key, dim in sheet.column_dimensions.items():
+            out.column_dimensions[key].width = dim.width
+            out.column_dimensions[key].hidden = dim.hidden
+        for idx, dim in sheet.row_dimensions.items():
+            if dim.height:
+                out.row_dimensions[idx].height = dim.height
+        out.sheet_view.showGridLines = sheet.sheet_view.showGridLines
+        out.page_setup.orientation = sheet.page_setup.orientation
+        out.page_setup.paperSize = sheet.page_setup.paperSize
+        out.sheet_properties.pageSetUpPr = copy(sheet.sheet_properties.pageSetUpPr)
+        out.page_setup.fitToWidth, out.page_setup.fitToHeight = sheet.page_setup.fitToWidth, \
+            sheet.page_setup.fitToHeight
+    if not wb.worksheets:
+        raise ValueError("no sample report to combine")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(target)
+    return target
+
+
 def report_groups(jobs: list, out_dir: Path, batch_name: str, formats=("batch_docx", "batch_xlsx"),
                   progress=lambda text: None) -> tuple[list[dict], dict, list[str]]:
     """GC Workspace's batch report (worker thread): every sample's report, judged by the Report²

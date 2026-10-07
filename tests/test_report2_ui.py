@@ -345,7 +345,7 @@ def test_context_menus_of_a_sample_and_a_batch(qtbot, data, tmp_path, monkeypatc
     row = dock._items[f"j:{ids['S-control']}"]
     menu = dock._tree_context_menu(dock.tree.visualItemRect(row).center())
     texts = [a.text() for a in menu.actions() if not a.isSeparator()]
-    for t in ("Open report", "Edit in GC Workspace", "Accept", "Accept with comment...", "Reject",
+    for t in ("Open report", "Save as Word...", "Save as Excel...", "Edit in GC Workspace", "Accept", "Accept with comment...", "Reject",
               "Process again", "Remove from the queue...", "Deliver to the target folders now",
               "Show history...", "Open the job folder", "Copy sample name", "Delete..."):
         assert t in texts, t
@@ -353,7 +353,8 @@ def test_context_menus_of_a_sample_and_a_batch(qtbot, data, tmp_path, monkeypatc
     top = dock.tree.topLevelItem(0)
     menu = dock._tree_context_menu(dock.tree.visualItemRect(top).center())
     texts = [a.text() for a in menu.actions() if not a.isSeparator()]
-    assert texts == ["Open batch report", "Open batch folder", 'Accept all "control needed" (1)...', "Reject batch",
+    assert texts == ["Open batch report", "Save batch report as Word...", "Save batch report as Excel...",
+                     "Open batch folder", 'Accept all "control needed" (1)...', "Reject batch",
                      "Process batch again...", "Delete batch..."]
     bid = top.data(0, 0x0100)
     with monkeypatch.context() as m:
@@ -942,3 +943,90 @@ def test_edit_is_not_offered_for_a_batch_report_or_a_missing_project(qtbot, win,
     report = jr.ensure_job(wf.id, wf.methods()[0].id, jr.batch(wf.id, batch)["id"], J.BATCH_KEY, "Batch", [], {},
                            "fp", state=J.QUEUED)
     assert not win.open_report2_job(report.id)
+
+
+# -- save as Word / Excel (Oct 2026) ---------------------------------------------------------------------
+
+def _workbook(path: Path, title: str, width: float = 30.0):
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    wb = Workbook()
+    sh = wb.active
+    sh.title = "NIAS Result"
+    sh["A1"] = title
+    sh["A1"].font = Font(bold=True, size=14)
+    sh.merge_cells("A1:D1")
+    sh["A3"], sh["B3"] = "Bisphenol A", 0.5
+    sh["B3"].number_format = "0.000"
+    sh.column_dimensions["A"].width = width
+    hidden = wb.create_sheet("_AuditData")
+    hidden.sheet_state = "hidden"
+    wb.save(path)
+    return path
+
+
+def test_combined_workbook_keeps_each_report(tmp_path):
+    from openpyxl import load_workbook
+    from gcws.automation import batch as BA
+    a = _workbook(tmp_path / "a.xlsx", "Sample A", 31.5)
+    b = _workbook(tmp_path / "b.xlsx", "Sample B")
+    out = BA.combined_workbook([("26016606_x [A/B]", a), ("26016606_x [A/B]", b)], tmp_path / "all.xlsx")
+    wb = load_workbook(out)
+    assert wb.sheetnames == ["26016606_x _A_B_", "26016606_x _A_B_ (2)"]
+    first = wb.worksheets[0]
+    assert first["A1"].value == "Sample A" and first["A1"].font.bold and first["B3"].number_format == "0.000"
+    assert "A1:D1" in {str(r) for r in first.merged_cells.ranges} and first.column_dimensions["A"].width == 31.5
+
+
+def test_save_a_report_as_word_and_excel(qtbot, data, tmp_path, monkeypatch):
+    from gcws.automation import batch as BA
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    dock = _dock(jr, monkeypatch, qtbot)
+    dock.select(ids["S-control"])
+    assert dock.a_save_word.isEnabled() and dock.b_save.isEnabled()
+    word = dock.save_as("docx", tmp_path / "out" / "mine.docx") if (tmp_path / "out").mkdir() is None else None
+    assert word.read_text() == "docx"
+    assert dock.save_as("xlsx", tmp_path / "out" / "mine.xlsx").read_text() == "xlsx"
+    # a report delivered without Word: its Word report is made from the Excel report
+    job = jr.job(ids["S-auto"])
+    node = next(iter(job.files))
+    Path(job.files[node]["docx"]).unlink()
+    made = []
+    monkeypatch.setattr(BA, "combined_word", lambda xlsx, target: made.append(xlsx) or Path(target).write_text("w"))
+    dock.select(ids["S-auto"])
+    target = dock.save_as("docx", tmp_path / "out" / "auto.docx")
+    qtbot.waitUntil(lambda: target.is_file())
+    assert [Path(p).name for p in made[0]] == ["S-auto_NIAS_Report.xlsx"]
+    qtbot.waitUntil(lambda: "Saved" in dock.bar_text.text())
+    asked = []
+    monkeypatch.setattr("gcws.ui.docks.report2.QFileDialog.getSaveFileName",
+                        lambda *a, **k: asked.append(a[2]) or ("", ""))
+    assert dock.save_as("xlsx") is None and asked[0].endswith("S-auto_NIAS_Report.xlsx")   # cancelled
+
+
+def test_save_the_batch_report_as_word_and_excel(qtbot, data, tmp_path, monkeypatch):
+    from openpyxl import load_workbook
+    from gcws.automation import batch as BA
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    for name in ("S-control", "S-auto"):                   # real Excel reports
+        job = jr.job(ids[name])
+        _workbook(Path(job.files[next(iter(job.files))]["xlsx"]), name)
+    dock = _dock(jr, monkeypatch, qtbot)
+    bid = jr.job(ids["S-auto"]).batch_id
+    menu = dock._batch_menu(bid)
+    labels = [a.text() for a in menu.actions()]
+    assert "Save batch report as Word..." in labels and "Save batch report as Excel..." in labels
+    out = tmp_path / "out"
+    out.mkdir()
+    summary = dock.save_batch(bid, "xlsx", out / "batch.xlsx")
+    combined = out / f"{BA.batch_stem(batch.name)}_Sample_Reports.xlsx"
+    qtbot.waitUntil(lambda: "Saved" in dock.bar_text.text() or "could not" in dock.bar_text.text(), timeout=10000)
+    assert combined.name in dock.bar_text.text(), dock.bar_text.text()
+    assert load_workbook(combined).sheetnames == ["S-control", "S-auto"]
+    rows = [r[0] for r in load_workbook(summary).active.iter_rows(min_row=4, values_only=True)]
+    assert rows == ["S-control", "S-auto", "S-wait", "S-noblank", "S-failed"]
+    made = []
+    monkeypatch.setattr(BA, "combined_word", lambda xlsx, target: made.append(xlsx) or Path(target).write_text("w"))
+    word = dock.save_batch(bid, "docx", out / "batch.docx")   # no batch report yet: made now
+    qtbot.waitUntil(lambda: word.is_file() and "Saved" in dock.bar_text.text())
+    assert [Path(p).name for p in made[0]] == ["S-control_NIAS_Report.xlsx", "S-auto_NIAS_Report.xlsx"]

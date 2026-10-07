@@ -238,6 +238,7 @@ decide** and **Yellow - to check** (hover for their names); the details are in *
 | **Accept** | Accepts the report with your name and time - one click, no comment needed (the arrow beside it: **Accept with comment...**). If you changed the sample, GC Workspace makes the report again from the saved project at once - the watcher is not needed - and it stays accepted by you as a new revision (new findings of the updated report are listed with it); then it is delivered. The next report needing control is selected. |
 | **Reject** | Rejects it: choose a reason, or **Other...** for a comment of your own (optional). **View > Reject reasons...** changes the list. A rejected report can still be accepted. |
 | **Open report** | Opens the Word, Excel or PDF file. |
+| **Save as** | **Save as Word...** or **Save as Excel...**: a copy of the report where you choose - also when the workflow delivers it nowhere. A report the workflow wrote without Word gets its Word report made from the Excel report. With a batch row (or its batch report) selected: the batch report, as below. |
 | **Edit in GC Workspace** | Opens the sample exactly as it was processed - runs, integration, names, internal standards, blanks - to check or correct it, whatever its state: also an accepted or a rejected report, a single determination or a group of three. See [Editing a report](wf-automation.md#editing-a-report). |
 | **Preview** | Shows the selected report beside the list (a batch row: its batch report). A report without a PDF is converted from its Word report by Microsoft Word the first time (a few seconds); the preview is kept in the job folder and is not delivered. A report with Excel only is opened with **Open report**. |
 | **Undo** | For a few seconds after an accept, a reject or a delete, under the list. An accepted report is delivered only after that time. |
@@ -249,6 +250,7 @@ decide** and **Yellow - to check** (hover for their names); the details are in *
 | Item | What it does |
 |---|---|
 | **Open report** | One of its files. |
+| **Save as Word...**, **Save as Excel...** | As the **Save as** button. |
 | **Edit in GC Workspace**, **Open in Replicates / results** | The sample as processed, to change it; an A/B pair in its double determination. |
 | **Accept**, **Accept with comment...**, **Reject** | As the buttons. |
 | **Process again > Report again from the (edited) project** | After you corrected the sample and saved the project: makes the report again from it. |
@@ -262,10 +264,18 @@ decide** and **Yellow - to check** (hover for their names); the details are in *
 | **Copy sample name** | The names of the selected samples. |
 | **Delete...** | Hides the report in Report². Nothing on disk is deleted - reports, project and delivered files stay - and a sample still in the queue is removed from it. **Restore** (with **Show deleted reports**) brings it back. |
 
-**Right-click a batch**: **Open batch report**, **Open batch folder**, **Open the local copy** (with a
-**Local copy** step), **Accept all "control needed"...**,
+**Right-click a batch**: **Open batch report**, **Save batch report as Word...**, **Save batch report as
+Excel...**, **Open batch folder**, **Open the local copy** (with a **Local copy** step),
+**Accept all "control needed"...**,
 **Reject batch** (with a reason), **Process batch again...**, **Reopen** (in the archive), **Delete batch...**
 (hides the batch with all its reports; the watcher no longer looks at the folder) and **Restore batch**.
+
+**Save batch report as Word...** saves every sample's report of the batch one after the other in one Word
+document - a copy of the batch report when it is up to date, otherwise it is made at once from the samples'
+current reports (in the background; the bar under the list says when it is saved). **Save batch report as
+Excel...** saves two workbooks into the folder you choose: the Report² summary (one row per sample with its
+status, reviewer and findings) and *(batch name)_Sample_Reports.xlsx*, with every sample's Excel report as a sheet
+of its own.
 
 Keys in the list: `A` accept, `R` reject, `Enter` open the report, `Ctrl+O` edit in GC Workspace, `H` history,
 `Del` delete, `Ctrl+Z` undo.

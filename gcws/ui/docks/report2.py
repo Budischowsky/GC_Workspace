@@ -20,7 +20,8 @@ from typing import Callable, Optional
 
 from PySide6.QtCore import QBuffer, QEvent, QIODevice, QItemSelectionModel, QRect, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QIcon, QKeySequence, QPainter, QPalette, QPixmap
-from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QComboBox, QFrame, QHBoxLayout,
+from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QComboBox, QFileDialog, QFrame,
+                               QHBoxLayout,
                                QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton, QSplitter,
                                QStackedWidget, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolButton,
                                QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
@@ -289,7 +290,16 @@ class Report2Dock(QWidget):
                                   "check or correct it - also an accepted report; then Update report in the "
                                   "status bar makes it again (Ctrl+O)")
         self.b_project.clicked.connect(self.open_project)
-        for b in (self.b_accept, self.b_reject, self.b_open, self.b_project):
+        self.b_save = QToolButton()
+        self.b_save.setText("Save as")
+        self.b_save.setToolTip("Save the selected report (or the batch report of the selected batch) as Word or "
+                               "Excel where you choose")
+        self.b_save.setPopupMode(QToolButton.InstantPopup)
+        sm = QMenu(self.b_save)
+        sm.addAction(self.a_save_word)
+        sm.addAction(self.a_save_excel)
+        self.b_save.setMenu(sm)
+        for b in (self.b_accept, self.b_reject, self.b_open, self.b_save, self.b_project):
             acts.addWidget(b)
         acts.addStretch(1)
         self.b_preview = QToolButton()
@@ -385,6 +395,11 @@ class Report2Dock(QWidget):
         self.a_delete = act("Delete...", self.delete_selected,
                             "Hide in Report² (nothing on disk is deleted; View > Show deleted reports)", "Del")
         self.a_restore = act("Restore", self.restore_selected)
+        self.a_save_word = act("Save as Word...", lambda: self.save_as("docx"),
+                               "A copy of the Word report (a batch: the batch report) where you choose")
+        self.a_save_excel = act("Save as Excel...", lambda: self.save_as("xlsx"),
+                                "A copy of the Excel report (a batch: the Report² summary and all sample reports "
+                                "in one workbook) where you choose")
 
     def showEvent(self, ev):
         super().showEvent(ev)
@@ -969,6 +984,11 @@ class Report2Dock(QWidget):
         self.a_copy.setEnabled(bool(jobs))
         self.a_delete.setEnabled(bool(live))
         self.a_restore.setEnabled(any(j.deleted for j in jobs))
+        bid = self.selected_batch() if not jobs else None
+        can = bid is not None or (one is not None and (one.is_batch or self.report_file(one, "xlsx") is not None))
+        self.a_save_word.setEnabled(can)
+        self.a_save_excel.setEnabled(can)
+        self.b_save.setEnabled(can)
 
     # -- right-click menus and keys -----------------------------------------------------------------
 
@@ -1002,6 +1022,8 @@ class Report2Dock(QWidget):
                     files.addAction(FILE_LABELS.get(fmt, fmt), lambda p=path: self.open_path(p))
             files.setEnabled(not files.isEmpty())
             menu.addMenu(files)
+            menu.addAction(self.a_save_word)
+            menu.addAction(self.a_save_excel)
             menu.addAction(self.a_project)
             if self.a_replicates.isEnabled():
                 menu.addAction(self.a_replicates)
@@ -1037,6 +1059,9 @@ class Report2Dock(QWidget):
                 files.addAction(FILE_LABELS.get(fmt, fmt), lambda p=path: self.open_path(p))
         files.setEnabled(not files.isEmpty())
         menu.addMenu(files)
+        has = any(not j.is_batch for j in jobs)
+        menu.addAction("Save batch report as Word...", lambda: self.save_batch(bid, "docx")).setEnabled(has)
+        menu.addAction("Save batch report as Excel...", lambda: self.save_batch(bid, "xlsx")).setEnabled(has)
         menu.addAction("Open batch folder", lambda: self.open_batch_folder(bid)).setEnabled(bool(b.get("folder")))
         local = b.get("local_folder") or ""
         if local:                                      # the workflow copies the runs to this PC
@@ -1412,6 +1437,137 @@ class Report2Dock(QWidget):
                     f"{job.group_name}: nothing to deliver (no arrow lets its files through).",
                     level="info" if lines else "warn")
         return lines
+
+    # -- save as Word / Excel -----------------------------------------------------------------------------
+
+    @staticmethod
+    def report_file(job: J.Job, fmt: str) -> Optional[Path]:
+        """The job's Word ("docx") or Excel ("xlsx") report; the Word report also when the workflow did not
+        deliver Word (it is made beside the Excel report)."""
+        for files in (job.files or {}).values():
+            p = files.get(fmt)
+            if p and Path(p).is_file():
+                return Path(p)
+        if fmt == "docx":
+            for files in (job.files or {}).values():
+                x = files.get("xlsx")
+                if x and Path(x).with_suffix(".docx").is_file():
+                    return Path(x).with_suffix(".docx")
+        return None
+
+    def _ask_target(self, title: str, name: str, fmt: str) -> Optional[Path]:
+        folder = QSettings().value("report2/save_dir", "", type=str) or str(Path.home())
+        filt = "Word document (*.docx)" if fmt == "docx" else "Excel workbook (*.xlsx)"
+        fn, _ = QFileDialog.getSaveFileName(self, title, str(Path(folder) / name), filt)
+        if not fn:
+            return None
+        QSettings().setValue("report2/save_dir", str(Path(fn).parent))
+        return Path(fn)
+
+    def _make(self, fn: Callable, done_text: str, what: str):
+        """Make a file in the background; say when it is there."""
+        from gcws.ui import workers
+        self.notify(f"Making {what} ...")
+        workers.submit(fn, on_done=lambda _r: self.notify(done_text),
+                       on_error=lambda err: self.notify(f"{what} could not be made: {str(err).splitlines()[0]}",
+                                                        level="warn"))
+
+    def save_as(self, fmt: str, target: Optional[Path] = None) -> Optional[Path]:
+        """Save as Word / Excel: a copy of the selected report where the analyst chooses (a batch row or a
+        batch report: the batch report)."""
+        import shutil
+        from gcws.automation import batch as BA
+        job = self._job()
+        bid = self.selected_batch()
+        if job is None and bid is not None:
+            return self.save_batch(bid, fmt, target)
+        if job is None:
+            return None
+        if job.is_batch:
+            return self.save_batch(job.batch_id, fmt, target)
+        src, xlsx = self.report_file(job, fmt), self.report_file(job, "xlsx")
+        if src is None and xlsx is None:
+            self.notify(f"{job.group_name} has no report to save.", level="warn")
+            return None
+        label = "Word" if fmt == "docx" else "Excel"
+        target = target or self._ask_target(f"Save {job.group_name} as {label}",
+                                             (src or xlsx).with_suffix("." + fmt).name, fmt)
+        if target is None:
+            return None
+        if src is not None:
+            try:
+                shutil.copy2(src, target)
+            except OSError as exc:
+                self.notify(f"Not saved: {exc}", level="warn")
+                return None
+            self.notify(f"Saved {target}.")
+            return target
+        # no Word report beside it: made from the Excel report, as the batch report does it
+        self._make(lambda: BA.combined_word([xlsx], target), f"Saved {target}.", "the Word report")
+        return target
+
+    def _batch_entries(self, bid) -> tuple[list, Optional[J.Job], list[dict]]:
+        jobs = [j for j in self.journal.jobs(batch_id=bid) if not j.deleted and j.state != J.REMOVED]
+        samples = [j for j in jobs if not j.is_batch]
+        report = next((j for j in jobs if j.is_batch), None)
+        entries = []
+        for j in samples:
+            made = j.state in J.DONE                   # a report of this revision (not failed, not waiting)
+            xlsx = self.report_file(j, "xlsx") if made else None
+            word = self.report_file(j, "docx") if made else None
+            entries.append({"name": j.group_name, "state": j.state, "reviewer": j.reviewer or "",
+                            "reviewed": J.when(j.reviewed_at), "comment": j.comment or "", "findings": j.findings or [],
+                            "xlsx": str(xlsx) if xlsx else None, "report": str(word or xlsx or "")})
+        return samples, report, entries
+
+    def save_batch(self, bid, fmt: str, target: Optional[Path] = None) -> Optional[Path]:
+        """Save batch report as Word (every sample's report one after the other; the batch report when it is
+        up to date, else made now) or as Excel (the Report² summary and, beside it, one workbook with every
+        sample's Excel report as a sheet)."""
+        import shutil
+        from gcws.automation import batch as BA
+        b = self._batches.get(bid) or self.journal.batch_by_id(bid)
+        samples, report, entries = self._batch_entries(bid)
+        if not samples:
+            self.notify("This batch has no sample report yet.", level="warn")
+            return None
+        name = b.get("name") or "Batch"
+        stem = BA.batch_stem(name)
+        if fmt == "docx":
+            reports = [Path(e["xlsx"]) for e in entries if e["xlsx"]]
+            if not reports:
+                self.notify("No sample of this batch has a report yet.", level="warn")
+                return None
+            target = target or self._ask_target(f"Save the batch report of {name} as Word", f"{stem}_Batch_Report.docx",
+                                                "docx")
+            if target is None:
+                return None
+            ready = None
+            if report is not None and report.state in (J.CONTROL, *J.ACCEPTED) and \
+                    set(report.members or []) == {j.id for j in samples} and \
+                    float(report.finished or 0) >= max(activity(j) for j in samples):
+                ready = next((Path(fs["batch_docx"]) for fs in (report.files or {}).values()
+                              if fs.get("batch_docx") and Path(fs["batch_docx"]).is_file()), None)
+            if ready is not None:                          # the batch report is up to date: a copy of it
+                shutil.copy2(ready, target)
+                self.notify(f"Saved {target}.")
+            else:
+                self._make(lambda: BA.combined_word(reports, target), f"Saved {target}.", "the batch report")
+            return target
+        target = target or self._ask_target(f"Save the batch report of {name} as Excel",
+                                            f"{stem}_Report2_Summary.xlsx", "xlsx")
+        if target is None:
+            return None
+        combined = target.with_name(f"{stem}_Sample_Reports.xlsx")
+        reports = [(e["name"], Path(e["xlsx"])) for e in entries if e["xlsx"]]
+
+        def work():
+            BA.summary_workbook(name, entries, target)
+            if reports:
+                BA.combined_workbook(reports, combined)
+        self._make(work, f"Saved {target.name}" + (f" and {combined.name}" if reports else "") + f" in {target.parent}.",
+                   "the batch workbooks")
+        return target
 
     def open_determination(self, job_id: Optional[str]):
         job = self.jobs.get(job_id) or (self.journal.job(job_id) if job_id else None)
