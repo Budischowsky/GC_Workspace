@@ -59,7 +59,10 @@ class DetectIstdDialog(QDialog):
 
     def run_ids(self) -> list[str]:
         if self.scope.currentData() == "all":
-            return [s.id for s in self.ws.states() if s.role in ("sample", "standard")]
+            from gcws.quant.hs import standards_in
+            hs = self.ws.quant.get("mode") == "hs_screening"
+            return [s.id for s in self.ws.states() if s.role in ("sample", "standard")
+                    and (not hs or standards_in(self.ws.quant.get("hs", {}), s.role))]
         return [self.ws.active_id] if self.ws.active_id else []
 
     def run(self, *_):

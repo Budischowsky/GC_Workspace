@@ -1242,12 +1242,15 @@ class MainWindow(QMainWindow):
         returns the number of bindings."""
         from gcws.io import sequence
         from gcws.quant import istd_detect as ID
+        from gcws.quant.hs import standards_in
         if not ids or not ID.definitions(self.ws):
             return 0
+        hs = self.ws.quant.get("hs", {}) if self.ws.quant.get("mode") == "hs_screening" else None
         found = {}
         for rid in ids:
-            if self.ws.runs[rid].role in (sequence.BLANK, sequence.LADDER):
-                continue
+            role = self.ws.runs[rid].role
+            if role in (sequence.BLANK, sequence.LADDER) or (hs is not None and not standards_in(hs, role)):
+                continue                                # HS external calibration: only in the calibration runs
             try:
                 ok = ID.detect(self.ws, rid).confident("high")
             except Exception as exc:  # noqa: BLE001 - the rest of the method still runs

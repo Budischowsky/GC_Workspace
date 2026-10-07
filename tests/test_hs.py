@@ -154,6 +154,8 @@ def test_external_calibration_blank_and_report(tmp_path):
     assert wb["HS Result"]["E6"].value == pytest.approx(1.5)
     assert wb["HS calculation"]["G2"].value.startswith("External 1-point calibration")
     assert wb["HS standards"]["H2"].value == "Mean of 1 Standard run"
+    assert wb["HS standards"]["I2"].value == "Std 1: 100"
+    assert wb["HS Result"]["B4"].value == hs.METHODS["external"]
 
 
 @pytest.mark.parametrize("bad", [None, 0, -1, float("nan"), float("inf")])
@@ -394,3 +396,24 @@ def test_external_calibration_from_entered_areas():
     assert "Enter the TIC area of HS3" in result.errors["sample"] and result.rows["sample"][0]["conc"] is None
     cfg["istd_defs"][2]["quantify"] = False                          # an inactive standard needs no area
     assert not compute(ws).errors
+
+
+def test_external_calibration_standards_only_in_calibration_runs():
+    """With external calibration a sample holds no standard: nothing in it is kept out of the blank
+    correction; the Report² evidence carries the TIC areas of the standards."""
+    from gcws.automation.pipeline import _standards
+    from gcws.ui.workspace import Workspace
+    assert hs.standards_in({}, "sample") and hs.standards_in({}, "blank_istd")
+    assert hs.standards_in({"calibration": "external"}, "standard")
+    assert not hs.standards_in({"calibration": "external"}, "sample")
+    assert not hs.standards_in({"calibration": "manual"}, "standard")
+    ws = external_workspace(100)
+    ws.result = lambda rid, key: ws.runs[rid].results.get(key)
+    assert Workspace.istd_peaks(ws, "sample", "TIC") == {}
+    assert len(Workspace.istd_peaks(ws, "std0", "TIC")) == 7
+    internal = workspace()
+    internal.result = lambda rid, key: internal.runs[rid].results.get(key)
+    assert len(Workspace.istd_peaks(internal, "sample", "TIC")) == 7
+    sample = compute(ws).samples["sample"]
+    ev = _standards(sample)
+    assert ev[0]["fid_area"] == 100 and ev[0]["role"] == "Quantification"

@@ -156,7 +156,11 @@ The factor is Σ µg ÷ Σ entered areas. The areas are part of the HS settings,
 method and also apply to unattended processing.
 
 In both ways every TIC peak of a sample is quantified as corrected area × factor; blank correction and the units
-work as above. The HS report lists the standards and the calibration.
+work as above. **Method > Run Method** and **Detect...** (all loaded samples) look for the standards only in the
+calibration runs (with entered areas: nowhere), binding a standard by right-click works only there, and sample
+peaks near a standard's RT are blank-corrected like any other peak. The HS report names the calibration
+(*external standard (calibration runs)* or *(entered areas)*), and its sheet HS standards lists the area of each
+standard in every calibration run.
 
 To keep this setup, save it with **Method > Save current settings as Method...** (e.g. "HS external").
 

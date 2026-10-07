@@ -1969,7 +1969,7 @@ def test_double_determination_delete_rows(qtbot, win, samples):
     assert "Delete row" in dict(page.row_actions(page.rows[keys[0]]))
 
 
-def test_hs_calibration_runs_and_entered_areas(qtbot, win, samples):
+def test_hs_calibration_runs_and_entered_areas(qtbot, win, samples, monkeypatch):
     """HS external calibration in the Quantification panel: tick the calibration run (role Standard, undoable),
     bind its standards there, see each standard's area per calibration run; or type the areas in."""
     import copy
@@ -2035,3 +2035,14 @@ def test_hs_calibration_runs_and_entered_areas(qtbot, win, samples):
     assert ws.runs[std.id].role == role
     ws.runs[std.id].undo.undo()
     assert ws.runs[std.id].role == "standard"
+    # Run Method looks for the standards in the calibration run only (with entered areas: nowhere)
+    from gcws.quant import istd_detect as ID
+    looked = []
+    with monkeypatch.context() as m:
+        m.setattr(ID, "detect", lambda w, rid: (looked.append(rid), SimpleNamespace(confident=lambda c: {}))[1])
+        win._method_detect_istds([s.id for s in ws.states()])
+        assert looked == [std.id]
+        ws.quant["hs"]["calibration"] = "manual"
+        looked.clear()
+        win._method_detect_istds([s.id for s in ws.states()])
+        assert looked == []

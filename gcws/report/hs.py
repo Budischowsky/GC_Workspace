@@ -26,6 +26,8 @@ def generate(job, progress=lambda _: None):
     if any(not s.mean_factor or any(r.derived.get("status") for r in s.rows) for s in job.samples):
         raise ValueError("Resolve HS standard and sample-normalization errors before reporting")
     unit = next(iter(units))
+    from gcws.quant.hs import METHODS
+    method = job.samples[0].meta.get("method") or METHODS["internal"]
     combined = RS.combined_rows(job)
     rows = []
     for i, row in enumerate(combined):
@@ -52,7 +54,7 @@ def generate(job, progress=lambda _: None):
     sh["A1"].font = Font(name="Arial", size=10, color="FFFFFF", bold=True)
     sh["A2"].font = Font(name="Arial", size=8, bold=True, italic=True)
     for r, label, text in ((3, "Sample:", "; ".join(job.names)),
-                           (4, "Method:", "Headspace; TIC; internal standard response")):
+                           (4, "Method:", method)):
         sh.cell(r, 1, label)
         sh.merge_cells(start_row=r, start_column=2, end_row=r, end_column=5)
         literal(sh.cell(r, 2), text)
@@ -83,7 +85,8 @@ def generate(job, progress=lambda _: None):
     detail.append(["Sample", "Source", "Unit", "Sample area dm²", "Sample mass g", "µg per area count",
                    "Calculation", "Blank correction", "Blanks"])
     standards = wb.create_sheet("HS standards")
-    standards.append(["Sample", "Code", "Name", "µg/HS", "RT min", "TIC area", "Active", "Status"])
+    standards.append(["Sample", "Code", "Name", "µg/HS", "RT min", "TIC area", "Active", "Status",
+                      "Calibration runs (TIC area)"])
     peaks = wb.create_sheet("HS peak calculation")
     peaks.append(["Sample", "RT min", "Name", "CAS", "Raw TIC area", "Blank area", "Corrected area",
                   "µg/HS", unit, "ISTD"])
@@ -92,8 +95,9 @@ def generate(job, progress=lambda _: None):
         detail.append([s.name, meta["source"], unit, meta["inputs"].get("area_dm2"), meta["inputs"].get("mass_g"),
                        s.mean_factor, meta["calculation"], meta["blank_correction"], "; ".join(meta["blanks"])])
         for d in s.standards:
+            runs = "; ".join(f"{n}: {a:.6g}" if a is not None else f"{n}: not found" for n, a in d.get("areas") or [])
             standards.append([s.name, d["code"], d["name"], float(d["concentration"]), d["rt"], d["area"],
-                              bool(d.get("quantify", True)), d["status"]])
+                              bool(d.get("quantify", True)), d["status"], runs])
         for r in s.rows:
             d = r.derived
             peaks.append([s.name, r.rt, r.name, r.cas, d["raw_area"], d["blank_area"], d["corr_area"],
@@ -117,7 +121,7 @@ def generate(job, progress=lambda _: None):
                 if isinstance(cell.value, str) and ILLEGAL.search(cell.value):
                     cell.value = excel_safe(cell.value)
     wb.save(job.target)
-    write_word(job.word, title, subtitle, job.names, layout["titles"], rows)
+    write_word(job.word, title, subtitle, job.names, layout["titles"], rows, method)
     reported = [{"name": r[1], "cas": r[2], "rt": r[0]} for r in rows]
     warnings = list(getattr(job, "notes", None) or [])
     if job.record_seen:
@@ -127,7 +131,7 @@ def generate(job, progress=lambda _: None):
     return RS.ReportResult(job.target, job.word, len(rows), warnings=warnings, reported=reported)
 
 
-def write_word(path, title, subtitle, names, headers, rows):
+def write_word(path, title, subtitle, names, headers, rows, method="Headspace; TIC; internal standard response"):
     """Same five columns, font and width proportions as the Fingerprint Word report."""
     from docx import Document
     from docx.shared import Cm, Pt, RGBColor
@@ -158,7 +162,7 @@ def write_word(path, title, subtitle, names, headers, rows):
     for run in table.cell(0, 0).paragraphs[0].runs:
         run.bold, run.font.size = True, Pt(10)
         run.font.color.rgb = RGBColor.from_string("FFFFFF")
-    for r, label, value in ((2, "Sample:", "; ".join(names)), (3, "Method:", "Headspace; TIC; internal standard response")):
+    for r, label, value in ((2, "Sample:", "; ".join(names)), (3, "Method:", method)):
         table.cell(r, 0).text = label
         table.cell(r, 1).merge(table.cell(r, 4)).text = value
     for c, h in enumerate(headers):

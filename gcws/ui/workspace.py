@@ -883,9 +883,9 @@ class Workspace(QObject):
         from gcws.quant.nias_bridge import make_settings
         q = self.quant or {}
         if q.get("mode") == "hs_screening":
-            if base != TIC:
-                return {}
-            from gcws.quant.hs import matched_standards
+            from gcws.quant.hs import matched_standards, standards_in
+            if base != TIC or not standards_in(q.get("hs", {}), st.role):
+                return {}                               # external calibration: a sample holds no standard
             return {s["index"]: (res.peaks[s["index"]].start, res.peaks[s["index"]].end)
                     for s in matched_standards(st, q.get("hs", {})) if s["index"] is not None}
         defs = gc_fid.normalise_istd_defs(q["istd_defs"]) if q.get("istd_defs") else \

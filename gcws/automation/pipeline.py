@@ -92,7 +92,14 @@ def _slim_rows(rows: list, cas_info: dict) -> list[dict]:
 
 def _standards(sample) -> list[dict]:
     keep = ("code", "name", "role", "status", "fid_rt", "fid_area", "factor", "deviation", "target_rt")
-    return [{k: s.get(k) for k in keep} for s in getattr(sample, "standards", None) or []]
+    out = []
+    for s in getattr(sample, "standards", None) or []:
+        d = {k: s.get(k) for k in keep}
+        if getattr(sample, "mode", "") == "hs_screening":         # HS: TIC standards, "Active" instead of a role
+            d.update(fid_rt=s.get("rt"), fid_area=s.get("area"),
+                     role=d["role"] or ("Quantification" if s.get("quantify", True) else "QC"))
+        out.append(d)
+    return out
 
 
 def _paths(folder: Path, names: list[str]) -> list[Path]:

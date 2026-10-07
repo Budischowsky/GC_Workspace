@@ -86,6 +86,15 @@ def calibration_mode(cfg) -> str:
     return "manual" if manual(cfg) else "external" if external(cfg) else "internal"
 
 
+def standards_in(cfg, role: str) -> bool:
+    """Whether a run of ``role`` holds the HS standards (they are matched, bound and kept out of the blank
+    correction there): every run with internal standards, only the calibration runs (role Standard) with
+    external calibration runs, none with entered areas."""
+    if manual(cfg):
+        return False
+    return role == "standard" if external(cfg) else True
+
+
 def factor(active, cfg, missing="Identify or bind every activated HS standard"):
     """µg per area count from the activated standards: Σ amount ÷ Σ area, and the problems that prevent it."""
     problems = []
