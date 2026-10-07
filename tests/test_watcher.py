@@ -1073,3 +1073,61 @@ def test_the_folders_are_looked_at_in_a_thread_of_their_own(env, qapp, qtbot, mo
     qtbot.waitUntil(lambda: bool(launcher.started), timeout=10000)
     assert not core.looking and launcher.started[0][2] == "job"
     assert {j.group_name for j in env["journal"].jobs()} == {"26016606_x", "26016607_y"}
+
+
+def test_sample_removed_from_the_queue_stays_removed_while_a_request_is_open(env, qapp):
+    """Remove from queue works also for samples of a batch added by hand: the open request does not put
+    them back; adding them again does."""
+    from gcws.automation import journal as J
+    jr = env["journal"]
+    core, launcher, now = _core(env)
+    core.tick()
+    live = env["watch"] / "26016605_LIVE"
+    live.mkdir()
+    for n in BATCH[:3]:
+        _acquire(live, n)
+    jr.request_samples(env["wf"].id, live, None)
+    core.scan_now()
+    core.tick()
+    job = next(j for j in jr.jobs() if not j.is_batch)
+    jr.update_job(job.id, state=J.QUEUED, pid=None)       # waiting for the watcher again
+    assert jr.remove([job.id]) == [job.id]
+    b = jr.batch(env["wf"].id, live)
+    jr.update_batch(b["id"], force_json='["*"]')           # a request still open
+    now[0] += 61
+    core.scan_now()
+    core.tick()
+    assert jr.job(job.id).state == J.REMOVED
+    jr.request_samples(env["wf"].id, live, ["07_26016606_x_A.D"])
+    assert jr.job(job.id).state == J.WAITING
+
+
+def test_deleted_batch_folder_leaves_the_queue(env, qapp):
+    import shutil
+    from gcws.automation import journal as J
+    jr = env["journal"]
+    core, launcher, now = _core(env)
+    core.tick()
+    live = env["watch"] / "26016605_LIVE"
+    live.mkdir()
+    for n in BATCH[:3]:
+        _acquire(live, n)                                  # no sequence log: waits for the quiet time
+    now[0] += 61
+    core.tick()
+    [job] = [j for j in jr.jobs() if not j.is_batch]
+    assert job.state == J.WAITING
+    shutil.rmtree(live)
+    now[0] += 61
+    core.scan_now()
+    core.tick()
+    assert jr.job(job.id).state == J.REMOVED and jr.batch(env["wf"].id, live)["missing"] == 1
+    # a folder added by hand outside the watched folder and deleted: the request is dropped
+    outside = env["tmp"] / "elsewhere" / "26016605_OTHER"
+    outside.mkdir(parents=True)
+    jr.request_samples(env["wf"].id, outside, None, outside=True)
+    outside.rmdir()
+    now[0] += 61
+    core.scan_now()
+    core.tick()
+    b = jr.batch(env["wf"].id, outside)
+    assert jr.forced(b) == set() and b["missing"] == 1

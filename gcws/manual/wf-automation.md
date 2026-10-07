@@ -176,8 +176,9 @@ The **Queue** in the **Automation** panel lists the samples that are waiting, be
 processed, with the reason.
 
 A sample that can never be completed - its B run was never measured - would hold up the batch report. Select
-it and press **Remove from queue**. The watcher then skips it and the batch report no longer waits for it.
-**Show removed** lists such samples, and **Process again** brings one back.
+it and press **Remove from queue**. The watcher then skips it and the batch report no longer waits for it;
+the sample leaves the list. Adding it to the queue again brings it back. A *Requested* row (samples added by
+hand) is removed the same way. When a batch folder is deleted, its samples leave the queue by themselves.
 
 **Add samples...** puts samples into the queue by hand, in the window **Add samples to the queue**: choose the
 **Workflow** (one that is active) and the **Batch folder**; its samples are listed as the watcher groups them
@@ -192,7 +193,8 @@ next look, with the blanks of the same folder:
 
 Until the watcher has taken them up they are listed as *Requested*. If the watcher is not running, it is
 started. **Add to queue** in the **Folders** tab does the same for the selected batch folders (all their
-samples) and runs. A sample without the blank it needs is still not processed; Report² then offers
+samples) and runs, and so does **Send to Automation...** in the right-click menu of the **Folder** panel: select
+runs or batch folders (a folder without runs sends the batch folders in it), and choose the workflow. A sample without the blank it needs is still not processed; Report² then offers
 **Process without a blank...**.
 
 ## What is in the watched folders
@@ -205,7 +207,7 @@ never has to read a slow network drive itself; the local copy folder is listed d
 | Column | What it shows |
 |---|---|
 | **Name** | The workflow, a batch folder, a run, or another file in the batch folder (greyed, for example the sequence log). |
-| **Watched folder** | A batch folder: *watched* (with or without a sequence log), *not looked at* because it is older than **Skip folders older than** or its name does not match **Folder names**, *removed from the watched folder*, or *deleted in Report²*. A run: *finished*, *being written*, *there before watching: not processed*, *put in again*. |
+| **Watched folder** | A batch folder: *watched* (with or without a sequence log), *not looked at* because it is older than **Skip folders older than** or its name does not match **Folder names**. Batch folders deleted from the disk or in Report² are not listed. A run: *finished*, *being written*, *there before watching: not processed*, *put in again*. |
 | **Local copy** | How many finished runs are copied; a run: *copied*, *waiting to be copied*, *not copied* with the reason, *an older copy*. Folders and runs that are *only in the local copy* are listed too. |
 | **Sample** | The sample a run belongs to, the samples a blank serves, or the number of samples of a batch. |
 | **State**, **Why** | The sample's state in the queue or in Report² and the reason - for example how long a batch without a sequence log still waits until it is quiet. |

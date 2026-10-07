@@ -365,7 +365,11 @@ class WatcherCore(QObject):
         did not cover (too old, a name the workflow skips, outside the watched folder), and folders
         outside it until their batch is closed."""
         for b in self.journal.batches(wf.id):
-            if b["folder_key"] in done or b.get("deleted") or not os.path.isdir(b["folder"]):
+            if b["folder_key"] in done or b.get("deleted") or b.get("missing"):
+                continue
+            if not os.path.isdir(b["folder"]):
+                if (self.journal.forced(b) or b.get("manual")) and os.path.isdir(Path(b["folder"]).parent):
+                    self._gone(wf, b)                  # deleted (its drive is there): off the queue
                 continue
             if self.journal.forced(b) or (b.get("manual") and not J.batch_closed(
                     b, self.journal.jobs(workflow_id=wf.id, batch_id=b["id"]))):
@@ -405,10 +409,13 @@ class WatcherCore(QObject):
             parent = SC.folder_key(Path(b["folder"]).parent)
             if "listed:" + parent not in seen or not store.is_inside(b["folder"], root):
                 continue                               # not looked at this time (or not below the folder)
-            self.journal.update_batch(b["id"], missing=1)
-            if not b.get("deleted"):
-                self.journal.event("info", f"{b['name']}: the batch folder was removed from the watched folder",
-                                   workflow_id=wf.id, batch_id=b["id"])
+            self._gone(wf, b)
+
+    def _gone(self, wf: W.Workflow, b: dict) -> None:
+        self.journal.batch_gone(b["id"])
+        if not b.get("deleted"):
+            self.journal.event("info", f"{b['name']}: the batch folder was removed; its samples left the queue",
+                               workflow_id=wf.id, batch_id=b["id"])
 
     def _scan_batch(self, wf, folder: Path, now: float, cfg: SC.Readiness, baseline_new: bool) -> None:
         from gcws.io import sequence as SQ
@@ -514,6 +521,8 @@ class WatcherCore(QObject):
                 job = self.journal.ensure_job(wf.id, m.id, b["id"], g.key, g.name, members, blanks, fp,
                                               reason=g.reason)
                 if g.key in forced:
+                    if job.state == J.REMOVED:             # removed from the queue after it was added
+                        continue
                     if g.state == PN.WAITING:              # a run still being written or copied
                         pending.update(g.members)
                         self.journal.update_job(job.id, reason="added to the queue; " + g.reason)

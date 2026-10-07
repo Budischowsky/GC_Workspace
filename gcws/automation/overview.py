@@ -103,6 +103,12 @@ def _workflow(journal: J.Journal, wf, jobs: list, now: float) -> Item:
     local_seen = set()
     for key in keys:
         f, b = entries.get(key, {}), batches.get(key, {})
+        if b.get("deleted") or (b.get("missing") and not f):
+            # deleted (from the disk, or in Report²): not listed, nor is its local copy
+            lp = b.get("local_folder") or (str(LC.local_batch(local_root, root, b["folder"])) if local_root else "")
+            if lp:
+                local_seen.add(SC.folder_key(lp))
+            continue
         item = _batch(journal, wf, f, b, by_batch.get(b.get("id"), []), root, local_root, now)
         if item is None:
             continue
@@ -134,11 +140,7 @@ def _batch(journal: J.Journal, wf, f: dict, b: dict, jobs: list, root: str, loca
     item = Item("batch", f.get("name") or b.get("name") or Path(path).name, path=path, workflow_id=wf.id,
                 batch_id=b.get("id"))
     status = f.get("status")
-    if b.get("deleted"):
-        item.watched = "deleted in Report²: not looked at (put it in again to process it again)"
-    elif b.get("missing"):
-        item.watched = "removed from the watched folder"
-    elif status == "old":
+    if status == "old":
         item.watched = f"not changed for more than {src.p('ignore_older_days')} days: not looked at"
     elif status == "name":
         item.watched = f"name does not match '{src.p('pattern')}': not looked at"

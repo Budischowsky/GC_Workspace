@@ -139,20 +139,17 @@ class AutomationDock(QWidget):
         ql.addWidget(self.queue, 1)
         row = QHBoxLayout()
         self.b_remove = QPushButton("Remove from queue")
-        self.b_remove.setToolTip("Samples that cannot be processed: the watcher skips them and the batch report "
-                                 "no longer waits for them ('Process again' brings them back)")
+        self.b_remove.setToolTip("Samples that cannot be processed, or samples you added: the watcher skips them and "
+                                 "the batch report no longer waits for them (adding them again brings them back)")
         self.b_remove.clicked.connect(lambda: self.remove_from_queue())
         self.b_again = QPushButton("Process again")
         self.b_again.clicked.connect(self.process_again)
-        self.show_removed = QCheckBox("Show removed")
-        self.show_removed.toggled.connect(lambda _on: self._refresh_queue())
         self.b_add = QPushButton("Add samples...")
         self.b_add.setToolTip("Choose a batch folder and the samples the watcher should process now")
         self.b_add.clicked.connect(lambda: self.add_samples())
         for w in (self.b_add, self.b_remove, self.b_again):
             row.addWidget(w)
         row.addStretch(1)
-        row.addWidget(self.show_removed)
         ql.addLayout(row)
         self._queue_page = box
         self.tabs.addTab(box, "Queue")
@@ -265,18 +262,19 @@ class AutomationDock(QWidget):
         self.table.blockSignals(False)
 
     def _refresh_queue(self):
-        states = list(J.QUEUE) + ([J.REMOVED] if self.show_removed.isChecked() else [])
         try:
-            jobs = self.journal.jobs(states=states)
             batches = {b["id"]: b for b in self.journal.batches()}
+            # a deleted batch folder (from the disk or in Report²) and a deleted report are not listed
+            jobs = [j for j in self.journal.jobs(states=J.QUEUE) if not j.deleted and not
+                    (batches.get(j.batch_id, {}).get("deleted") or batches.get(j.batch_id, {}).get("missing"))]
         except Exception:  # noqa: BLE001
             return
-        keep = set(self.queue_selection())
+        keep = set(self.queue_selection()) | {f"batch:{i}" for i in self.request_selection()}
         names = {wf.id: wf.name for wf in W.list_workflows()}
         self.queue.blockSignals(True)
         self.queue.setRowCount(0)
         level = {J.WAITING: "neutral", J.QUEUED: "info", J.PROCESSING: "info", J.FAILED: "bad",
-                 J.NOT_PROCESSED: "bad", J.REMOVED: "neutral"}
+                 J.NOT_PROCESSED: "bad"}
         for j in jobs:
             r = self.queue.rowCount()
             self.queue.insertRow(r)
@@ -287,14 +285,13 @@ class AutomationDock(QWidget):
                 it.setData(Qt.UserRole, j.id)
                 if c == 4:
                     it.setToolTip(v)
-                if j.state == J.REMOVED:
-                    it.setForeground(theme.status_color("neutral"))
                 self.queue.setItem(r, c, it)
             self.queue.item(r, 3).setBackground(theme.status_brush(level.get(j.state, "neutral")))
             if j.id in keep:
                 self.queue.selectRow(r)
         # samples added by hand that the watcher has not taken up yet
-        requests = [b for b in batches.values() if self.journal.forced(b) and not b.get("deleted")]
+        requests = [b for b in batches.values() if self.journal.forced(b) and not b.get("deleted")
+                    and not b.get("missing")]
         stopped = self.status.get("state") in ("stopped", "not responding")
         for b in requests:
             r = self.queue.rowCount()
@@ -306,37 +303,51 @@ class AutomationDock(QWidget):
             for c, v in enumerate(vals):
                 it = QTableWidgetItem(v)
                 it.setToolTip(v)
+                it.setData(Qt.UserRole, f"batch:{b['id']}")
                 self.queue.setItem(r, c, it)
             self.queue.item(r, 3).setBackground(theme.status_brush("info"))
+            if f"batch:{b['id']}" in keep:
+                self.queue.selectRow(r)
         self.queue.blockSignals(False)
-        n = sum(1 for j in jobs if j.state != J.REMOVED) + len(requests)
+        n = len(jobs) + len(requests)
         self.tabs.setTabText(self.tabs.indexOf(self._queue_page), f"Queue ({n})" if n else "Queue")
         self._queue_buttons()
 
-    def queue_selection(self) -> list[str]:
+    def _selected_keys(self) -> list[str]:
         model = self.queue.selectionModel()
         rows = sorted({i.row() for i in model.selectedRows()}) if model else []
-        return [self.queue.item(r, 0).data(Qt.UserRole) for r in rows if self.queue.item(r, 0)]
+        return [self.queue.item(r, 0).data(Qt.UserRole) or "" for r in rows if self.queue.item(r, 0)]
+
+    def queue_selection(self) -> list[str]:
+        """The selected samples (job ids)."""
+        return [k for k in self._selected_keys() if k and not k.startswith("batch:")]
+
+    def request_selection(self) -> list[int]:
+        """The selected requests (samples added by hand the watcher has not taken up yet): batch ids."""
+        return [int(k[6:]) for k in self._selected_keys() if k.startswith("batch:")]
 
     def _queue_jobs(self) -> list:
         return [j for j in (self.journal.job(i) for i in self.queue_selection()) if j is not None]
 
     def _queue_buttons(self):
         jobs = self._queue_jobs() if self.queue.rowCount() else []
-        self.b_remove.setEnabled(any(j.state in J.REMOVABLE for j in jobs))
+        self.b_remove.setEnabled(any(j.state in J.REMOVABLE for j in jobs) or bool(self.request_selection()))
         self.b_again.setEnabled(any(j.state not in (J.QUEUED, J.PROCESSING) for j in jobs))
 
     def remove_from_queue(self, confirm: bool = True) -> list[str]:
         jobs = [j for j in self._queue_jobs() if j.state in J.REMOVABLE]
-        if not jobs:
+        requests = self.request_selection()
+        if not jobs and not requests:
             return []
-        names = ", ".join(j.group_name for j in jobs[:5]) + (f" and {len(jobs) - 5} more" if len(jobs) > 5 else "")
+        names = [j.group_name for j in jobs] + [self.journal.batch_by_id(i).get("name", "") for i in requests]
+        text = ", ".join(names[:5]) + (f" and {len(names) - 5} more" if len(names) > 5 else "")
         if confirm and QMessageBox.question(
-                self, "Remove from queue", f"Remove {names} from the queue? The watcher skips "
-                f"{'it' if len(jobs) == 1 else 'them'} and the batch report no longer waits. "
-                "'Process again' brings them back.") != QMessageBox.Yes:
+                self, "Remove from queue", f"Remove {text} from the queue? The watcher skips "
+                f"{'it' if len(names) == 1 else 'them'} and the batch report no longer waits. "
+                "Adding them to the queue again brings them back.") != QMessageBox.Yes:
             return []
         done = self.journal.remove([j.id for j in jobs])
+        done += [f"batch:{i}" for i in requests if self.journal.cancel_request(i)]
         self.control.send("scan_now", 500)
         self.refresh()
         return done
@@ -377,6 +388,54 @@ class AutomationDock(QWidget):
             if b is not None:
                 out.append(b)
         return out
+
+    def send_paths(self, paths: list, workflow_id: Optional[str] = None) -> list[dict]:
+        """Folder panel > Send to Automation...: runs (their samples) and batch folders (all their samples;
+        a folder without runs: its batch folders) go into the queue of the workflow the analyst chooses."""
+        from gcws.io import folders
+        wanted: dict = {}
+        for p in map(Path, paths):
+            if folders.is_run_dir(p):
+                runs = wanted.setdefault(str(p.parent), set())
+                if runs is not None:
+                    runs.add(p.name)
+                continue
+            if not p.is_dir():
+                continue
+            try:
+                subs = [p] if folders.is_analysis_folder(p) else [d for d in sorted(p.iterdir())
+                                                                  if folders.is_analysis_folder(d)]
+            except OSError:
+                continue
+            for d in subs:
+                wanted[str(d)] = None                  # all its samples
+        if not wanted:
+            QMessageBox.information(self, "Send to Automation", "The selection holds no runs.")
+            return []
+        wfs = [w for w in W.list_workflows() if w.enabled and w.source is not None]
+        if not wfs:
+            QMessageBox.information(self, "Send to Automation", "No workflow is active: switch one on in the "
+                                    "Automation panel (Workflows tab) first; its method processes the samples.")
+            return []
+        if workflow_id is None:
+            workflow_id = self.choose_workflow(wfs, sum(len(r) if r else 1 for r in wanted.values()))
+        if not workflow_id:
+            return []
+        out = []
+        for folder, runs in wanted.items():
+            b = self.request(workflow_id, folder, None if runs is None else sorted(runs))
+            if b is not None:
+                out.append(b)
+        return out
+
+    def choose_workflow(self, workflows: list, n: int) -> str:
+        """Which workflow processes the samples sent from the Folder panel ("" = cancelled)."""
+        from PySide6.QtWidgets import QInputDialog
+        names = [w.name for w in workflows]
+        keep = next((i for i, w in enumerate(workflows) if w.id == self.selected_id()), 0)
+        name, ok = QInputDialog.getItem(self, "Send to Automation", f"Process the {n} selected item(s) with the "
+                                        "workflow:", names, keep, False)
+        return workflows[names.index(name)].id if ok and name in names else ""
 
     def request(self, workflow_id: str, folder: str, runs) -> Optional[dict]:
         from gcws.automation import store

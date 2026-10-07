@@ -289,10 +289,33 @@ class Journal:
         force = sorted({"*"} if "*" in stems | before else stems | before)
         self.update_batch(b["id"], force_json=json.dumps(force), manual=1 if outside or b.get("manual") else 0,
                           deleted=0)
+        # samples removed from the queue earlier come back: the analyst asked for them again
+        for j in self.jobs(batch_id=b["id"], states=[REMOVED], include_batch=False):
+            if "*" in stems or {Path(str(m)).stem.casefold() for m in j.members or []} & stems:
+                self.con.execute("UPDATE jobs SET state=?, reason=? WHERE id=? AND state=?",
+                                 (WAITING, "added to the queue again", j.id, REMOVED))
         what = "all samples" if force == ["*"] else f"{len(stems)} run(s)"
         self.event("info", f"{b['name']}: {what} added to the queue by {user}", workflow_id=workflow_id,
                    batch_id=b["id"], user=user)
         return self.batch_by_id(b["id"])
+
+    def cancel_request(self, batch_id: int, user: Optional[str] = None) -> bool:
+        """Samples added by hand that the watcher has not taken up yet are taken off the queue again."""
+        user = user or _user()
+        b = self.batch_by_id(batch_id)
+        if not b or not self.forced(b):
+            return False
+        self.update_batch(batch_id, force_json=None)
+        self.event("info", f"{b['name']}: request removed from the queue by {user}", workflow_id=b["workflow_id"],
+                   batch_id=batch_id, user=user)
+        return True
+
+    def batch_gone(self, batch_id: int) -> list[str]:
+        """The batch folder was deleted (or moved away): it is marked missing, a request for it is dropped
+        and its samples leave the queue (putting the folder back processes them again)."""
+        self.update_batch(batch_id, missing=1, force_json=None)
+        return [j.id for j in self.jobs(batch_id=batch_id, states=REMOVABLE)
+                if self.transition(j.id, REMOVABLE, REMOVED, reason="the batch folder was deleted")]
 
     def forced(self, batch: dict) -> set:
         try:

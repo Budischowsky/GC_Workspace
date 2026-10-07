@@ -106,6 +106,7 @@ def default_root() -> str:
 
 class FolderTree(QWidget):
     loadRequested = QtSignal(list, str)        # paths, role ("" = automatic)
+    automationRequested = QtSignal(list)       # runs and folders for the automation queue
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -238,6 +239,11 @@ class FolderTree(QWidget):
             a.setEnabled(bool(all_runs))
             a.triggered.connect(lambda: self._emit(all_runs, ""))
             m.addAction("Set as tree root").triggered.connect(lambda: self.set_root(folders_sel[0]))
+        if runs or folders_sel:
+            m.addSeparator()
+            a = m.addAction("Send to Automation...")
+            a.setToolTip("Put the selected samples into the automation queue; you choose the workflow")
+            a.triggered.connect(lambda: self.automationRequested.emit(list(runs + folders_sel)))
         m.addSeparator()
         m.addAction("Open in Explorer").triggered.connect(lambda: self._explorer(paths[0]))
         m.exec(self.view.viewport().mapToGlobal(pos))

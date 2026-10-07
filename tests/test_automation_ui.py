@@ -162,12 +162,11 @@ def test_queue_remove_and_process_again(qtbot, data, monkeypatch):
     asked = []
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: asked.append(a) or QMessageBox.Yes)
     assert sorted(dock.remove_from_queue()) == sorted([stuck.id, failed.id]) and len(asked) == 1
-    assert dock.queue.rowCount() == 0
-    dock.show_removed.setChecked(True)
-    assert dock.queue.rowCount() == 2 and dock.queue.item(0, 3).text() == "Removed"
-    dock.queue.selectRow(0)
-    first = dock.queue.item(0, 0).data(0x0100)
-    assert dock.process_again() == [first] and jr.job(first).state == J.QUEUED
+    assert dock.queue.rowCount() == 0 and not hasattr(dock, "show_removed")      # removed ones are not listed
+    first = stuck.id
+    assert jr.request(first) and jr.job(first).state == J.QUEUED
+    dock.refresh()
+    assert dock.queue.rowCount() == 1
     # Report²: remove from its right-click menu
     r2 = Report2Dock(journal=jr, poll_ms=60000)
     qtbot.addWidget(r2)
@@ -352,3 +351,92 @@ def test_watcher_starts_with_gc_workspace(qtbot, data):
     assert not dock.start_with_app() and not QSettings().value("automation/start_with_app", True, type=bool)
     dock.with_app.setChecked(True)
     assert dock.start_with_app() and calls == [False]
+
+
+def test_requested_row_is_removed_from_the_queue(qtbot, data, monkeypatch):
+    """A batch added by hand (a *Requested* row, no sample yet) leaves the queue with Remove from queue."""
+    from PySide6.QtWidgets import QMessageBox
+    from gcws.automation import journal as J
+    from gcws.ui.docks.automation import AutomationDock
+    jr = J.Journal(data / "journal.sqlite")
+    b = jr.request_samples("wf1", data / "26016605_TEST", None, outside=True, user="analyst")
+    dock = AutomationDock(journal=jr, control=NoWatcher())
+    qtbot.addWidget(dock)
+    assert dock.queue.rowCount() == 1 and dock.queue.item(0, 3).text() == "Requested"
+    dock.queue.selectRow(0)
+    assert dock.b_remove.isEnabled() and dock.request_selection() == [b["id"]]
+    with monkeypatch.context() as m:
+        m.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+        assert dock.remove_from_queue() == [f"batch:{b['id']}"]
+    assert jr.forced(jr.batch_by_id(b["id"])) == set() and dock.queue.rowCount() == 0
+
+
+def test_deleted_batch_folders_are_not_listed(qtbot, data):
+    """A batch folder deleted from the disk (or in Report²) leaves the queue and the Folders tab."""
+    from gcws.automation import journal as J, overview as OV
+    from gcws.ui.docks.automation import AutomationDock
+    wf, jr, job, batch, local = _overview_setup(data)
+    gone = jr.batch(wf.id, data / "watch" / "26016699_GONE")
+    lost = jr.ensure_job(wf.id, wf.methods()[0].id, gone["id"], "1:z", "26016699_z", ["01.D"], {}, "fp")
+    jr.request_samples(wf.id, data / "watch" / "26016699_GONE", None)
+    dock = AutomationDock(journal=jr, control=NoWatcher())
+    qtbot.addWidget(dock)
+    assert dock.queue.rowCount() == 3                      # two samples and the request
+    assert jr.batch_gone(gone["id"]) == [lost.id] and jr.job(lost.id).state == J.REMOVED
+    dock.refresh()
+    assert dock.queue.rowCount() == 1 and dock.queue.item(0, 0).text() == job.group_name
+    [top] = OV.overview(jr, [wf])
+    assert "26016699_GONE" not in {c.name for c in top.children}
+    b = jr.batch(wf.id, batch)
+    jr.update_batch(b["id"], deleted=1)                    # deleted in Report²
+    [top] = OV.overview(jr, [wf])
+    assert {c.name for c in top.children} == {"Archive", "26010000_OLDER"}
+    dock.refresh()
+    assert dock.queue.rowCount() == 0
+
+
+def test_send_to_automation_from_the_folder_panel(qtbot, data, monkeypatch):
+    """Folder panel > Send to Automation...: runs and batch folders into the queue of the chosen workflow."""
+    from gcws.automation import journal as J, templates
+    from gcws.ui.docks.automation import AutomationDock
+    from gcws.ui.docks.folder_tree import FolderTree
+    watch, samples = data / "watch", data / "samples"
+    watch.mkdir()
+    one, two = samples / "26016605_ONE", samples / "26016606_TWO"
+    for folder in (one, two):
+        for n in ("06_EtOH_ISTD", "07_26016606_x_A", "08_EtOH"):
+            (folder / f"{n}.D").mkdir(parents=True)
+            (folder / f"{n}.D" / "data.ms").write_bytes(b"x")
+    wf = templates.make("simple", "Lab", source=str(watch), method="NIAS", folder_a=str(data / "A"))
+    wf.enabled = True
+    wf.save()
+    jr = J.Journal(data / "automation" / "journal.sqlite")
+    dock = AutomationDock(journal=jr, control=NoWatcher())
+    qtbot.addWidget(dock)
+    asked = []
+    dock.choose_workflow = lambda wfs, n: asked.append(([w.id for w in wfs], n)) or wf.id
+    out = dock.send_paths([str(one / "07_26016606_x_A.D"), str(samples)])      # a run, and a folder of batches
+    assert asked == [([wf.id], 2)]
+    assert {b["name"]: jr.forced(b) for b in out} == {"26016605_ONE": {"*"}, "26016606_TWO": {"*"}}
+    assert all(b["manual"] == 1 for b in out)              # outside the watched folder
+    out = dock.send_paths([str(two / "08_EtOH.D")])
+    assert jr.forced(out[0]) == {"*"}                      # already all of it
+    dock.choose_workflow = lambda wfs, n: ""               # cancelled
+    assert dock.send_paths([str(one)]) == []
+    # the Folder panel's right-click menu offers it
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QMenu
+    from gcws.ui.docks import folder_tree as FT
+
+    class Menu(QMenu):                                     # never shown: its entry is chosen at once
+        def exec(self, *a):
+            next(x for x in self.actions() if x.text() == "Send to Automation...").trigger()
+    tree = FolderTree()
+    qtbot.addWidget(tree)
+    sent = []
+    tree.automationRequested.connect(sent.append)
+    tree.selected_paths = lambda: [str(one)]
+    with monkeypatch.context() as m:
+        m.setattr(FT, "QMenu", Menu)
+        tree._menu(QPoint(0, 0))
+    assert sent == [[str(one)]]

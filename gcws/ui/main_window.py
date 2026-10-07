@@ -682,6 +682,7 @@ class MainWindow(QMainWindow):
 
     def _connect(self):
         self.tree.loadRequested.connect(self.load_runs)
+        self.tree.automationRequested.connect(self.send_to_automation)
         self.ws.deconvJobChanged.connect(lambda key, active, label:
                                          self.begin_activity(key, label) if active else self.end_activity(key))
         self.tools.eventCreated.connect(self._manual_event)
@@ -736,6 +737,13 @@ class MainWindow(QMainWindow):
         self._tool_changed("select")
 
     # -- helpers -------------------------------------------------------------
+
+    def send_to_automation(self, paths: list) -> list:
+        """Folder panel > Send to Automation...: the samples go into the queue of a workflow chosen then."""
+        out = self.automation.send_paths(paths)
+        if out:
+            self._show_dock("automation")
+        return out
 
     def _show_dock(self, key):
         d = self.docks[key]
