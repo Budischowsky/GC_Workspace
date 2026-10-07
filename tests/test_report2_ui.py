@@ -1030,3 +1030,59 @@ def test_save_the_batch_report_as_word_and_excel(qtbot, data, tmp_path, monkeypa
     word = dock.save_batch(bid, "docx", out / "batch.docx")   # no batch report yet: made now
     qtbot.waitUntil(lambda: word.is_file() and "Saved" in dock.bar_text.text())
     assert [Path(p).name for p in made[0]] == ["S-control_NIAS_Report.xlsx", "S-auto_NIAS_Report.xlsx"]
+
+
+# -- the register (Oct 2026) -----------------------------------------------------------------------------
+
+def test_done_means_accepted_and_delivered(tmp_path):
+    from gcws.automation import journal as J
+    from gcws.ui.docks.report2 import is_done
+    jr = J.Journal(tmp_path / "j.sqlite")
+    b = jr.batch("wf", tmp_path)
+    job = jr.ensure_job("wf", "m", b["id"], "s", "S", ["S.D"], {}, "fp", state=J.QUEUED)
+    jr.transition(job.id, J.QUEUED, J.PROCESSING)
+    jr.transition(job.id, J.PROCESSING, J.ACCEPTED_AUTO, export_pending=1)
+    assert not is_done(jr.job(job.id))                         # accepted, not delivered yet
+    jr.update_job(job.id, export_pending=0, export_state="done")
+    assert is_done(jr.job(job.id))
+    jr.review(job.id, False, "bad")
+    assert not is_done(jr.job(job.id))                         # rejected: not done
+    manual = jr.record_manual("jm", workflow_id=J.MANUAL_WORKFLOW, method_node="manual", batch_id=b["id"],
+                              group_key="manual:p", group_name="P", members=[], files={}, project_path="", job_dir="",
+                              evidence={}, findings=[], summary={}, reviewer="a")
+    assert is_done(manual)                                     # no workflow delivers it: accepted is done
+
+
+def test_register_lists_every_sample_done_or_not(qtbot, data, tmp_path, monkeypatch):
+    from openpyxl import load_workbook
+    from gcws.automation import journal as J
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    jr.update_job(ids["S-auto"], export_state="done")
+    dock = _dock(jr, monkeypatch, qtbot)
+    dock.set_mode("register")
+    assert dock.b_register.text() == "Register (5)" and dock.list_stack.currentWidget() is dock.register
+    assert dock.done_filter.isVisibleTo(dock) and dock.b_export_register.isVisibleTo(dock)
+    rows = {dock.register.item(r, 0).text(): [dock.register.item(r, c).text() for c in range(9)]
+            for r in range(dock.register.rowCount())}
+    assert set(rows) == {"S-control", "S-auto", "S-wait", "S-noblank", "S-failed"}
+    assert rows["S-auto"][1] == batch.name and rows["S-auto"][2] == "Lab" and rows["S-auto"][4] == "Done"
+    assert rows["S-control"][4] == "Not done" and rows["S-control"][3] == "Control needed"
+    dock.done_filter.setCurrentIndex(dock.done_filter.findData("open"))
+    dock.refresh()
+    assert dock.register.rowCount() == 4
+    dock.done_filter.setCurrentIndex(dock.done_filter.findData("done"))
+    dock.refresh()
+    assert [dock.register.item(r, 0).text() for r in range(dock.register.rowCount())] == ["S-auto"]
+    dock.done_filter.setCurrentIndex(0)
+    dock.set_filter("control")                                 # the chips filter the register too
+    assert [dock.register.item(r, 0).text() for r in range(dock.register.rowCount())] == ["S-control"]
+    dock.select(ids["S-control"])                              # the same actions as in the list
+    assert dock.current == ids["S-control"] and dock.a_accept.isEnabled() and dock.review(True)
+    assert jr.job(ids["S-control"]).state == J.ACCEPTED_MANUAL
+    dock.set_filter("control")
+    out = dock.export_register(tmp_path / "register.xlsx")
+    sheet = load_workbook(out).active
+    assert [c.value for c in sheet[1]][:5] == ["Sample", "Batch", "Workflow", "Status", "Done"]
+    assert sheet.max_row == 6                                  # header + every sample
+    dock.set_mode("todo")
+    assert not dock.done_filter.isVisibleTo(dock) and dock.list_stack.currentWidget() is not dock.register

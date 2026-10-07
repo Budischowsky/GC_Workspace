@@ -289,7 +289,8 @@ Described in [Unattended processing](wf-automation.md#report²-what-needs-your-c
 
 | Control | What it does |
 |---|---|
-| **To do**, **Archive** | Open batches, or those whose reports are all accepted and delivered (with the number of batches). |
+| **To do**, **Archive**, **Register** | Open batches, or those whose reports are all accepted and delivered (with the number of batches); **Register**: every sample in one sortable list, done or not done (with the number of samples). |
+| Done box, **Export register...** | Register only: **Done and not done**, **Done**, **Not done**; the register as an Excel workbook. |
 | Workflow box | **All workflows** or one of them; **Accepted by hand** shows the double determinations accepted in Replicates that no workflow processed. |
 | Period box | **All**, **Today**, **7 days**, **30 days**, **12 months**. |
 | **Search sample or batch** | Filters the list. |

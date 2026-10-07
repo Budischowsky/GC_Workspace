@@ -225,6 +225,15 @@ archive shows one row per batch; the period box (**Today**, **7 days**, **30 day
 **Search sample or batch** find older ones (a sample name finds its batch). Double-click a batch for its batch
 report, right-click it for **Reopen**, which brings it back to **To do** until its reports are decided again.
 
+**Register** is the report register: every sample of every batch in one list, whatever its state, with its
+**Batch**, **Workflow**, **Status**, **Done**, **Reviewed by**, **Decided** (when), **Delivered** and
+**Processed**. A sample is *Done* when it is accepted and delivered (an entry **Accepted by hand** when it is
+accepted); everything else is *Not done* - waiting, in work, needing control, failed, not processed, rejected,
+or accepted but not delivered yet. The box beside the period shows **Done and not done**, only **Done** or only
+**Not done**; click a column header to sort by it. Selecting a sample works as in the list (the buttons, the
+right-click menu and the keys act on it). **Export register...** saves the register as shown - its filters and
+order - as an Excel workbook, with the reason and comment of each sample.
+
 The chips above the list - **All**, **Control needed**, **Accepted**, **Waiting**, **Not processed**,
 **Failed**, **Rejected**, **Removed** - count the samples and filter the list: click one to see only those,
 click it again for all. The chip at the right shows whether the watcher is running; **Start watcher** starts it.

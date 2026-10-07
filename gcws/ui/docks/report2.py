@@ -21,7 +21,7 @@ from typing import Callable, Optional
 from PySide6.QtCore import QBuffer, QEvent, QIODevice, QItemSelectionModel, QRect, QSettings, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QIcon, QKeySequence, QPainter, QPalette, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QComboBox, QFileDialog, QFrame,
-                               QHBoxLayout,
+                               QHBoxLayout, QTableWidget, QTableWidgetItem,
                                QHeaderView, QLabel, QLineEdit, QMenu, QMessageBox, QPushButton, QSplitter,
                                QStackedWidget, QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolButton,
                                QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
@@ -48,6 +48,8 @@ WORST = ("bad", "warn", "info", "ok", "neutral")
 ROLE_KIND = Qt.UserRole + 1                     # "batch", "job" or "finding"
 ROLE_BAR = Qt.UserRole + 2                      # a batch's progress: [(level, count), ...]
 COLUMNS = ["Sample", "Status", "Findings", "Delivered", "Processed"]
+REGISTER = ["Sample", "Batch", "Workflow", "Status", "Done", "Reviewed by", "Decided", "Delivered", "Processed"]
+DONE_FILTERS = {"all": "Done and not done", "done": "Done", "open": "Not done"}
 
 
 def bucket(job: J.Job) -> str:
@@ -83,6 +85,17 @@ def delivered(job: J.Job) -> tuple[str, str]:
         return "pending", "info"
     return {"done": ("✓", "ok"), "partial": ("partly", "warn"), "error": ("failed", "bad")}.get(
         job.export_state or "", ("", "neutral"))
+
+
+def is_done(job: J.Job) -> bool:
+    """Register: a sample is done when it is accepted and delivered (an entry accepted by hand, which no
+    workflow delivers, when it is accepted). Everything else is not done yet - waiting, in work, needing
+    control, failed, not processed, rejected, accepted but not delivered."""
+    if job.state not in J.ACCEPTED or job.review_pending or job.deleted:
+        return False
+    if job.workflow_id == J.MANUAL_WORKFLOW:
+        return True
+    return not job.export_pending and job.export_state == "done"
 
 
 def activity(job: J.Job) -> float:
@@ -172,8 +185,9 @@ class Report2Dock(QWidget):
         f = QHBoxLayout()
         self.b_todo = QToolButton()
         self.b_archive = QToolButton()
+        self.b_register = QToolButton()
         modes = QButtonGroup(self)
-        for b, mode in ((self.b_todo, "todo"), (self.b_archive, "archive")):
+        for b, mode in ((self.b_todo, "todo"), (self.b_archive, "archive"), (self.b_register, "register")):
             b.setCheckable(True)
             theme.set_primary(b)
             modes.addButton(b)
@@ -182,6 +196,8 @@ class Report2Dock(QWidget):
         self.b_todo.setChecked(True)
         self.b_todo.setToolTip("Batches with reports still waiting, needing control or not delivered")
         self.b_archive.setToolTip("Batches whose reports are all accepted and delivered")
+        self.b_register.setToolTip("Every sample of every batch in one list: done (accepted and delivered) or not "
+                                   "done yet")
         self.workflow = QComboBox()
         self.workflow.addItem("All workflows", "")
         self.workflow.activated.connect(lambda *_: self.refresh())
@@ -193,9 +209,21 @@ class Report2Dock(QWidget):
         self.search.setPlaceholderText("Search sample or batch")
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(lambda *_: self.refresh())
+        self.done_filter = QComboBox()
+        for k, label in DONE_FILTERS.items():
+            self.done_filter.addItem(label, k)
+        self.done_filter.setToolTip("Register: done = accepted and delivered")
+        self.done_filter.activated.connect(lambda *_: self.refresh())
+        self.b_export_register = QPushButton("Export register...")
+        self.b_export_register.setToolTip("The register as it is shown (filters, order) as an Excel workbook")
+        self.b_export_register.clicked.connect(lambda: self.export_register())
         f.addWidget(self.workflow)
         f.addWidget(self.period)
+        f.addWidget(self.done_filter)
         f.addWidget(self.search, 1)
+        f.addWidget(self.b_export_register)
+        self.done_filter.hide()
+        self.b_export_register.hide()
         lay.addLayout(f)
         # chips (filters), the watcher, rules
         c = QHBoxLayout()
@@ -251,9 +279,29 @@ class Report2Dock(QWidget):
         self.tree.installEventFilter(self)
         self.empty = theme.hint("")
         self.empty.setAlignment(Qt.AlignCenter)
+        self.register = QTableWidget(0, len(REGISTER))
+        self.register.setHorizontalHeaderLabels(REGISTER)
+        self.register.verticalHeader().setVisible(False)
+        self.register.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.register.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.register.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.register.setWordWrap(False)
+        self.register.setTextElideMode(Qt.ElideMiddle)
+        rh = self.register.horizontalHeader()
+        rh.setSectionResizeMode(QHeaderView.Interactive)
+        rh.setStretchLastSection(True)
+        for col, width in enumerate((190, 170, 90, 130, 75, 90, 110, 70)):
+            self.register.setColumnWidth(col, width)
+        self.register.setSortingEnabled(True)
+        self.register.itemSelectionChanged.connect(self._register_picked)
+        self.register.cellDoubleClicked.connect(lambda *_: self.open_default())
+        self.register.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.register.customContextMenuRequested.connect(self._register_menu)
+        self.register.installEventFilter(self)
         self.list_stack = QStackedWidget()
         self.list_stack.addWidget(self.tree)
         self.list_stack.addWidget(self.empty)
+        self.list_stack.addWidget(self.register)
         # the details of the selected report
         self.detail = QWidget()
         dl = QVBoxLayout(self.detail)
@@ -467,9 +515,11 @@ class Report2Dock(QWidget):
         self.start_btn.setVisible(state in ("stopped", "not responding"))
 
     def set_mode(self, mode: str):
-        """"todo" (open batches) or "archive" (batches accepted and delivered)."""
+        """"todo" (open batches), "archive" (batches accepted and delivered) or "register" (every sample)."""
         self.mode = mode
-        (self.b_todo if mode == "todo" else self.b_archive).setChecked(True)
+        {"todo": self.b_todo, "archive": self.b_archive, "register": self.b_register}[mode].setChecked(True)
+        self.done_filter.setVisible(mode == "register")
+        self.b_export_register.setVisible(mode == "register")
         self.refresh()
 
     def set_filter(self, key: str):
@@ -498,7 +548,8 @@ class Report2Dock(QWidget):
         for j in self.journal.jobs(workflow_id=self.workflow.currentData() or None):
             by_batch.setdefault(j.batch_id, []).append(j)
         self._by_batch = by_batch
-        view, n_batches = [], {"todo": 0, "archive": 0}
+        view, n_batches = [], {"todo": 0, "archive": 0, "register": 0}
+        register = self.mode == "register"
         for bid, jobs in by_batch.items():
             b = self._batches.get(bid, {})
             if b.get("deleted") and not self.show_deleted:
@@ -507,15 +558,18 @@ class Report2Dock(QWidget):
                 continue                               # nothing left to show (only deleted reports)
             mode = "archive" if J.batch_closed(b, jobs) else "todo"
             n_batches[mode] += 1
-            if mode != self.mode:
+            n_batches["register"] += sum(1 for j in jobs if not j.is_batch and (self.show_deleted or not j.deleted))
+            if mode != self.mode and not register:
                 continue
-            if mode == "archive" and since and max(activity(j) for j in jobs) < since:
+            if mode == "archive" and not register and since and max(activity(j) for j in jobs) < since:
                 continue
             name_hit = text in (b.get("name") or "").casefold()
             for j in jobs:
                 if j.deleted and not self.show_deleted:
                     continue
-                if mode == "todo" and since and float(j.created or 0) < since:
+                if register and (j.is_batch or (since and activity(j) < since)):
+                    continue                           # the register lists samples
+                if mode == "todo" and not register and since and float(j.created or 0) < since:
                     continue
                 if text and not name_hit and text not in (j.group_name or "").casefold():
                     continue
@@ -523,6 +577,7 @@ class Report2Dock(QWidget):
         self.jobs = {j.id: j for j in view}
         self.b_todo.setText(f"To do ({n_batches['todo']})")
         self.b_archive.setText(f"Archive ({n_batches['archive']})")
+        self.b_register.setText(f"Register ({n_batches['register']})")
         # the chips count the samples of the view (a batch report is not a sample)
         counts = {k: 0 for k in FILTERS}
         auto = manual = 0
@@ -543,10 +598,15 @@ class Report2Dock(QWidget):
             self.chips[key].style().polish(self.chips[key])
         self.chips["accepted"].setToolTip(f"{auto} automatic, {manual} by the analyst")
         shown = [j for j in view if self.filter == "all" or bucket(j) == self.filter]
-        self._fill(shown)
+        if register:
+            want = self.done_filter.currentData() or "all"
+            shown = [j for j in shown if want == "all" or is_done(j) == (want == "done")]
+            self._fill_register(shown)
+        else:
+            self._fill(shown)
         if not shown:
             self.empty.setText(self._empty_text(bool(text) or bool(since)))
-        self.list_stack.setCurrentIndex(0 if shown else 1)
+        self.list_stack.setCurrentIndex((2 if register else 0) if shown else 1)
         try:
             self._stamp = self._stamp_now()
         except Exception:  # noqa: BLE001
@@ -555,6 +615,9 @@ class Report2Dock(QWidget):
         self._show_detail(self.journal.job(self.current) if self.current else None)
 
     def _empty_text(self, narrowed: bool) -> str:
+        if self.mode == "register":
+            return "No sample matches." if narrowed or self.filter != "all" or \
+                self.done_filter.currentData() != "all" else "No sample has been processed yet."
         if self.mode == "archive":
             return "No archived batches match." if narrowed else \
                 "No batch is archived yet: a batch moves here when all its reports are accepted and delivered."
@@ -699,6 +762,9 @@ class Report2Dock(QWidget):
 
     def _rows(self) -> list[str]:
         """The job ids of the list, top to bottom."""
+        if self.mode == "register":
+            return [self.register.item(r, 0).data(Qt.UserRole) for r in range(self.register.rowCount())
+                    if self.register.item(r, 0) is not None]
         out = []
         for i in range(self.tree.topLevelItemCount()):
             top = self.tree.topLevelItem(i)
@@ -721,7 +787,11 @@ class Report2Dock(QWidget):
 
     def selected_jobs(self) -> list[J.Job]:
         """The selected reports (rows of samples and batch reports), top to bottom."""
-        ids = [it.data(0, Qt.UserRole) for it in self.tree.selectedItems() if it.data(0, ROLE_KIND) == "job"]
+        if self.mode == "register":
+            ids = [self.register.item(i.row(), 0).data(Qt.UserRole)
+                   for i in self.register.selectionModel().selectedRows() if self.register.item(i.row(), 0)]
+        else:
+            ids = [it.data(0, Qt.UserRole) for it in self.tree.selectedItems() if it.data(0, ROLE_KIND) == "job"]
         rows = self._rows()
         ids.sort(key=lambda i: rows.index(i) if i in rows else len(rows))
         if not ids and self.current:
@@ -729,6 +799,8 @@ class Report2Dock(QWidget):
         return [j for j in (self.journal.job(i) for i in ids) if j is not None]
 
     def selected_batch(self) -> Optional[int]:
+        if self.mode == "register":
+            return None
         items = [it for it in self.tree.selectedItems() if it.data(0, ROLE_KIND) == "batch"]
         return items[0].data(0, Qt.UserRole) if len(items) == 1 else None
 
@@ -756,7 +828,7 @@ class Report2Dock(QWidget):
         text = self.search.text().strip().casefold()
         if text and text not in (job.group_name or "").casefold():
             self.search.clear()
-        if mode != self.mode:
+        if mode != self.mode and self.mode != "register":
             self.set_mode(mode)
         else:
             self.refresh()
@@ -764,6 +836,17 @@ class Report2Dock(QWidget):
 
     def select(self, job_id: str):
         self.current = job_id
+        if self.mode == "register":
+            self._building = True
+            self.register.clearSelection()
+            for r in range(self.register.rowCount()):
+                if self.register.item(r, 0) is not None and self.register.item(r, 0).data(Qt.UserRole) == job_id:
+                    self.register.selectRow(r)
+                    self.register.scrollToItem(self.register.item(r, 0))
+                    break
+            self._building = False
+            self._show_detail(self.journal.job(job_id))
+            return
         it = self._items.get(f"j:{job_id}")
         self._building = True
         self.tree.clearSelection()
@@ -1093,7 +1176,8 @@ class Report2Dock(QWidget):
         menu.addAction("Other...", lambda: slot(None))
 
     def eventFilter(self, obj, ev):
-        if obj is self.tree and ev.type() in (QEvent.ShortcutOverride, QEvent.KeyPress):
+        if obj in (self.tree, getattr(self, "register", None)) and \
+                ev.type() in (QEvent.ShortcutOverride, QEvent.KeyPress):
             slot = self._key_slot(ev)
             if slot is not None:
                 ev.accept()
@@ -1121,6 +1205,104 @@ class Report2Dock(QWidget):
 
     def _popup_reject(self):
         self.reject_menu.exec(self.b_reject.mapToGlobal(self.b_reject.rect().bottomLeft()))
+
+    # -- the register ----------------------------------------------------------------------------------
+
+    def _fill_register(self, jobs: list):
+        """Register: one row per sample, sortable by any column."""
+        selected = {j.id for j in self.selected_jobs()} if self.mode == "register" else set()
+        self._building = True
+        self.register.setSortingEnabled(False)
+        self.register.setRowCount(0)
+        from gcws.automation import workflow as W
+        names = {w.id: w.name for w in W.list_workflows()}
+        names[J.MANUAL_WORKFLOW] = "Accepted by hand"
+        for j in sorted(jobs, key=lambda j: (-float(self._batches.get(j.batch_id, {}).get("first_seen") or 0),
+                                             float(j.created or 0))):
+            r = self.register.rowCount()
+            self.register.insertRow(r)
+            done = is_done(j)
+            sent, sent_level = delivered(j)
+            status = "Updating report" if j.review_pending else J.STATE_LABELS.get(j.state, j.state)
+            if j.deleted:
+                status = f"Deleted ({status.lower()})"
+            values = [j.group_name, self._batches.get(j.batch_id, {}).get("name", ""), names.get(j.workflow_id, ""),
+                      status, "Done" if done else "Not done", j.reviewer or "", J.when(j.reviewed_at), sent,
+                      J.when(j.finished or j.created)]
+            for c, v in enumerate(values):
+                it = QTableWidgetItem(v)
+                it.setData(Qt.UserRole, j.id)
+                if v:
+                    it.setToolTip(v)
+                self.register.setItem(r, c, it)
+            self.register.item(r, 3).setBackground(theme.status_brush(LEVEL.get(j.state, "neutral")))
+            self.register.item(r, 4).setForeground(theme.status_color("ok" if done else "warn"))
+            if j.reason:
+                self.register.item(r, 3).setToolTip(j.reason)
+            if sent:
+                self.register.item(r, 7).setForeground(theme.status_color(sent_level))
+            if self._targets.get(j.id):
+                self.register.item(r, 7).setToolTip("Delivered to:\n" + "\n".join(self._targets[j.id]))
+            if j.id in selected:
+                self.register.selectRow(r)
+        self.register.setSortingEnabled(True)
+        self._building = False
+
+    def _register_picked(self):
+        if self._building:
+            return
+        rows = self.register.selectionModel().selectedRows()
+        cur = self.register.currentRow()
+        row = cur if any(i.row() == cur for i in rows) else (rows[-1].row() if rows else -1)
+        it = self.register.item(row, 0) if row >= 0 else None
+        self.current = it.data(Qt.UserRole) if it is not None else None
+        self._show_detail(self.journal.job(self.current) if self.current else None)
+
+    def _register_menu(self, pos):
+        row = self.register.rowAt(pos.y())
+        if row < 0:
+            return
+        if not any(i.row() == row for i in self.register.selectionModel().selectedRows()):
+            self.register.selectRow(row)
+        self._sample_menu().exec(self.register.viewport().mapToGlobal(pos))
+
+    def export_register(self, target: Optional[Path] = None) -> Optional[Path]:
+        """Export register...: the register as shown (its filters and order) as an Excel workbook."""
+        from datetime import datetime
+        from openpyxl import Workbook
+        from openpyxl.styles import Font
+        from gcws.core.text import excel_safe
+        if target is None:
+            folder = QSettings().value("report2/save_dir", "", type=str) or str(Path.home())
+            name = f"Report2_Register_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
+            fn, _ = QFileDialog.getSaveFileName(self, "Export register", str(Path(folder) / name),
+                                                "Excel workbook (*.xlsx)")
+            if not fn:
+                return None
+            target = Path(fn)
+            QSettings().setValue("report2/save_dir", str(target.parent))
+        wb = Workbook()
+        sh = wb.active
+        sh.title = "Register"
+        sh.append(REGISTER + ["Reason", "Comment"])
+        for c in sh[1]:
+            c.font = Font(bold=True)
+        for r in range(self.register.rowCount()):
+            job = self.journal.job(self.register.item(r, 0).data(Qt.UserRole))
+            values = [self.register.item(r, c).text() for c in range(len(REGISTER))]
+            sh.append([excel_safe(v) for v in values + ([job.reason or "", job.comment or ""] if job else ["", ""])])
+        for col, width in zip("ABCDEFGHIJK", (30, 30, 18, 22, 10, 14, 17, 10, 17, 40, 30)):
+            sh.column_dimensions[col].width = width
+        sh.auto_filter.ref = sh.dimensions
+        sh.freeze_panes = "A2"
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            wb.save(target)
+        except OSError as exc:
+            self.notify(f"The register was not saved: {exc}", level="warn")
+            return None
+        self.notify(f"Exported the register ({self.register.rowCount()} samples) to {target}.")
+        return target
 
     def _double_clicked(self, item, _col):
         kind = item.data(0, ROLE_KIND)
