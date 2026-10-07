@@ -254,6 +254,8 @@ class WatcherCore(QObject):
         now = self.clock() if now is None else now
         src = wf.source
         root = src.p("folder")
+        cfg = SC.Readiness(int(src.p("stable_scans") or 2), float(src.p("min_age_min") or 0) * 60,
+                           float(src.p("quiet_min") or 30) * 60)
         if not os.path.isdir(root):                    # e.g. a network drive without the VPN
             if wf.id not in self._unreachable:
                 self._unreachable.add(wf.id)
@@ -261,6 +263,7 @@ class WatcherCore(QObject):
                                    "looking again at every check", workflow_id=wf.id)
             last = store.read_json(store.listing_path(wf.id)) or {}
             self._write_listing(wf, dict(last, root=root, reachable=False, checked=now))
+            self._scan_requested(wf, set(), now, cfg)  # samples added from elsewhere (e.g. this PC) go on
             return
         if wf.id in self._unreachable:
             self._unreachable.discard(wf.id)
@@ -268,8 +271,6 @@ class WatcherCore(QObject):
                                workflow_id=wf.id)
         first = self.journal.first_scan(wf.id, root)
         census = self.journal.census(wf.id, root)
-        cfg = SC.Readiness(int(src.p("stable_scans") or 2), float(src.p("min_age_min") or 0) * 60,
-                           float(src.p("quiet_min") or 30) * 60)
         depth = int(src.p("depth") or 0)
         known = self.journal.batch_keys(wf.id)
         skipped, seen = [], set()

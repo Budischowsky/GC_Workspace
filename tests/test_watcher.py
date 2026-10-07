@@ -830,3 +830,22 @@ def test_folder_outside_the_watched_folder_added_by_hand(env, qapp):
     core.tick()                                            # only what was added: the batch report follows
     assert launcher.started[-1][2] == "batch"
     assert [e["name"] for e in launcher.started[-1][1]["entries"]] == ["26016607_y"]
+
+
+def test_samples_added_from_this_pc_go_on_while_the_watched_folder_is_away(env, qapp):
+    """Home office without VPN: the watched network folder cannot be reached, a batch on this PC added
+    by hand is processed anyway."""
+    import shutil
+    jr = env["journal"]
+    core, launcher, now = _core(env)
+    core.tick()
+    shutil.rmtree(env["watch"])                            # X: is not there
+    here = env["tmp"] / "C" / "26016605_HERE"
+    here.mkdir(parents=True)
+    _log(here, BATCH[:3], completed=True)
+    for n in BATCH[:3]:
+        _acquire(here, n)
+    jr.request_samples(env["wf"].id, here, None, outside=True)
+    now[0] += 61
+    core.tick()
+    assert launcher.started and launcher.started[0][1]["batch_folder"] == str(here)
