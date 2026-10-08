@@ -1018,7 +1018,7 @@ class Report2Dock(QWidget):
                 pass
 
         threading.Thread(target=work, daemon=True, name="report2-preview").start()
-        QTimer.singleShot(int(self.WORD_TIMEOUT * 1000), lambda d=docx: self._convert_timeout(d))
+        QTimer.singleShot(int(self.WORD_TIMEOUT * 1000), self, lambda d=docx: self._convert_timeout(d))
 
     def _convert_timeout(self, docx: str):
         if self._converting == docx:
