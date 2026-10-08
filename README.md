@@ -104,8 +104,12 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
      signals of both panels.
 3. **Peaks / substances** table:
    - The two buttons at the top choose which chromatogram the table lists (e.g. *Chromatogram 1 · FID − Blank*).
-   - *Show only peaks with* filters by concentration, corrected area, area, area %, height, mg/dm², score or RT.
-     The operators are <, ≤, =, ≥, >, *between* and *outside*. Copy and export follow the filter.
+   - *Show only peaks with* filters by concentration, corrected area, area, area %, height, mg/dm², µg/L, mg/L,
+     mg/mL, score or RT. The operators are <, ≤, =, ≥, >, *between* and *outside*. Copy and export follow the filter.
+   - In the NIAS modes the optional **mg/dm²**, **µg/dm²**, **µg/L**, **mg/L** and **mg/mL** columns give every
+     substance in these units (µg/L: mg/dm² × cell area × coverage × 10⁶ ÷ extract volume of the NIAS
+     parameters); hovering a value shows its calculation. The double determination offers them for A, B and
+     the mean under *Columns...*.
    - Optional **µg/HS**, **µg/dm²**, **µg/g**, and **RRT** columns also support sorting and filtering.
      HS quantities are available simultaneously, independently of the selected report unit. A missing
      sample area or mass leaves only its corresponding normalized quantity empty.
@@ -149,6 +153,10 @@ Both formats are verified to be bit-identical on the reference batch (`tests/tes
      - size per chromatogram, resolution 1×–3×, an optional title line, a preview, and copy to the clipboard.
 5. **Library search** (Ctrl+F) searches the integrated peaks in your libraries and fills Name, CAS and Score.
    You can review the hits first.
+   - A peak's spectrum is its top minus the baseline. In a cluster, where the scans next to the peak lie on
+     its neighbours, the background comes from the nearest baseline scans (up to 1 min away) and only the
+     ions of the valley that are not the peak's own are subtracted, so neighbours with a similar spectrum no
+     longer spoil it. *Average minus adjacent scans (classic)* keeps the earlier way.
    - **Search methods...**: tick libraries and drag them into order, or use **Up / Down / To top / To bottom**.
      In **Sequential** mode, only ticked libraries count; the numbered order is searched top to bottom until
      a hit reaches the stop score (0–99). **Combined** mode searches all ticked libraries for the best hits

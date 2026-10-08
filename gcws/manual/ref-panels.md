@@ -253,8 +253,10 @@ The double-determination page:
 A right-click on a row offers **Delete row**, **Reset row** and the other row actions (see [Double determination](wf-double.md#decide)).
 
 The line under the chips sums up the comparison in one line (the whole text is its tooltip); beside it,
-how many substances go into the report and how many you changed. Right-click a column header to show or hide
-columns; **Diff. %** is a bar against the limit.
+how many substances go into the report and how many you changed. **Columns...** beside it (or **Choose
+columns...** on a right-click on a column header) chooses and orders the columns - also A, B and the mean in
+mg/dm², µg/dm², µg/L, mg/L and mg/mL; a right-click on a column header shows or hides one column. **Diff. %**
+is a bar against the limit.
 
 Below the list: the two chromatograms of the selected substance, A upwards and B downwards, with its
 integrated peak shaded in each, and the two spectra, mirrored the same way (feature pairing only). Clicking a

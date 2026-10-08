@@ -36,9 +36,13 @@ The column with the verdict says why a row has its colour; its tooltip gives the
   the row's.
 - A ⚠ before the substance means the two determinations found different library hits; right-click the row
   for the candidate names.
-- Right-click a column header to show or hide columns. **Area A**, **Area B**, **Notes** and the two hit
-  columns are hidden at first; the icon, **Report** and **Substance** always stay. The choice is
-  remembered.
+- **Columns...** (beside **Plots**) chooses which columns are shown and in which order; a right-click on a
+  column header shows or hides one. **Area A**, **Area B**, **Notes** and the two hit columns are hidden at
+  first; the icon, **Report** and **Substance** always stay. The choice is remembered.
+- In the NIAS modes the list can also show A, B and the mean in **mg/dm²**, **µg/dm²**, **µg/L**, **mg/L** and
+  **mg/mL** (hidden at first). They are converted from the list's values, your changes included, so they agree
+  with the report; hover a value for its calculation (see
+  [Quantify](wf-quantify.md#where-the-results-are)). The Excel export adds the ones you show.
 
 - Click a chip to see only its rows; click it again for all rows. **Red** shows just the rows to decide;
   `F3` jumps to the next red row that is still open.

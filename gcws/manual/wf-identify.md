@@ -57,12 +57,27 @@ The box at the top of the **Mass spectrum** panel, and **Spectrum** in the searc
 
 | Mode | The spectrum is |
 |---|---|
-| **Assigned component, otherwise average minus background** | the component you assigned by deconvolution if there is one; otherwise the average of the scans over the peak minus the scans at its edges. The default. |
+| **Assigned component, otherwise average minus background** | the component you assigned by deconvolution if there is one; otherwise the average of the scans over the peak top minus the background (see below). The default. |
+| **Assigned component, otherwise average minus adjacent scans (classic)** | as the first mode, but the background is always the three scans before and after the peak, as in earlier versions. |
 | **Apex scan** | the single scan at the top of the peak. |
 | **Apex minus start scan (PBM)** | the apex scan minus the scan at the start of the peak, as ChemStation does it. |
 | **Deconvoluted component** | the spectrum of the deconvoluted component at the peak - only the ions that belong to it. |
 | **Raw scans: average minus background (ignore assignment)** | as the first mode, but never the assigned component. |
 | **Raw scans: apex (ignore assignment)** | the apex scan, ignoring any assignment. |
+
+**The background.** Usually the three scans before and the three after the peak are on the baseline, and
+their spectrum (column bleed, noise) is subtracted. In a cluster of peaks these scans lie on the neighbouring
+peaks; subtracting them would take the peak's own ions away with the neighbours' - worst when the neighbours
+have a similar spectrum, such as the isomers of a hydrocarbon hump. So when the scans next to the peak are more
+than 10 % of the peak height above the baseline:
+
+- the background comes from the nearest scans *on the baseline*, up to 1 min before and after the peak
+  (from one side if the other has none within reach; from the lowest scans of both sides if neither has);
+- of the valley next to the peak only what is *not* the peak's own spectrum is subtracted as well: the ions of
+  a different neighbour.
+
+A peak whose neighbouring scans are on the baseline keeps exactly the spectrum it had. The caption of the
+spectrum says which scans gave the background.
 
 The **Scans** tab of the panel shows which scans were averaged (blue) and which were subtracted as background
 (red). Drag the regions and press **Use these scans** to set them yourself for the selected peak;

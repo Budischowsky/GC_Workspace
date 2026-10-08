@@ -167,5 +167,19 @@ To keep this setup, save it with **Method > Save current settings as Method...**
 ## Where the results are
 
 The peak table shows **Conc.** in the unit of the mode, **Corr. area** (after the blank correction), **ISTD**
-(which standard a peak is), **SML** and **Status**. More columns - **mg/dm²**, **µg/HS**, **µg/dm²**, **µg/g**,
-**RRT**, **Blank area** - can be switched on with **Columns**.
+(which standard a peak is), **SML** and **Status**. More columns - **mg/dm²**, **µg/dm²**, **µg/L**, **mg/L**,
+**mg/mL**, **µg/HS**, **µg/g**, **RRT**, **Blank area** - can be switched on with **Columns**.
+
+The NIAS modes give every substance in these further units as well:
+
+| Column | NIAS screening (mg/kg) | NIAS total extraction (µg/L) |
+|---|---|---|
+| **mg/dm²** | corrected area × mean ISTD factor | - |
+| **µg/dm²** | mg/dm² × 1000 | - |
+| **µg/L** | mg/dm² × cell area × coverage × 1 000 000 ÷ extract volume (mL): the substance in one litre of extract | the result itself |
+| **mg/L** | µg/L ÷ 1000 | µg/L ÷ 1000 |
+| **mg/mL** | µg/L ÷ 1 000 000 | µg/L ÷ 1 000 000 |
+
+The extract volume is the **Extract volume** of the NIAS parameters. Hover a value to see its calculation in
+numbers; **Conc.** shows its own (mg/kg = mg/dm² × surface/volume). An empty cell's tooltip says what is
+missing. In HS-Screening, **µg/dm²** is the HS amount divided by the sample area.
