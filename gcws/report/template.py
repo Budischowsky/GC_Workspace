@@ -101,6 +101,7 @@ def _six_columns(name: str, title: str, subtitle: str) -> dict:
                    "lines": [[{"label": "Sample:", "value": "{sample}"}],
                              [{"label": "Method:", "value": "{quant_method}"}]]}
     t["rows"]["limit"] = {"field": "report_unit_1", "value": None, "use_method": True}
+    t["rows"]["skip_istd"] = False                      # the fixed reports list the standards too
     return t
 
 
