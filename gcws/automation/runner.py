@@ -110,6 +110,15 @@ def job_spec(journal: J.Journal, wf: W.Workflow, job: J.Job, method: Callable[[s
     return spec, "job"
 
 
+def clear_result(out_dir) -> None:
+    """A job taken up again (after a back-off, a crash or a closed watcher) runs in the same folder: the
+    result of the attempt before must not be taken for the new one when that ends without one."""
+    try:
+        (Path(out_dir) / "result.json").unlink()
+    except OSError:
+        pass
+
+
 def finish(journal: J.Journal, job_id: str, out_dir: Path, tail: str = "", timed_out: bool = False,
            now: Optional[float] = None) -> Optional[dict]:
     """Take in the result of a job process: the job's new state, findings and files. Returns
@@ -253,6 +262,7 @@ class LocalJobs(QObject):
             if not self.journal.transition(jid, J.QUEUED, J.PROCESSING, started=time.time(), pid=os.getpid(),
                                            job_dir=spec["out_dir"], reason=""):
                 continue
+            clear_result(spec["out_dir"])
             self.journal.event("info", f"{job.group_name}: making the updated report in GC Workspace", job_id=jid,
                                workflow_id=job.workflow_id, batch_id=job.batch_id)
             self._runs += 1

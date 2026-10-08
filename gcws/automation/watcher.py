@@ -68,11 +68,24 @@ class ProcessLauncher(QObject):
         super().__init__(parent)
         self.proc: Optional[QProcess] = None
         self.job_id = ""
+        self._ended: Optional[QProcess] = None       # the process that ended last (deleted at the next start)
 
     def running(self) -> bool:
         return self.proc is not None and self.proc.state() != QProcess.NotRunning
 
+    def _drop_ended(self) -> None:
+        """A watcher runs for days: a finished process is not kept. Not deleteLater: a launcher closed
+        before the event loop ran again (GC Workspace or the watcher quitting) deleted it twice - abort."""
+        old, self._ended = self._ended, None
+        if old is not None:
+            import shiboken6
+            try:
+                shiboken6.delete(old)
+            except RuntimeError:
+                pass
+
     def start(self, job_id: str, spec_path: Path, kind: str = "job") -> None:
+        self._drop_ended()
         p = QProcess(self)
         p.setProgram(python_exe())
         flag = {"batch": "--batch-report", "copy": "--copy-runs"}.get(kind, "--process-job")
@@ -88,6 +101,8 @@ class ProcessLauncher(QObject):
         p.errorOccurred.connect(lambda err: self._failed(p, err))
         self.proc, self.job_id = p, job_id
         p.start()
+        if p.processId():
+            store.end_with_this_process(p.processId())  # a watcher that crashes takes its job with it
 
     def _done(self, p, code, status):
         if p is not self.proc:
@@ -96,18 +111,16 @@ class ProcessLauncher(QObject):
             tail = bytes(p.readAll()).decode("utf-8", "replace")[-2000:]
         except RuntimeError:                       # being deleted: the program quits
             tail = ""
-        self.proc = None
+        self.proc, self._ended = None, p
         try:
-            p.deleteLater()                        # a watcher runs for days: finished processes are not kept
-        except RuntimeError:
+            self.finished.emit(self.job_id, int(code) if status == QProcess.NormalExit else -1, tail)
+        except RuntimeError:                       # the program quits: this launcher is gone already
             pass
-        self.finished.emit(self.job_id, int(code) if status == QProcess.NormalExit else -1, tail)
 
     def _failed(self, p, err):
         if err == QProcess.FailedToStart and p is self.proc:
-            self.proc = None
+            self.proc, self._ended = None, p
             why = p.errorString()
-            p.deleteLater()
             self.finished.emit(self.job_id, -2, f"the job process did not start ({why})")
 
     def kill(self) -> None:
@@ -761,6 +774,7 @@ class WatcherCore(QObject):
             if not self.journal.transition(job.id, J.QUEUED, J.PROCESSING, started=now, job_dir=spec["out_dir"],
                                            reason="", pid=os.getpid()):
                 continue
+            RN.clear_result(spec["out_dir"])
             timeout = float(wf.node(job.method_node).p("timeout_min") or 30) * 60
             self.current = {"job": job.id, "started": now, "timeout": timeout, "kind": kind,
                             "out_dir": spec["out_dir"]}
@@ -872,6 +886,13 @@ class WatcherApp(QObject):
 
     def quit(self):
         from PySide6.QtWidgets import QApplication
+        # what ends now is not taken in (a job killed here is no failure) and starts nothing new
+        for launcher, slot in ((self.core.launcher, self.core._job_finished),
+                               (self.core.copier, self.core._copy_finished)):
+            try:
+                launcher.finished.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
         if self.core.copier.running():
             self.core.copier.kill()                    # copied again at the next start
         if self.core.launcher.running():

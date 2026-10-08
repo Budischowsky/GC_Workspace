@@ -385,6 +385,35 @@ def test_crash_timeout_and_retry(env, qapp):
     assert launcher.job is None                             # waits for the back-off
 
 
+def test_a_new_attempt_never_takes_the_result_of_the_one_before(env, qapp):
+    """A job tried again after a back-off runs in the same folder: when the new attempt ends without a
+    result (stopped after the time limit), the result of the attempt before is not taken for it."""
+    from gcws.automation import journal as J
+    from gcws.automation.watcher import WatcherCore
+    jr, launcher = env["journal"], FakeLauncher()
+    now = [time.time()]
+    core = WatcherCore(jr, launcher, clock=lambda: now[0])
+    core.tick()
+    now[0] += 61
+    batch = env["watch"] / "26016605_TEST"
+    batch.mkdir()
+    _log(batch, BATCH[:3], completed=True)
+    for n in BATCH[:3]:
+        _acquire(batch, n)
+    core.tick()
+    job_id, spec, _ = launcher.started[0]
+    launcher.complete({"state": "retry", "reason": "file in use"}, code=3)
+    assert jr.job(job_id).state == J.QUEUED and jr.job(job_id).attempts == 1
+    now[0] += 3 * 60                                        # after the back-off
+    core.pump(now[0])
+    _, spec2, _ = launcher.started[-1]
+    assert spec2["out_dir"] == spec["out_dir"] and jr.job(job_id).state == J.PROCESSING
+    now[0] += 31 * 60
+    core.check_timeout(now[0])                              # stopped: no result.json of its own
+    j = jr.job(job_id)
+    assert j.state == J.FAILED and "timeout" in j.reason, (j.state, j.reason, j.attempts)
+
+
 def test_planned_runs_that_never_came(env, qapp):
     """The sequence ends without the second sample's runs: it is not processed, the first one is."""
     from gcws.automation import journal as J
@@ -495,6 +524,33 @@ def test_control_socket(env, qapp, qtbot, monkeypatch):
     assert app.handle("resume")["state"] == "running"
     app.server.close()
     assert WatcherControl("gcws-watcher-nobody").send("status", 300) is None
+
+
+def test_quit_while_a_job_runs_puts_it_back_and_starts_nothing(env, qapp, monkeypatch):
+    """Quit ends the running job; its end arriving meanwhile is not taken for a failure, and the next
+    sample is not started by a watcher that is closing."""
+    from PySide6.QtWidgets import QApplication
+    from gcws.automation import journal as J
+    from gcws.automation import watcher as WM
+    monkeypatch.setattr(QApplication.instance(), "quit", lambda: None)
+    jr, launcher = env["journal"], FakeLauncher()
+    now = [time.time()]
+    core = WM.WatcherCore(jr, launcher, clock=lambda: now[0])
+    core.tick()
+    now[0] += 61
+    batch = env["watch"] / "26016605_TEST"
+    batch.mkdir()
+    _log(batch, BATCH, completed=True)
+    for n in BATCH:
+        _acquire(batch, n)
+    core.tick()
+    assert len(launcher.started) == 1 and len(jr.jobs(states=[J.QUEUED])) == 1
+    job_id = launcher.started[0][0]
+    WM.WatcherApp(core, tray=False).quit()                 # kill() reports the end at once
+    j = jr.job(job_id)
+    assert j.state == J.QUEUED and "closed" in j.reason, (j.state, j.reason)
+    assert len(launcher.started) == 1, "a job was started while the watcher closed"
+    assert not [e for e in jr.events(job_id=job_id) if e["level"] == "error"]
 
 
 def test_autostart_shortcut(tmp_path, monkeypatch):
@@ -1006,6 +1062,84 @@ def test_restart_ends_a_watcher_that_hangs(env, lock_name, monkeypatch):
         assert proc.wait(10) is not None and len(started) == 1
     finally:
         _end(proc)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows job objects")
+def test_a_job_process_ends_with_the_watcher_that_started_it():
+    """A watcher that crashes or is ended (Restart) takes its job process with it: otherwise the job runs
+    on and the next watcher processes it a second time beside it, in the same folder."""
+    import subprocess
+    import sys
+    from gcws import paths
+    from gcws.automation.store import alive
+    # the "watcher": starts a sleeping "job" (through the venv launcher, like the real one) and hands
+    # it over; the job tells its own process number (the interpreter behind the launcher)
+    code = ("import subprocess, sys, time; from gcws.automation import store; "
+            "job = subprocess.Popen([sys.executable, '-c', 'import os, time; print(os.getpid(), flush=True); "
+            "time.sleep(60)'], stdout=subprocess.PIPE); real = job.stdout.readline().decode().strip(); "
+            "ok = store.end_with_this_process(job.pid); "
+            "import os; print(os.getpid(), job.pid, real, ok, flush=True); time.sleep(60)")
+    watcher = subprocess.Popen([sys.executable, "-c", code], cwd=str(paths.ROOT), stdout=subprocess.PIPE)
+    me, launcher, real, ok = watcher.stdout.readline().decode().split()
+    pids = [int(launcher), int(real)]
+    try:
+        assert ok == "True" and all(alive(p) for p in pids)
+        watcher.real_pid = int(me)
+        _end(watcher)                                      # killed, like a crash
+        end = time.monotonic() + 10
+        while any(alive(p) for p in pids) and time.monotonic() < end:
+            time.sleep(0.05)
+        assert not any(alive(p) for p in pids), "the job process outlived its watcher"
+    finally:
+        for p in pids:
+            subprocess.run(["taskkill", "/F", "/PID", str(p)], capture_output=True)
+
+
+def test_the_launcher_hands_its_processes_over(qapp, qtbot, monkeypatch):
+    """Job and copy processes (and GC Workspace's own) are started through ProcessLauncher."""
+    import sys
+    from gcws.automation import store
+    from gcws.automation import watcher as WM
+    handed = []
+    monkeypatch.setattr(store, "end_with_this_process", lambda pid: handed.append(pid) or True)
+    monkeypatch.setattr(WM, "python_exe", lambda windowless=True: sys.executable)
+    launcher = WM.ProcessLauncher()
+    with qtbot.waitSignal(launcher.finished, timeout=20000):   # the process ends (no spec) and is taken in
+        launcher.start("j1", Path("missing-spec.json"))
+        assert handed and handed[0] > 0
+    assert launcher.proc is None
+
+
+def test_a_launcher_closed_right_after_a_job_ended_does_not_crash():
+    """GC Workspace closed (or the watcher quitting) just after a job ended: the launcher goes with its
+    finished process before the event loop runs again. That deleted the process twice: abort()."""
+    import subprocess
+    import sys
+    from gcws import paths
+    code = """if True:
+        import gc, os, sys
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+        from pathlib import Path
+        from PySide6.QtCore import QEventLoop, QTimer
+        from PySide6.QtWidgets import QApplication
+        app = QApplication([])
+        from gcws.automation import watcher as WM
+        WM.python_exe = lambda windowless=True: sys.executable
+        for _ in range(3):                                  # also a launcher that ran more than one job
+            launcher, loop = WM.ProcessLauncher(), QEventLoop()
+            launcher.finished.connect(lambda *a: loop.quit())
+            for i in range(2):
+                launcher.start(f"j{i}", Path("missing-spec.json"))
+                QTimer.singleShot(20000, loop.quit)
+                loop.exec()
+            del launcher
+            gc.collect()
+            app.processEvents()
+        print("survived", flush=True)
+    """
+    r = subprocess.run([sys.executable, "-c", code], cwd=str(paths.ROOT), capture_output=True, text=True,
+                       timeout=120)
+    assert r.returncode == 0 and "survived" in r.stdout, (r.returncode, r.stderr[-800:])
 
 
 # -- little work per look: finished runs are not read again (Oct 2026) -----------------------------------

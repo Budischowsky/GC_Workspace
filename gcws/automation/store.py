@@ -181,6 +181,61 @@ def release_lock(name: str) -> None:
         lock.close()
 
 
+_JOB = None                                         # Windows job object: its processes end with this one
+
+
+def end_with_this_process(pid) -> bool:
+    """The process ``pid`` (a job or copy process this one started) ends when this process ends, also
+    when it crashes or is ended from outside (Restart). Windows lets a child process run on otherwise:
+    the next watcher then processed its job a second time beside it, in the same folder. A venv's
+    launcher takes the interpreter it runs with it. False where this is not possible."""
+    global _JOB
+    if os.name != "nt":
+        return False
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateJobObjectW.restype = wintypes.HANDLE
+    k32.CreateJobObjectW.argtypes = (ctypes.c_void_p, wintypes.LPCWSTR)
+    k32.SetInformationJobObject.argtypes = (wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD)
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    k32.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
+    k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    if _JOB is None:
+        class Basic(ctypes.Structure):
+            _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                        ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                        ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                        ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                        ("SchedulingClass", wintypes.DWORD)]
+
+        class Extended(ctypes.Structure):
+            _fields_ = [("BasicLimitInformation", Basic), ("IoInfo", ctypes.c_uint64 * 6),
+                        ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                        ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+        job = k32.CreateJobObjectW(None, None)
+        if not job:
+            return False
+        info = Extended()
+        info.BasicLimitInformation.LimitFlags = 0x2000          # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):   # extended limits
+            k32.CloseHandle(job)
+            return False
+        _JOB = job                                              # closed by Windows when this process ends
+    try:
+        pid = int(pid or 0)
+    except (TypeError, ValueError):
+        return False
+    handle = k32.OpenProcess(0x0101, False, pid) if pid > 0 else None    # PROCESS_SET_QUOTA | TERMINATE
+    if not handle:
+        return False
+    try:
+        return bool(k32.AssignProcessToJobObject(_JOB, handle))
+    finally:
+        k32.CloseHandle(handle)
+
+
 def lock_held(name: str) -> bool:
     """True while some process (this one too) holds the lock ``name``."""
     if name in _LOCKS:
