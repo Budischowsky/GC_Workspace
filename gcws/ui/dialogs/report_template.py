@@ -29,9 +29,13 @@ VALUE_ROLE = Qt.UserRole + 1
 
 
 class _ColumnsDelegate(QStyledItemDelegate):
-    """Decimals as a spin box ("auto" = the column's default), the double-determination view as a list."""
+    """Decimals as a spin box ("auto" = the column's default), the double-determination view as a list. The
+    column itself and the decimals of a text column are not edited."""
 
     def createEditor(self, parent, option, index):
+        field = C.get(index.sibling(index.row(), C_FIELD).data(FIELD_ROLE))
+        if index.column() == C_FIELD or (index.column() == C_DEC and field is not None and not field.numeric):
+            return None
         if index.column() == C_DEC:
             box = QSpinBox(parent)
             box.setRange(-1, 8)
@@ -39,7 +43,6 @@ class _ColumnsDelegate(QStyledItemDelegate):
             return box
         if index.column() == C_VIEW:
             combo = QComboBox(parent)
-            field = C.get(index.sibling(index.row(), C_FIELD).data(FIELD_ROLE))
             for v in C.views_for(field) if field is not None else ["mean"]:
                 combo.addItem(TP.VIEWS[v], v)
             return combo
@@ -81,6 +84,7 @@ class ReportTemplateDialog(QDialog):
         self.tpl = TP.preset("Empty")
         self._baseline = None
         self._focus_edit = None
+        self._shown_info = None                          # the quantification the column list was greyed for
         self.last_table = None
 
         top = QHBoxLayout()
@@ -278,6 +282,7 @@ class ReportTemplateDialog(QDialog):
         self.lines.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
         self.lines.verticalHeader().setVisible(False)
         self.lines.itemChanged.connect(lambda *_: self._header_edited())
+        self.lines.installEventFilter(self)             # focus here: placeholders go into its cells
         lay.addWidget(self.lines, 1)
         h = QHBoxLayout()
         b_add = QPushButton("Add field")
@@ -456,6 +461,7 @@ class ReportTemplateDialog(QDialog):
         self.tpl, self.name, self._baseline = tpl, name, copy.deepcopy(tpl)
         self._refresh_names()
         self._update_state()
+        self.refresh_preview()                           # {template} is the new name
         return True
 
     def save_as(self, name=None) -> bool:
@@ -605,6 +611,7 @@ class ReportTemplateDialog(QDialog):
     def _fill_palette(self):
         from PySide6.QtGui import QPalette
         info = C.Info.of_quant(self.ws.quant)
+        self._shown_info = self._quant_info()
         muted = self.fields_tree.palette().color(QPalette.Disabled, QPalette.Text)
         self.fields_tree.clear()
         bold = QFont()
@@ -675,9 +682,10 @@ class ReportTemplateDialog(QDialog):
             it = self.cols.topLevelItem(i)
             key = it.data(C_FIELD, FIELD_ROLE)
             f = C.get(key)
-            header = it.text(C_HEADER)
-            if f is not None and header == C.header_of(f, "", self.ws.quant):
-                header = ""                              # the default follows the unit
+            text, stored = it.text(C_HEADER), it.data(C_HEADER, VALUE_ROLE) or ""
+            default = C.header_of(f, "", self.ws.quant) if f is not None else ""
+            # unchanged: the template's own header; typed as the default: the default (follows the unit)
+            header = stored if text == (stored or default) else ("" if text == default else text)
             out.append({"field": key, "header": header, "decimals": it.data(C_DEC, VALUE_ROLE),
                         "view": it.data(C_VIEW, VALUE_ROLE) or "mean"})
         return out
@@ -788,8 +796,8 @@ class ReportTemplateDialog(QDialog):
 
     def eventFilter(self, obj, event):
         from PySide6.QtCore import QEvent
-        if event.type() == QEvent.FocusIn and isinstance(obj, QLineEdit):
-            self._focus_edit = obj
+        if event.type() == QEvent.FocusIn:
+            self._focus_edit = obj if isinstance(obj, QLineEdit) else None
         return super().eventFilter(obj, event)
 
     def _header_edited(self):
@@ -861,14 +869,29 @@ class ReportTemplateDialog(QDialog):
         return [], None
 
     def _fields(self) -> set:
-        t = self.tpl
-        return {c["field"] for c in t["columns"]} | {t["rows"]["limit"]["field"], t["extras"]["sml_bold_field"],
-                                                     "conc:mg_kg"} - {""}
+        from gcws.report.assemble import template_fields
+        return template_fields(self.tpl)                 # what the report itself reads
+
+    def _quant_info(self) -> tuple:
+        info = C.Info.of_quant(self.ws.quant)
+        return info.mode, info.units, info.detector, info.features
 
     def _data_changed(self, *_):
         self._cache.clear()
+        if self._quant_info() != self._shown_info:
+            self._quant_shown()                          # another mode: grey what it cannot fill
         if self.isVisible():
             self.refresh_preview()
+
+    def _quant_shown(self) -> None:
+        """The column list, the report columns and the concentration choices for the current mode."""
+        was, self._loading = self._loading, True
+        try:
+            self._fill_palette()
+            self._fill_columns()
+            self._fill_conc_combos()
+        finally:
+            self._loading = was
 
     def report_data(self):
         """The (cached) data of the previewed determinations, or None."""
@@ -893,19 +916,22 @@ class ReportTemplateDialog(QDialog):
     def _render(self):
         from gcws.report import table as TB
         from gcws.report.template_html import to_html
+        self.warnings.setVisible(True)
         try:
             data = self.report_data()
+            if data is not None:
+                # the cached data keeps the names it was collected with: the template may be saved since
+                data.values.update(template=self.name, method=self._method_name())
+                table = TB.build(data, self.tpl)
         except Exception as exc:  # noqa: BLE001 - the window stays usable
             self.preview.setHtml("")
             self.warnings.setText(f"No preview: {exc}")
             return
-        self.warnings.setVisible(True)
         if data is None:
             self.what.setText("")
             self.warnings.setText("Activate a sample (or a replicate group) to see the report here.")
             self.preview.setHtml("")
             return
-        table = TB.build(data, self.tpl)
         self.what.setText(f"{data.values.get('samples', '')} — {data.values.get('determination', '')}")
         self.warnings.setText("\n".join("⚠ " + w for w in table.warnings[:6]))
         self.warnings.setVisible(bool(table.warnings))

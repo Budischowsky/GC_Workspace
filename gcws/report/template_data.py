@@ -14,8 +14,11 @@ from typing import Optional
 
 from gcws.report import catalog as C
 
-#: fields every report reads (filters, sorting, sums, footnotes)
-BASE_FIELDS = {"rt", "name", "cas", "score", "conc", "istd", "sml", "ref", "footnote"}
+#: fields every report reads (filters, sorting, sums, footnotes, the Determinations sheet's Conc. 1 / 2)
+BASE_FIELDS = {"rt", "name", "cas", "score", "conc", "istd", "sml", "ref", "footnote", "report_unit_1",
+               "report_unit_2"}
+#: fields a field is computed from (the SML check compares the mg/kg)
+NEEDS = {"sml_check": {"conc:mg_kg"}}
 #: peak fields read off the integrated peak (``peak_values``) rather than the merged row
 _SOURCE_FIELDS = {"rt", "name", "cas", "score", "id_status", "ri", "corr_area", "raw_area"}
 ISTD_CODES = {"IS1", "IS2", "IS3", "IS4"}
@@ -254,6 +257,7 @@ def collect(ws, members: list, group: Optional[dict], *, fields=(), method_name:
         rows = [dict(r, report=DV.default_report(r, v), deleted=False, dismissed=0, comment="", edited={})
                 for r, v in zip(rows, verdicts)]
     fields = set(fields) | BASE_FIELDS
+    fields |= {k for f in fields for k in NEEDS.get(f, ())}
     wanted = [C.get(k) for k in fields if C.get(k) is not None]
     skey = quant_detector(q)
     settings = make_settings(q.get("hs" if mode == "hs_screening" else "settings"))

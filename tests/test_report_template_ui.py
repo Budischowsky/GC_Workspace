@@ -71,6 +71,92 @@ def test_header_rows_and_extras_reach_the_template(dlg):
     assert dlg.tpl["extras"]["orientation"] == "portrait" and not dlg.tpl["extras"]["on_method_run"]
 
 
+def test_a_placeholder_goes_where_the_analyst_is(dlg):
+    from PySide6.QtCore import QEvent
+    from PySide6.QtGui import QFocusEvent
+    from PySide6.QtWidgets import QApplication
+    dlg.add_header_field(new_line=True, label="Customer:", value="")
+    title = dlg.title_edit.text()
+    QApplication.sendEvent(dlg.title_edit, QFocusEvent(QEvent.FocusIn))     # the title had the focus ...
+    QApplication.sendEvent(dlg.lines, QFocusEvent(QEvent.FocusIn))          # ... then the header lines
+    r = dlg.lines.rowCount() - 1
+    dlg.lines.setCurrentCell(r, 2)
+    dlg.insert_placeholder("date")
+    assert dlg.title_edit.text() == title and dlg.lines.item(r, 2).text() == "{date}"
+    assert dlg.tpl["header"]["lines"][-1] == [{"label": "Customer:", "value": "{date}"}]
+
+
+def test_only_headers_views_and_the_decimals_of_numbers_are_edited(dlg):
+    from PySide6.QtWidgets import QSpinBox, QStyleOptionViewItem
+    from gcws.ui.dialogs.report_template import C_DEC, C_FIELD, C_HEADER
+    delegate, model, parent = dlg.cols.itemDelegate(), dlg.cols.model(), dlg.cols.viewport()
+    fields = [c["field"] for c in dlg.tpl["columns"]]
+    rt, name = fields.index("rt"), fields.index("name")
+    editor = lambda row, col: delegate.createEditor(parent, QStyleOptionViewItem(), model.index(row, col))
+    assert editor(rt, C_FIELD) is None and editor(name, C_DEC) is None
+    for w in (editor(rt, C_DEC), editor(rt, C_HEADER)):
+        assert w is not None
+        w.deleteLater()
+    assert isinstance(editor(rt, C_DEC), QSpinBox)
+
+
+def test_a_mode_change_greys_what_the_mode_cannot_fill(dlg, win):
+    def palette_item(key):
+        for i in range(dlg.fields_tree.topLevelItemCount()):
+            top = dlg.fields_tree.topLevelItem(i)
+            for j in range(top.childCount()):
+                if top.child(j).data(0, 256) == key:
+                    return top.child(j)
+    row = [c["field"] for c in dlg.tpl["columns"]].index("conc:mg_dm2")
+    assert "Not in this quantification" not in palette_item("conc:mg_dm2").toolTip(0)
+    win.ws.quant["mode"] = "area_pct"
+    win.ws.quantChanged.emit()
+    assert "Not in this quantification" in palette_item("conc:mg_dm2").toolTip(0)
+    assert dlg.cols.topLevelItem(row).text(0).startswith("⚠")
+    assert dlg.sml_bold.findData("conc:mg_dm2") < 0 or dlg.sml_bold.currentData() == "conc:mg_kg"
+
+
+def test_columns_moved_back_are_not_a_change(dlg):
+    assert dlg.save_as("Lab") and not dlg.is_modified()
+    dlg._sync_columns()                          # what a drag and drop that ends where it began does
+    assert not dlg.is_modified() and dlg.tpl["columns"][0]["header"] == "RT (min)"
+
+
+def test_a_failing_preview_leaves_the_window_usable(dlg, monkeypatch):
+    from gcws.report import table as TB
+
+    def boom(*_a, **_k):
+        raise ValueError("boom")
+    monkeypatch.setattr(dlg, "report_data", lambda: SimpleNamespace(values={}))
+    monkeypatch.setattr(TB, "build", boom)
+    dlg._render()
+    assert "boom" in dlg.warnings.text()
+
+
+def test_saving_a_preview_counts_substances_only_when_the_template_asks(win, monkeypatch, tmp_path):
+    from gcws.report import service as RS
+    from gcws.ui.dialogs import report_preview as RP
+    calls = []
+
+    class Preview:
+        def __init__(self, *_a, **_k):
+            self.saved_to = tmp_path / "saved.xlsx"
+
+        def exec(self):
+            return 1
+    monkeypatch.setattr(RS, "record_seen", lambda *a: calls.append(a) or "")
+    monkeypatch.setattr(RP, "ReportPreview", Preview)
+    tpl = TP.preset("NIAS")
+    tpl["extras"]["record_seen"] = False
+    job = SimpleNamespace(names=["x"], template=tpl, sample_key="x")
+    res = SimpleNamespace(target=tmp_path / "t.xlsx", word=None, batch=None, warnings=[], reported=[{"name": "a"}])
+    win._report_done("template", job, res, [], True)
+    assert calls == []
+    tpl["extras"]["record_seen"] = True
+    win._report_done("template", job, res, [], True)
+    assert len(calls) == 1
+
+
 def test_named_store_and_the_method(dlg, win):
     assert dlg.save_as("Customer A") and TP.names() == ["Customer A"]
     assert not dlg.is_modified() and dlg.templates.currentText() == "Customer A"

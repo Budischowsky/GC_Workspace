@@ -2335,7 +2335,8 @@ class MainWindow(QMainWindow):
             dlg = ReportPreview(f"{RS.KINDS[kind]} - preview", {"xlsx": res.target, "docx": res.word,
                                                                "batch": res.batch, "default": res.target.name},
                                 pages, self, warnings=res.warnings)
-            if dlg.exec() and dlg.saved_to is not None:
+            tpl = getattr(job, "template", None)              # a Template report counts only when it asks to
+            if dlg.exec() and dlg.saved_to is not None and (tpl is None or tpl["extras"]["record_seen"]):
                 err = RS.record_seen(kind, res.reported, dlg.saved_to, job.sample_key)
                 self.statusBar().showMessage(f"Saved {dlg.saved_to}" + (f" ({err})" if err else ""), 8000)
             return

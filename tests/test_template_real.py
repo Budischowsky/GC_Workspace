@@ -21,11 +21,12 @@ def _group(ws):
 
 
 def _build(ws, tpl, group=None):
+    from gcws.report import assemble as AS
     from gcws.report import table as TB
+    from gcws.report import template as TP
     from gcws.report import template_data as TD
     g = group or _group(ws)
-    fields = {c["field"] for c in tpl["columns"]} | {tpl["rows"]["limit"]["field"], tpl["extras"]["sml_bold_field"]}
-    data = TD.collect(ws, g["members"], g, fields=fields - {""})
+    data = TD.collect(ws, g["members"], g, fields=AS.template_fields(TP.normalise(tpl)))
     return data, TB.build(data, tpl)
 
 
@@ -67,6 +68,22 @@ def test_the_nias_layout_matches_the_nias_report(ws, tmp_path):
         # the NIAS Report rounds the mg/dm² of a repeated-substance sum to 3 decimals
         assert a[2] == b[2] or (a[0].startswith("Sum of") and abs(a[2] - b[2]) < 0.001), (a, b)
     assert [r.kind for r in table.rows].count("sum") == sum(1 for x in legacy if x[0].startswith("Sum of"))
+
+
+def test_the_determinations_sheet_and_the_sml_check_need_no_further_column(ws):
+    """The Determinations sheet lists each determination's Conc. 1 / 2, and the SML check compares the
+    mg/kg, whether or not the template shows those columns."""
+    from gcws.report import template as TP
+    data, table = _build(ws, TP.preset("NIAS"))               # columns mg/dm² and mg/kg, not Conc. 1 / 2
+    assert set(data.values) == set(TP.PLACEHOLDERS)           # every header value can be inserted
+    head, lines = table.determinations[0], table.determinations[1:]
+    assert head[3:8] == ["A [mg/kg]", "A [mg/dm²]", "A outlier", "B [mg/kg]", "B [mg/dm²]"]
+    assert lines and all(line[3] is not None or line[6] is not None for line in lines)
+    assert all(isinstance(line[4], float) for line in lines if line[3] is not None)
+    tpl = TP.preset("Empty")
+    tpl["columns"] = [{"field": "name"}, {"field": "sml_check"}]
+    _data, table = _build(ws, tpl)
+    assert table.rows and all(r.cells[1].value in ("no SML", "≤ SML", "> SML") for r in table.rows)
 
 
 def test_every_quantification_mode_reports(ws, tmp_path):

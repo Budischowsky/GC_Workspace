@@ -31,6 +31,7 @@ ORIENTATIONS = ("landscape", "portrait")
 #: header placeholders -> what they are replaced by
 PLACEHOLDERS = {
     "sample": "Sample name(s) of the determinations",
+    "samples": "Run names of the determinations",
     "group": "Replicate group name",
     "determination": "single / double / N-fold determination",
     "n": "Number of determinations",
