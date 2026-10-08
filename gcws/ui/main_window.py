@@ -55,6 +55,27 @@ def _report_inputs(data: dict) -> dict:
     return json.loads(json.dumps(inputs, sort_keys=True, default=str))
 
 
+
+def write_reports(jobs) -> list[dict]:
+    """Write report jobs (worker thread): ``[{"names", "target", "warnings"} or {"names", "error"}]``. A report
+    file that is open elsewhere is written beside it with ``_2``."""
+    from gcws.report import service as RS
+    out = []
+    for job in jobs:
+        try:
+            try:
+                res = RS.generate(job)
+            except PermissionError:
+                job.target = job.target.with_name(job.target.stem + "_2.xlsx")
+                job.word = job.target.with_suffix(".docx")
+                res = RS.generate(job)
+                res.warnings.append("the report file was open: written with _2")
+            out.append({"names": job.names, "target": str(res.target), "warnings": res.warnings})
+        except Exception as exc:  # noqa: BLE001 - the other reports are still written
+            out.append({"names": job.names, "error": str(exc)})
+    return out
+
+
 class MainWindow(QMainWindow):
     @property
     def _report2_job(self):
@@ -1294,10 +1315,66 @@ class MainWindow(QMainWindow):
             if n:
                 steps.append(f"{n} ISTD peak(s) detected and bound")
             self.ws.recompute_quant()
+            reports = self._method_reports(ids)
+            if reports:
+                steps.append(reports)
         finally:
             self.end_activity("method")
         self.ws.log("Processing method run", "", job["name"], "", "; ".join(steps))
         self.statusBar().showMessage(f"Method '{job['name']}' run: " + "; ".join(steps), 15000)
+
+    def _method_reports(self, ids) -> str:
+        """Run Method, last step: the Template Report of every processed sample (each replicate group whose
+        determinations were all processed) when the method's template asks for it, next to the data and
+        without any window. Returns what was started, for the status bar."""
+        from gcws.quant.grouping import for_workspace
+        from gcws.report import assemble as AS
+        from gcws.report import template as TP
+        tpl = TP.of(self.ws.quant)
+        if tpl is None or not tpl["extras"]["on_method_run"] or not tpl["columns"]:
+            return ""
+        processed = set(ids)
+        method_name = QSettings().value("method/current", "") or ""
+        groups, _ = for_workspace(self.ws)
+        jobs, skipped = [], []
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            for g in groups:
+                members = [m for m in g["members"] if m in self.ws.runs]
+                if not members or not set(members) <= processed:
+                    continue
+                try:
+                    mem, samples = AS.prepare(self.ws, "template", g, recompute=False)
+                    jobs.append(AS.build_job(self.ws, "template", g, AS.default_target(self.ws, "template", mem),
+                                             members=mem, samples=samples, method_name=method_name))
+                except AS.ReportNotPossible as exc:
+                    skipped.append(f"{g['name']}: {exc.message.splitlines()[0]}")
+                except Exception as exc:  # noqa: BLE001 - the other samples are still reported
+                    skipped.append(f"{g['name']}: {exc}")
+        finally:
+            QApplication.restoreOverrideCursor()
+        for line in skipped:
+            self.ws.log("Template Report not made", "", line)
+        if not jobs:
+            return f"no Template Report ({skipped[0]})" if skipped else ""
+        self.begin_activity("template_reports", f"Template Report: writing {len(jobs)} report(s)")
+        workers.submit(write_reports, jobs, on_done=lambda r: self._method_reports_done(r, skipped),
+                       on_error=lambda e: (self.end_activity("template_reports"), self._report_failed(e)))
+        return f"{len(jobs)} Template Report(s) being written" + (f", {len(skipped)} not possible" if skipped else "")
+
+    def _method_reports_done(self, results, skipped):
+        self.end_activity("template_reports")
+        written = [r for r in results if r.get("target")]
+        for r in results:
+            self.ws.log("Template Report" if r.get("target") else "Template Report failed", ", ".join(r["names"]),
+                        str(r.get("target") or ""), "", "; ".join(r.get("warnings") or []) or r.get("error", ""))
+        text = f"Template Report: {len(written)} written next to the data"
+        if written:
+            text += f" ({Path(written[0]['target']).name}" + (" ..." if len(written) > 1 else "") + ")"
+        failed = len(results) - len(written) + len(skipped)
+        if failed:
+            text += f"; {failed} not made (see the audit trail)"
+        self.statusBar().showMessage(text, 15000)
 
     def _method_detect_istds(self, ids) -> int:
         """Bind the internal standards the detection finds with high confidence (one undo step);

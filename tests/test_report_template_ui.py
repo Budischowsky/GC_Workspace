@@ -1,4 +1,6 @@
 """The Report template window: columns, header, rules, named store, method, preview (no modal dialog waits)."""
+from types import SimpleNamespace
+
 import pytest
 
 from gcws import paths
@@ -97,3 +99,38 @@ def test_preview_follows_the_active_run_and_edits(qtbot, dlg, win, samples):
     dlg.title_edit.setText("Changed title")
     dlg.title_edit.textEdited.emit("Changed title")
     qtbot.waitUntil(lambda: "Changed title" in dlg.preview.toHtml(), timeout=3000)
+
+
+def test_run_method_writes_the_template_report(qtbot, win, samples, tmp_path, monkeypatch):
+    from gcws.report import assemble as AS
+    from gcws.ui import main_window as MW
+    from gcws.ui import workers
+    _load(qtbot, win, samples, ["06_", "07_", "08_", "11_"])
+    ws = win.ws
+    ids = list(ws.order)
+    for st in ws.states():
+        if st.name.startswith(("07_", "11_")):
+            st.run.role = "sample"
+    ws.replicate_groups = [{"id": "g", "name": "pair", "members": [s.id for s in ws.states()
+                                                                    if s.name.startswith(("07_", "11_"))],
+                            "policy": "all"}]
+    ws.recompute_quant()
+    monkeypatch.setattr(AS, "default_target", lambda ws, kind, members, template=None:
+                        tmp_path / f"{len(members)}{'_'.join(ws.runs[m].name[:2] for m in members)}.xlsx")
+    monkeypatch.setattr(workers, "submit", lambda fn, *a, on_done=None, on_error=None, **k: on_done(fn(*a)))
+    assert win._method_reports(ids) == ""                               # no template: no report
+    tpl = TP.stamped(TP.preset("NIAS"), "Lab")
+    tpl["extras"]["on_method_run"] = False
+    ws.quant[TP.QUANT_KEY] = tpl
+    assert win._method_reports(ids) == ""                               # the template does not ask for it
+    tpl["extras"]["on_method_run"] = True
+    ws.quant[TP.QUANT_KEY] = TP.normalise(tpl)
+    text = win._method_reports(ids)
+    assert text.startswith("1 Template Report(s) being written")
+    assert (tmp_path / "207_11.xlsx").exists() and (tmp_path / "207_11.docx").exists()
+    assert any(r.action == "Template Report" for r in ws.audit.records)
+    assert "1 written next to the data" in win.statusBar().currentMessage()
+    # a report that cannot be written does not stop the others
+    out = MW.write_reports([SimpleNamespace(names=["x"], kind="template", target=tmp_path / "missing" / "x.xlsx",
+                                            word=None, table=None, template=None)])
+    assert out[0]["names"] == ["x"] and "error" in out[0]
