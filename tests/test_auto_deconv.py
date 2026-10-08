@@ -473,3 +473,41 @@ def test_panel_switches_the_split_and_the_analyst_keeps_a_peak_unsplit(win):
     assert len(fragments(ws, st)) == 2 and not st.events(FID)
     st.undo.undo()
     assert not fragments(ws, st)
+
+
+def test_merge_tool_merges_split_peaks_back(win):
+    """Merge peaks on deconvoluted peaks: a drag across them, a click on one or the table's action undoes
+    the split (an automatic split gets the Keep unsplit mark); Ctrl+Z brings it back."""
+    from PySide6.QtCore import Qt
+    ws = win.ws
+    ws.deconv_background = False
+    st = load(ws, make_run("S_A"))
+    ws.set_active(st.id)
+    win.events.load()
+    win.events.deconv_mode.setCurrentText("Automatic")
+    win.events._apply(False)
+    parts = fragments(ws, st)
+    assert len(parts) == 2
+    a, b = parts[0].apex_rt, parts[1].apex_rt
+    win.tools.set_tool("merge")
+    try:
+        win.tools.drag_finished(win.chrom.vb, a - .001, 0, b + .001, 0, Qt.NoModifier, (1.0, 0.0), key=FID)
+        assert not fragments(ws, st) and len(st.events(FID)) == 1
+        st.undo.undo()
+        assert len(fragments(ws, st)) == 2 and not st.events(FID)
+        win.tools.click(win.chrom.vb, b, 0, Qt.NoModifier, (1.0, 0.0), FID)
+        assert not fragments(ws, st)
+        st.undo.undo()
+        # a drag over plain peaks still merges them as before
+        whole = [p for p in ws.result(st.id, FID).peaks if not p.extra.get("deconv_component")]
+        assert whole and win.tools.drag_finished(win.chrom.vb, whole[0].start, 0, whole[0].end, 0,
+                                                 Qt.NoModifier, (1.0, 0.0), key=FID)
+        assert st.events(FID)[-1].kind.name == "MERGE"
+        st.undo.undo()
+    finally:
+        win.tools.set_tool("select")
+    ws.select_peak(ws.result(st.id, FID).peaks.index(fragments(ws, st)[0]))
+    win.merge_deconvoluted()
+    assert not fragments(ws, st)
+    st.undo.undo()
+    assert len(fragments(ws, st)) == 2

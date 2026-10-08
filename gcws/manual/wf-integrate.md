@@ -42,7 +42,7 @@ the signal of the panel you use them in.
 | **Delete peak** | `D` | Click a peak, or drag across several. |
 | **Add peak** | `A` | Drag from the start to the end of a peak that was not found. |
 | **Move start/end** | `M` | Drag the start or the end of a peak. |
-| **Merge peaks** | `G` | Drag across the peaks that should be one. |
+| **Merge peaks** | `G` | Drag across the peaks that should be one. On deconvoluted peaks, a click or a drag undoes their deconvolution split. |
 | **Tangent skim** | `K` | Click the large peak, then the small peak riding on its tail. With `Shift` the skim line is an exponential curve instead of a straight line. |
 | **Negative peak** | `N` | Drag across a peak that points downwards. |
 | **Reset range** | `R` | Drag across a range to discard all manual changes in it. |
@@ -114,6 +114,10 @@ made again at every integration from the present settings.
 - **Keep unsplit (no automatic deconvolution split)** in the right-click menu of the peak table integrates the
   selected peak (for a fragment: its whole peak) as one peak again. **Allow automatic deconvolution split**
   removes that mark. The mark is a manual event and can be undone.
+- **Merge deconvoluted peaks** (right-click menu of the peak table, or the **Merge peaks** tool `G` in
+  Chromatogram 1 or 2: click a fragment or drag across the fragments) undoes the deconvolution split, in
+  the FID and in the TIC. A split you made by hand is removed; an automatic split gets the Keep unsplit
+  mark. Ctrl+Z brings the split back.
 - To split a peak differently, keep it unsplit first and then split it by hand with
   **Identify > Deconvolution...**. A peak you split by hand is never split automatically.
 - The timed events **Deconvolution split off** / **Deconvolution split on** switch it off for a stretch.

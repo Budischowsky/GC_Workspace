@@ -27,7 +27,7 @@ shows it (*Tool: ...*).
 | **Delete peak** | `D` | A click deletes a peak; dragging deletes all peaks crossed. |
 | **Add peak** | `A` | Drag from the start to the end of the new peak. |
 | **Move start/end** | `M` | Drag a start or end of a peak. |
-| **Merge peaks** | `G` | Drag across the peaks to make them one. |
+| **Merge peaks** | `G` | Drag across the peaks to make them one. On deconvoluted peaks (FID or TIC), a click or a drag merges them back: their deconvolution split is undone. |
 | **Tangent skim** | `K` | Click the parent peak, then the rider on its tail. `Shift`: exponential skim. |
 | **Negative peak** | `N` | Drag across a negative peak to integrate it. |
 | **Reset range** | `R` | Drag across a range to discard the manual changes in it. |

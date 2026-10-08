@@ -31,7 +31,8 @@ TOOLS = [
     ("delete", "Delete peak", "D", "Click a peak or drag across several to delete them"),
     ("add", "Add peak", "A", "Drag from peak start to end"),
     ("move", "Move start/end", "M", "Drag a peak start or end"),
-    ("merge", "Merge peaks", "G", "Drag across the peaks to merge"),
+    ("merge", "Merge peaks", "G", "Drag across the peaks to merge; click or drag across deconvoluted peaks "
+                                  "to merge them back (their deconvolution split is undone)"),
     ("skim", "Tangent skim", "K", "Click the parent peak, then the rider (Shift: exponential)"),
     ("negative", "Negative peak", "N", "Drag across a negative peak"),
     ("reset", "Reset range", "R", "Drag to discard manual changes in a range"),
@@ -43,6 +44,7 @@ SNAP_PX = 8
 class ToolController(QObject):
     toolChanged = QtSignal(str)
     eventCreated = QtSignal(object, str)   # ManualEvent, signal key it belongs to
+    unsplitRequested = QtSignal(float, float, str)   # merge deconvoluted peaks: t0, t1, signal key
     peakClicked = QtSignal(int)
 
     def __init__(self, ws):
@@ -144,6 +146,11 @@ class ToolController(QObject):
             if idx >= 0:
                 self.eventCreated.emit(ManualEvent(K.DELETE, res.peaks[idx].apex_rt), key)
             return True
+        if self.tool == "merge":
+            from gcws.integration.merge_deconv import fragments
+            if fragments(res.peaks if res is not None else [], x, x):
+                self.unsplitRequested.emit(x, x, key)
+            return True
         if self.tool == "skim":
             idx = self.peak_index_at(x, key)
             if idx < 0:
@@ -190,7 +197,11 @@ class ToolController(QObject):
         elif tool == "negative":
             self.eventCreated.emit(ManualEvent(K.NEGATIVE_PEAK, lo, hi), key)
         elif tool == "merge":
-            self.eventCreated.emit(ManualEvent(K.MERGE, lo, hi), key)
+            from gcws.integration.merge_deconv import fragments
+            if fragments(res.peaks if res is not None else [], lo, hi):
+                self.unsplitRequested.emit(lo, hi, key)       # deconvoluted peaks: undo their split
+            else:
+                self.eventCreated.emit(ManualEvent(K.MERGE, lo, hi), key)
         elif tool == "delete":
             self.eventCreated.emit(ManualEvent(K.DELETE, lo, hi), key)
         elif tool == "reset":

@@ -390,6 +390,9 @@ class MainWindow(QMainWindow):
                                    "integration method splits co-eluted peaks automatically")
         self.allowSplitAction = A("Allow automatic deconvolution split", lambda: self.keep_unsplit(False), None,
                                   None, "Remove the Keep unsplit mark of the selected peak")
+        self.mergeDeconvAction = A("Merge deconvoluted peaks", lambda: self.merge_deconvoluted(), None, None,
+                                   "Undo the deconvolution split of the selected peak: its fragments become one "
+                                   "peak again (also: Merge peaks tool, click or drag across them)")
         self.tool_actions = {}
         group = QActionGroup(self)
         group.setExclusive(True)
@@ -686,6 +689,7 @@ class MainWindow(QMainWindow):
         self.ws.deconvJobChanged.connect(lambda key, active, label:
                                          self.begin_activity(key, label) if active else self.end_activity(key))
         self.tools.eventCreated.connect(self._manual_event)
+        self.tools.unsplitRequested.connect(self.merge_deconvoluted)
         self.tools.toolChanged.connect(self._tool_changed)
         self.ws.message.connect(lambda t: self.statusBar().showMessage(t, 8000))
         self.ws.panelsChanged.connect(self._save_panels)
@@ -706,7 +710,7 @@ class MainWindow(QMainWindow):
         self.props.roleRequested.connect(self.set_role)
         self.table.set_context_actions([self.spectrumSearchNistAction, self.spectrumSearchAtlasAction,
                                         self.registerUnknownAction, self.setIstdAction, self.splitDeconvAction,
-                                        self.keepUnsplitAction, self.allowSplitAction])
+                                        self.keepUnsplitAction, self.allowSplitAction, self.mergeDeconvAction])
         self.table.searchRequested.connect(self.library_search)
         self.table.integrateRequested.connect(self.integrate)
         for plot in self.chroms:
@@ -1610,6 +1614,34 @@ class MainWindow(QMainWindow):
             return
         st.undo.push(ManualEventsCommand(self.ws, st.id, key, [e for e in events if e not in marks],
                                          f"allow the automatic split of peak {peak.apex_rt:.3f}"))
+
+    def merge_deconvoluted(self, lo=None, hi=None, key=None):
+        """Merge deconvoluted peaks: the deconvolution split of the fragments with their apex in [lo, hi]
+        of ``key`` (default: the selected peak of the table) is undone, in one undo step."""
+        from gcws.integration import auto_deconv as AD
+        from gcws.integration import merge_deconv as MD
+        st = self.ws.active
+        if st is None:
+            return
+        if lo is None:
+            peak = self.ws.selected_peak()
+            if peak is None:
+                self.statusBar().showMessage("Select a deconvoluted peak first.", 6000)
+                return
+            lo = hi = peak.apex_rt
+        key = self.ws.effective_key(st, key or self.ws.active_key)
+        res = self.ws.result(st.id, key)
+        presplit = st.presplit.get(key)
+        events, merged, problems = MD.unsplit(st.events(key), res.peaks if res is not None else [], lo, hi,
+                                              AD.enabled(self.ws._method_of(st, key)),
+                                              presplit.peaks if presplit is not None else None)
+        if not merged:
+            self.statusBar().showMessage("; ".join(problems) or "No deconvoluted peak there.", 8000)
+            return
+        text = "merge deconvoluted peaks at " + ", ".join(f"{t:.3f}" for t in merged) + " min"
+        st.undo.push(ManualEventsCommand(self.ws, st.id, key, events, text))
+        self.statusBar().showMessage("Merged the deconvoluted peaks at " + ", ".join(f"{t:.3f}" for t in merged)
+                                     + " min. Ctrl+Z to undo" + "".join("; " + p for p in problems), 8000)
 
     def register_unknown(self):
         from gcws.ui.dialogs.register import save_unknown

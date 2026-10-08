@@ -394,3 +394,29 @@ def test_fid_deconvolution_fragments_appear_on_tic_and_follow_undo(qtbot, win, s
     assert len(tic_panel._deconv_markers.points()) == len(fragments)
     for point, peak in zip(tic_panel._deconv_markers.points(), fragments):
         assert point.pos().x() == pytest.approx(peak.extra['deconv_component']['rt'])
+
+
+@pytest.mark.parametrize('key', ['FID', 'TIC'])
+def test_merge_deconvoluted_peaks_removes_the_split(qtbot, win, samples, key):
+    """Merge deconvoluted peaks (table action or Merge peaks tool) removes the analyst's split event."""
+    from PySide6.QtCore import Qt
+    ws, st, dlg = _open(qtbot, win, samples, key, 13.41, delay=.006)
+    before = ws.active_result().digest
+    dlg.split()
+    dlg.close()
+    frags = [p for p in ws.active_result().peaks if p.extra.get('deconv_component')]
+    assert len(frags) >= 2
+    ws.select_peak(ws.active_result().peaks.index(frags[0]))
+    win.merge_deconvoluted()
+    assert ws.active_result().digest == before
+    assert not any(p.extra.get('deconv_component') for p in ws.active_result().peaks)
+    st.undo.undo()
+    frags = [p for p in ws.active_result().peaks if p.extra.get('deconv_component')]
+    assert len(frags) >= 2
+    win.tools.set_tool('merge')
+    try:
+        win.tools.drag_finished(win.chrom.vb, frags[0].apex_rt - .001, 0, frags[-1].apex_rt + .001, 0,
+                                Qt.NoModifier, (1.0, 0.0), key=ws.active_key)
+    finally:
+        win.tools.set_tool('select')
+    assert ws.active_result().digest == before

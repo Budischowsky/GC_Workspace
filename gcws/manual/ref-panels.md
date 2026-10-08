@@ -88,6 +88,7 @@ Right-click a row:
 | **Split by deconvolution...** | Splits the peak into its components. |
 | **Keep unsplit (no automatic deconvolution split)** | The automatic deconvolution split leaves this peak as one peak. |
 | **Allow automatic deconvolution split** | Removes that mark. |
+| **Merge deconvoluted peaks** | Undoes the deconvolution split of the selected peak: its fragments are one peak again. |
 | **Delete peak(s)** | Deletes the marked peaks. |
 
 ### Columns
