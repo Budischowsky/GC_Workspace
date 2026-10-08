@@ -1642,6 +1642,52 @@ def test_double_determination_columns_gauge_and_severity(qtbot, win, samples):
     assert rts == sorted(rts)
 
 
+def test_double_determination_unit_columns_and_column_choice(qtbot, win, samples):
+    from PySide6.QtCore import QSettings, Qt
+    from gcws.quant import service as Q
+    from gcws.quant.nias_bridge import make_settings
+    from gcws.ui.docks.duplicate import C_MEAN, COLUMN_KEYS
+    _load(qtbot, win, samples, ["07_", "11_"])
+    ws = win.ws
+    a = next(s.id for s in ws.states() if s.name.startswith("07_"))
+    b = next(s.id for s in ws.states() if s.name.startswith("11_"))
+    win.loaded_samples.pairRequested.emit(a, b)
+    page = win.replicates.duplicate
+    t = page.table
+    col = COLUMN_KEYS.index("ug_l_mean")
+    assert t.horizontalHeaderItem(col).text() == "Mean [µg/L]"
+    assert t.isColumnHidden(col)                                         # hidden until chosen
+    # the converted value follows the row's mean, the analyst's edit included
+    rt = next(r for r in page.rows if r.get("report"))["rt"]
+
+    def cell(c):
+        k = min(range(len(page.rows)), key=lambda i: abs(page.rows[i]["rt"] - rt))
+        return t.item(next(i for i in range(t.rowCount()) if t.item(i, 0).data(Qt.UserRole) == k), c)
+    cell(C_MEAN).setText("0,06")
+    want = Q.from_mode_unit("nias_mgkg", make_settings(ws.quant.get("settings")), 0.06)
+    assert float(cell(col).text().replace(",", ".")) == pytest.approx(want["ug_l"], rel=1e-3)
+    assert cell(col).toolTip() == want["calc"]["ug_l"]
+    assert not cell(col).flags() & Qt.ItemIsEditable
+    # Columns...: which columns and in which order, remembered by name
+    dlg = page.column_dialog()
+    assert "ug_l_mean" in dlg.available.keys() and "icon" not in dlg.available.keys() + dlg.shown_keys()
+    dlg.deleteLater()
+    page.set_shown(["rt", "name", "ug_l_mean", "mean"])
+    page._fill_table()
+    assert page.shown_keys() == ["icon", "report", "rt", "name", "ug_l_mean", "mean"]
+    assert not t.isColumnHidden(col) and t.isColumnHidden(COLUMN_KEYS.index("cas"))
+    assert "ug_l_mean" in QSettings().value("replicates/columns")
+    head, *rows = page.export_rows()
+    assert head[-1] == "Mean [µg/L]" and any(r[-1] for r in rows)
+    page.set_column_hidden(col, True)                                    # the header menu
+    assert "ug_l_mean" not in page.shown_keys()
+    # an index-based choice of an earlier version is taken over
+    QSettings().remove("replicates/columns")
+    QSettings().setValue("replicates/hidden_columns", [str(COLUMN_KEYS.index("cas"))])
+    hidden = page.hidden_columns()
+    assert COLUMN_KEYS.index("cas") in hidden and col in hidden and COLUMN_KEYS.index("rt") not in hidden
+
+
 def test_double_determination_plots_follow_the_list(qtbot, win, samples):
     import pyqtgraph as pg
     from gcws.features.model import PAIRING_CLASSIC, Settings

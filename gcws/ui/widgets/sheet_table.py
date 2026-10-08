@@ -13,6 +13,9 @@
 The table never changes cells itself: it emits ``bulkEdit([(row, column, value)])`` with
 the visual row, the column and the new text (``bool`` for check boxes), and the owner
 applies all of it as one undoable change.
+
+Columns count in the order they are shown: moved columns are copied, pasted and filled as
+they stand on the screen, and hidden columns are left out.
 """
 from __future__ import annotations
 
@@ -43,13 +46,25 @@ class SheetTable(QTableWidget):
         return sorted({i.row() for i in self.selectedIndexes()} or
                       ({self.currentRow()} if self.currentRow() >= 0 else set()))
 
+    def shown_columns(self, first: int = 0, last: int | None = None) -> list[int]:
+        """The shown columns from screen position ``first`` to ``last`` (inclusive), left to right."""
+        hh = self.horizontalHeader()
+        last = self.columnCount() - 1 if last is None else last
+        return [c for c in (hh.logicalIndex(v) for v in range(first, last + 1)) if not self.isColumnHidden(c)]
+
     def _block(self):
-        """``(top, left, bottom, right)`` of the marking, or None when it is not one rectangle."""
-        ranges = self.selectedRanges()
-        if len(ranges) != 1:
+        """``(top, left, bottom, right)`` of the marking, the columns as screen positions, or None
+        when it is not one rectangle."""
+        idx = self.selectedIndexes()
+        if not idx:
             return None
-        r = ranges[0]
-        return r.topRow(), r.leftColumn(), r.bottomRow(), r.rightColumn()
+        hh = self.horizontalHeader()
+        rows = {i.row() for i in idx}
+        pos = {hh.visualIndex(i.column()) for i in idx}
+        top, bottom, left, right = min(rows), max(rows), min(pos), max(pos)
+        if len(idx) != (bottom - top + 1) * len(self.shown_columns(left, right)):
+            return None
+        return top, left, bottom, right
 
     @staticmethod
     def is_check(it) -> bool:
@@ -106,7 +121,7 @@ class SheetTable(QTableWidget):
         if not idx:
             return
         rows = sorted({i.row() for i in idx})
-        cols = sorted({i.column() for i in idx})
+        cols = sorted({i.column() for i in idx}, key=self.horizontalHeader().visualIndex)
         marked = {(i.row(), i.column()) for i in idx}
 
         def text(r, c):
@@ -126,15 +141,16 @@ class SheetTable(QTableWidget):
                 [(self.currentRow(), self.currentColumn())]
             self._emit([(r, c, self._coerce(r, c, lines[0][0])) for r, c in targets if r >= 0 and c >= 0])
             return
-        r0, c0 = self.currentRow(), self.currentColumn()
+        r0, first = self.currentRow(), self.horizontalHeader().visualIndex(self.currentColumn())
         if self._block() is not None:
-            r0, c0 = self._block()[:2]
+            r0, first = self._block()[:2]
+        cols = self.shown_columns(first)
         changes = []
         for dr, cells in enumerate(lines):
             for dc, v in enumerate(cells):
-                r, c = r0 + dr, c0 + dc
-                if r < self.rowCount() and c < self.columnCount():
-                    changes.append((r, c, self._coerce(r, c, v)))
+                r = r0 + dr
+                if r < self.rowCount() and dc < len(cols):
+                    changes.append((r, cols[dc], self._coerce(r, cols[dc], v)))
         self._emit(changes)
 
     def _coerce(self, row, col, text):
@@ -161,7 +177,7 @@ class SheetTable(QTableWidget):
         if b is None:
             return None
         top, left, bottom, right = b
-        rect = self.visualRect(self.model().index(bottom, right))
+        rect = self.visualRect(self.model().index(bottom, self.horizontalHeader().logicalIndex(right)))
         if not rect.isValid():
             return None
         return QRect(rect.right() - HANDLE // 2, rect.bottom() - HANDLE // 2, HANDLE, HANDLE)
@@ -178,8 +194,9 @@ class SheetTable(QTableWidget):
             b = self._fill[0]
             end = self._fill[1]
             lo, hi = min(b[0], end), max(b[2], end)
-            a = self.visualRect(self.model().index(lo, b[1]))
-            z = self.visualRect(self.model().index(hi, b[3]))
+            hh = self.horizontalHeader()
+            a = self.visualRect(self.model().index(lo, hh.logicalIndex(b[1])))
+            z = self.visualRect(self.model().index(hi, hh.logicalIndex(b[3])))
             pen = p.pen()
             pen.setColor(self.palette().highlight().color())
             pen.setStyle(Qt.DashLine)
@@ -222,19 +239,22 @@ class SheetTable(QTableWidget):
         super().mouseReleaseEvent(ev)
 
     def fill_range(self, block, end_row: int):
-        """Repeat the rows of ``block`` (top, left, bottom, right) down (or up) to ``end_row``."""
+        """Repeat the rows of ``block`` (top, left, bottom, right; columns as screen positions) down
+        (or up) to ``end_row``."""
         top, left, bottom, right = block
         n = bottom - top + 1
         if top <= end_row <= bottom:
             return
         targets = range(bottom + 1, end_row + 1) if end_row > bottom else range(end_row, top)
+        cols = self.shown_columns(left, right)
         changes = []
         for r in targets:
             src = top + (r - top) % n
-            for c in range(left, right + 1):
+            for c in cols:
                 changes.append((r, c, self.cell_value(src, c)))
         self._emit(changes)
         lo, hi = min(top, end_row), max(bottom, end_row)
         self.clearSelection()
         from PySide6.QtWidgets import QTableWidgetSelectionRange
-        self.setRangeSelected(QTableWidgetSelectionRange(lo, left, hi, right), True)
+        for c in cols:
+            self.setRangeSelected(QTableWidgetSelectionRange(lo, c, hi, c), True)

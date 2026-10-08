@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QFileDialog,
 
 from gcws.core.model import FID
 from gcws.quant import duplicate_view as DV
+from gcws.quant import service as QS
 from gcws.ui import theme, workers
 from gcws.ui.icons import color_chip
 from gcws.ui.widgets.cell_marks import EDITED_ROLE, LEVEL_ROLE, CheckDelegate, DiffGaugeDelegate, EditedDelegate
@@ -59,9 +60,20 @@ SEVERITY = {"bad": 0, "decided": 1, "warn": 2, "info": 2, "ok": 3, "neutral": 4}
 C_ICON, C_REPORT, C_RT, C_NAME, C_CAS, C_A1, C_A2, C_C1, C_C2, C_MEAN, C_DIFF, C_VERDICT, C_NOTES, C_COMMENT = range(14)
 #: feature pairing only (appended, so the columns above keep their places)
 C_FEATURE, C_SIM, C_HIT_A, C_HIT_B = range(14, 18)
+FEATURE_COLUMNS = {C_FEATURE, C_SIM, C_HIT_A, C_HIT_B}
+#: the concentrations in the further units of the NIAS modes: A, B and the mean of each unit
+UNIT_SIDES = (("a", "c1"), ("b", "c2"), ("mean", "mean"))
+C_UNIT0 = 18
+UNIT_DECIMALS = {"mg_dm2": 4, "ug_dm2": 3, "ug_l": 2, "mg_l": 4, "mg_ml": 6}
+#: every column's name by index: the column choice is remembered by name
+COLUMN_KEYS = ["icon", "report", "rt", "name", "cas", "area_a", "area_b", "conc_a", "conc_b", "mean", "diff",
+               "verdict", "notes", "comment", "feature", "similarity", "hit_a", "hit_b"] + \
+    [f"{unit}_{side}" for unit in QS.CONC_UNITS for side, _field in UNIT_SIDES]
+UNIT_OF = {C_UNIT0 + i: key.rsplit("_", 1)[0] for i, key in enumerate(COLUMN_KEYS[C_UNIT0:])}
 #: columns that cannot be hidden, and the columns hidden until the analyst shows them
 FIXED_COLUMNS = {C_ICON, C_REPORT, C_NAME}
-HIDDEN_BY_DEFAULT = (C_A1, C_A2, C_NOTES, C_HIT_A, C_HIT_B)
+HIDDEN_BY_DEFAULT = (C_A1, C_A2, C_NOTES, C_HIT_A, C_HIT_B) + tuple(range(C_UNIT0, len(COLUMN_KEYS)))
+COLUMNS_SETTING = "replicates/columns"
 #: the filter chips: key -> (label, level, tooltip)
 FILTERS = {"all": ("All", "info", "Every substance"),
            "check": ("To check", "accent", "Red and yellow rows and the rows you changed"),
@@ -289,6 +301,11 @@ class DuplicatePage(QWidget):
         self.b_plots.setCheckable(True)
         self.b_plots.setToolTip("Show or hide the chromatograms and spectra below the list")
         self.b_plots.toggled.connect(self.set_plots_visible)
+        self.b_columns = QToolButton()
+        self.b_columns.setText("Columns...")
+        self.b_columns.setToolTip("Choose and order the columns of the list, e.g. the concentrations in µg/dm², "
+                                  "µg/L, mg/L or mg/mL")
+        self.b_columns.clicked.connect(self.choose_columns)
         keys = QToolButton()
         keys.setText("?")
         keys.setAutoRaise(True)
@@ -296,6 +313,7 @@ class DuplicatePage(QWidget):
         status = QHBoxLayout()
         status.addWidget(self.banner, 1)
         status.addWidget(self.edit_note)
+        status.addWidget(self.b_columns)
         status.addWidget(self.b_plots)
         status.addWidget(keys)
         lay.addLayout(pick)
@@ -999,17 +1017,35 @@ class DuplicatePage(QWidget):
         self.b_bounds.setVisible(bool(props))
         self.b_bounds.setText(f"Harmonise boundaries ({len({p.rt for p in props})})")
 
-    def _fill_table(self):
-        from PySide6.QtGui import QFont
+    def headers(self) -> list[str]:
+        """The title of every column (``COLUMN_KEYS``)."""
         labels = self.labels()
         unit = self.ws.quant_unit()
+        out = ["", "Report", "RT [min]", "Substance", "CAS", f"Area {labels[0]}", f"Area {labels[1]}",
+               f"{labels[0]} [{unit}]", f"{labels[1]} [{unit}]", f"Mean [{unit}]", "Diff. %", "Verdict", "Notes",
+               "Comment", "Feature", "Similarity", f"Hit {labels[0]}", f"Hit {labels[1]}"]
+        for other in QS.CONC_UNITS.values():
+            out += [f"{labels[0]} [{other}]", f"{labels[1]} [{other}]", f"Mean [{other}]"]
+        return out
+
+    def _unit_cells(self, row: dict, units: list[str], settings) -> list[tuple]:
+        """``(value, calculation)`` of the further-unit columns of ``row``: its A, B and mean
+        (the analyst's edits included) converted from the mode's unit."""
+        mode = self.ws.quant.get("mode", "nias_mgkg")
+        conv = {side: QS.from_mode_unit(mode, settings, row.get(field)) if units else None
+                for side, field in UNIT_SIDES}
+        return [(conv[side][unit], conv[side]["calc"].get(unit)) if unit in units else (None, None)
+                for unit in QS.CONC_UNITS for side, _field in UNIT_SIDES]
+
+    def _fill_table(self):
+        from PySide6.QtGui import QFont
+        from gcws.quant.nias_bridge import make_settings
+        labels = self.labels()
         names = [self.ws.runs[m].name for m in self.members if m in self.ws.runs]
-        headers = ["", "Report", "RT [min]", "Substance", "CAS", f"Area {labels[0]}", f"Area {labels[1]}",
-                   f"{labels[0]} [{unit}]", f"{labels[1]} [{unit}]", f"Mean [{unit}]", "Diff. %", "Verdict", "Notes",
-                   "Comment"]
+        headers = self.headers()
         feature_rows = bool(self.rows) and bool(self.rows[0].get("feature_id"))
-        if feature_rows:
-            headers += ["Feature", "Similarity", f"Hit {labels[0]}", f"Hit {labels[1]}"]
+        units = QS.unit_keys(self.ws.quant.get("mode", "nias_mgkg"))
+        settings = make_settings(self.ws.quant.get("settings"))
         cur = self.table.currentItem()
         keep_cur = (cur.data(Qt.UserRole), cur.column()) if cur is not None else None
         keep_sel = {(i.data(Qt.UserRole), i.column()) for i in self.table.selectedItems()}
@@ -1021,7 +1057,7 @@ class DuplicatePage(QWidget):
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         for i, n in enumerate(names[:2]):
-            for c in (C_A1 + i, C_C1 + i):
+            for c in (C_A1 + i, C_C1 + i) + tuple(range(C_UNIT0 + i, len(COLUMN_KEYS), len(UNIT_SIDES))):
                 self.table.horizontalHeaderItem(c).setToolTip(n)
         self.table.horizontalHeaderItem(C_REPORT).setToolTip("Goes into the report (default: not for artefacts and "
                                                              "values below the reporting limit)")
@@ -1040,6 +1076,10 @@ class DuplicatePage(QWidget):
                 s1, s2 = row.get("source1") or {}, row.get("source2") or {}
                 vals += [row.get("feature_id", ""), row.get("sim"),
                          s1.get("name", "") if s1 else "", s2.get("name", "") if s2 else ""]
+            else:
+                vals += [None] * len(FEATURE_COLUMNS)
+            unit_cells = self._unit_cells(row, units, settings)
+            vals += [v for v, _calc in unit_cells]
             edited = row.get("edited") or {}
             level, tip = v.level, v.detail
             if v.level == "bad" and row.get("decided"):
@@ -1063,14 +1103,16 @@ class DuplicatePage(QWidget):
                     if c in (C_A1, C_A2):
                         it.setData(Qt.DisplayRole, int(round(val)))          # areas: whole counts
                     else:
-                        it.setData(Qt.DisplayRole, round(val, {C_RT: 3, C_DIFF: 1, C_SIM: 2}.get(c, 4)))
+                        decimals = UNIT_DECIMALS[UNIT_OF[c]] if c in UNIT_OF else {C_RT: 3, C_DIFF: 1, C_SIM: 2}.get(c, 4)
+                        it.setData(Qt.DisplayRole, round(val, decimals))
                     it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 else:
                     it.setText("" if val is None else str(val))
                 if c not in editable and c != C_REPORT:
                     it.setFlags(it.flags() & ~Qt.ItemIsEditable)
                 it.setData(Qt.UserRole, k)
-                it.setToolTip(tip)
+                calc = unit_cells[c - C_UNIT0][1] if c in UNIT_OF and not deleted else None
+                it.setToolTip(calc or tip)                     # a further unit: how it is calculated
                 if c == C_ICON:
                     it.setData(OPEN_ROLE, DV.is_open(row, v))
                     sev = SEVERITY["decided"] if row.get("decided") and v.level == "bad" else SEVERITY.get(v.level, 4)
@@ -1108,9 +1150,7 @@ class DuplicatePage(QWidget):
         hh.setSectionResizeMode(QHeaderView.Interactive)
         self.table.setColumnWidth(C_NAME, min(260, max(140, self.table.columnWidth(C_NAME))))
         hh.setStretchLastSection(True)
-        hidden = self.hidden_columns()
-        for c in range(self.table.columnCount()):
-            self.table.setColumnHidden(c, c in hidden)
+        self._apply_layout()
         self.table.setSortingEnabled(True)
         self.table.sortItems(*self._sort)
         self._frozen = frozen
@@ -1128,33 +1168,135 @@ class DuplicatePage(QWidget):
                 self._frozen = None
                 QTimer.singleShot(0, self._fill_table)
 
+    # The column choice is remembered by column name (``COLUMN_KEYS``), never by index, so a column
+    # added in a later version cannot shift the others: {"order": [names], "hidden": [names]}.
+
     @staticmethod
-    def hidden_columns() -> set[int]:
+    def _layout() -> dict:
+        """The remembered column choice; the index-based choice of an earlier version is taken over."""
+        import json
         from PySide6.QtCore import QSettings
-        value = QSettings().value("replicates/hidden_columns", None)
-        if value is None:
-            return set(HIDDEN_BY_DEFAULT)
-        if isinstance(value, str):
-            value = [value] if value else []
-        return {int(c) for c in value if str(c).lstrip("-").isdigit()} - FIXED_COLUMNS
+        s = QSettings()
+        state = None
+        try:
+            state = json.loads(s.value(COLUMNS_SETTING) or "null")
+        except (TypeError, ValueError):
+            pass
+        if not isinstance(state, dict):
+            old = s.value("replicates/hidden_columns", None)
+            if old is None:
+                hidden = [COLUMN_KEYS[c] for c in HIDDEN_BY_DEFAULT]
+            else:
+                old = [old] if isinstance(old, str) and old else [] if isinstance(old, str) else old
+                hidden = [COLUMN_KEYS[int(c)] for c in old if str(c).isdigit() and int(c) < C_UNIT0]
+            state = {"order": [], "hidden": hidden}
+        order = [k for k in state.get("order") or [] if k in COLUMN_KEYS]
+        hidden = [k for k in state.get("hidden") or [] if k in COLUMN_KEYS]
+        # columns that choice has never seen (new in this version) follow their default
+        hidden += [COLUMN_KEYS[c] for c in HIDDEN_BY_DEFAULT if COLUMN_KEYS[c] not in order + hidden
+                   and (order or c >= C_UNIT0)]
+        return {"order": order + [k for k in COLUMN_KEYS if k not in order], "hidden": hidden}
+
+    @staticmethod
+    def _save_layout(state: dict) -> None:
+        import json
+        from PySide6.QtCore import QSettings
+        QSettings().setValue(COLUMNS_SETTING, json.dumps(state))
+        QSettings().remove("replicates/hidden_columns")
+
+    @classmethod
+    def hidden_columns(cls) -> set[int]:
+        """The columns the analyst hid (indices)."""
+        return {COLUMN_KEYS.index(k) for k in cls._layout()["hidden"]} - FIXED_COLUMNS
+
+    def _forced_hidden(self) -> set[int]:
+        """Columns without content in this comparison: the feature columns of the classic pairing,
+        the units the quantification mode does not compute."""
+        feature_rows = bool(self.rows) and bool(self.rows[0].get("feature_id"))
+        units = QS.unit_keys(self.ws.quant.get("mode", "nias_mgkg"))
+        return (set() if feature_rows else set(FEATURE_COLUMNS)) | {c for c, u in UNIT_OF.items() if u not in units}
+
+    def _apply_layout(self) -> None:
+        state = self._layout()
+        hh = self.table.horizontalHeader()
+        for pos, key in enumerate(state["order"]):
+            logical = COLUMN_KEYS.index(key)
+            if hh.visualIndex(logical) != pos:
+                hh.moveSection(hh.visualIndex(logical), pos)
+        hidden = self.hidden_columns() | self._forced_hidden()
+        for c in range(self.table.columnCount()):
+            self.table.setColumnHidden(c, c in hidden)
+
+    def shown_keys(self) -> list[str]:
+        """The names of the shown columns, left to right."""
+        return [COLUMN_KEYS[c] for c in self.table.shown_columns()]
+
+    def offered_keys(self) -> list[str]:
+        """The columns the analyst can show or hide here (Columns... and the header's menu)."""
+        forced = self._forced_hidden()
+        return [k for c, k in enumerate(COLUMN_KEYS) if c not in forced and c not in (C_ICON, C_REPORT)]
+
+    def set_shown(self, keys: list[str]) -> None:
+        """Show ``keys`` in this order (the status and Report columns first, the substance always);
+        remembered for the next start. Columns not offered now keep their choice."""
+        keys = [k for k in dict.fromkeys(keys) if k in COLUMN_KEYS and k not in ("icon", "report")]
+        if "name" not in keys:
+            keys.insert(0, "name")
+        shown = ["icon", "report"] + keys
+        offered = set(self.offered_keys())
+        old = self._layout()
+        hidden = [k for k in COLUMN_KEYS if (k in offered and k not in shown)
+                  or (k not in offered and k in old["hidden"])]
+        order = shown + [k for k in old["order"] if k not in shown]
+        self._save_layout({"order": order, "hidden": hidden})
+        if self.table.columnCount():
+            self._apply_layout()
 
     def set_column_hidden(self, column: int, hidden: bool) -> None:
         """Show or hide a column of the list; remembered for the next start."""
-        from PySide6.QtCore import QSettings
         if column in FIXED_COLUMNS:
             return
-        cols = self.hidden_columns()
-        cols = cols | {column} if hidden else cols - {column}
-        QSettings().setValue("replicates/hidden_columns", [str(c) for c in sorted(cols)] or "")
-        self.table.setColumnHidden(column, hidden)
+        state = self._layout()
+        key = COLUMN_KEYS[column]
+        state["hidden"] = [k for k in state["hidden"] if k != key] + ([key] if hidden else [])
+        self._save_layout(state)
+        self.table.setColumnHidden(column, hidden or column in self._forced_hidden())
+
+    def column_dialog(self):
+        """The column chooser of this list (not shown yet)."""
+        from gcws.ui.dialogs.columns import ColumnChooserDialog
+        headers = self.headers()
+        offered = self.offered_keys()
+        cols = [(k, headers[COLUMN_KEYS.index(k)], self._column_tip(k)) for k in offered]
+        shown = [k for k in self.shown_keys() if k in offered] if self.table.columnCount() else \
+            [k for k in self._layout()["order"] if k in offered and k not in self._layout()["hidden"]]
+        defaults = [k for k in offered if COLUMN_KEYS.index(k) not in HIDDEN_BY_DEFAULT]
+        return ColumnChooserDialog(cols, shown, defaults, self)
+
+    @staticmethod
+    def _column_tip(key: str) -> str:
+        unit = key.rsplit("_", 1)[0]
+        if unit in QS.CONC_UNITS:
+            return f"Concentration in {QS.CONC_UNITS[unit]}, converted from the list's value (your changes " \
+                   "included); hover a value for its calculation"
+        return ""
+
+    def choose_columns(self) -> None:
+        dlg = self.column_dialog()
+        if dlg.exec() == dlg.Accepted:
+            self.set_shown(dlg.shown_keys())
 
     def _column_menu(self, pos) -> None:
         menu = QMenu(self)
+        menu.addAction("Choose columns...", self.choose_columns)
+        menu.addSeparator()
         hidden = self.hidden_columns()
-        for c in range(self.table.columnCount()):
+        headers = self.headers()
+        for key in self.offered_keys():
+            c = COLUMN_KEYS.index(key)
             if c in FIXED_COLUMNS:
                 continue
-            a = menu.addAction(self.table.horizontalHeaderItem(c).text() or "")
+            a = menu.addAction(headers[c] or "")
             a.setCheckable(True)
             a.setChecked(c not in hidden)
             a.toggled.connect(lambda on, c=c: self.set_column_hidden(c, not on))
@@ -1279,8 +1421,7 @@ class DuplicatePage(QWidget):
         r = self._visual_row(row)
         if r is None:
             return
-        cells = [self.table.cell_value(r, c) for c in range(1, self.table.columnCount())
-                 if not self.table.isColumnHidden(c)]
+        cells = [self.table.cell_value(r, c) for c in self.table.shown_columns() if c != C_ICON]
         QGuiApplication.clipboard().setText("\t".join("yes" if v is True else "no" if v is False else str(v)
                                                        for v in cells))
 
@@ -1654,6 +1795,26 @@ class DuplicatePage(QWidget):
         if g is not None:
             (self.previewRequested if preview else self.reportRequested).emit(kind, g["id"])
 
+    def export_rows(self) -> list[list]:
+        """Header and rows of the export: the fixed columns, then the further units shown in the list."""
+        from gcws.quant.nias_bridge import make_settings
+        labels = self.labels()
+        unit = self.ws.quant_unit()
+        extra = [c for c in self.table.shown_columns() if c in UNIT_OF]
+        headers = self.headers()
+        units = QS.unit_keys(self.ws.quant.get("mode", "nias_mgkg"))
+        settings = make_settings(self.ws.quant.get("settings"))
+        out = [["RT [min]", "Substance", "CAS", f"{labels[0]} [{unit}]", f"{labels[1]} [{unit}]",
+                f"Mean [{unit}]", "Diff. %", "Verdict", "Explanation", "Report", "Changed by analyst", "Comment"]
+               + [headers[c] for c in extra]]
+        for row, v in zip(*self._live()):
+            cells = self._unit_cells(row, units, settings) if extra else []
+            out.append([row.get("rt"), row.get("name"), row.get("cas"), row.get("c1"), row.get("c2"),
+                        row.get("mean"), row.get("reldiff"), v.text, v.detail, "yes" if row.get("report") else "no",
+                        ", ".join(sorted(row.get("edited") or {})), row.get("comment", "")]
+                       + [cells[c - C_UNIT0][0] for c in extra])
+        return out
+
     def export(self):
         if not self.rows:
             return
@@ -1669,18 +1830,14 @@ class DuplicatePage(QWidget):
         sh = wb.active
         sh.title = "Double determination"
         labels = self.labels()
-        unit = self.ws.quant_unit()
         sh.append([f"{labels[i]}: {self.ws.runs[m].name}" for i, m in enumerate(self.members) if m in self.ws.runs])
         sh.append(["Difference limit %", DV.limits(self.ws)[0]])
         sh.append([])
-        sh.append(["RT [min]", "Substance", "CAS", f"{labels[0]} [{unit}]", f"{labels[1]} [{unit}]",
-                   f"Mean [{unit}]", "Diff. %", "Verdict", "Explanation", "Report", "Changed by analyst", "Comment"])
+        head, *rows = self.export_rows()
+        sh.append(head)
         fills = {lvl: PatternFill("solid", fgColor=theme.LEVELS[lvl][1].lstrip("#")) for lvl in theme.LEVELS}
-        for row, v in zip(*self._live()):
-            sh.append([excel_safe(x) for x in (
-                row.get("rt"), row.get("name"), row.get("cas"), row.get("c1"), row.get("c2"), row.get("mean"),
-                row.get("reldiff"), v.text, v.detail, "yes" if row.get("report") else "no",
-                ", ".join(sorted(row.get("edited") or {})), row.get("comment", ""))])
+        for values, v in zip(rows, self._live()[1]):
+            sh.append([excel_safe(x) for x in values])
             sh.cell(sh.max_row, 8).fill = fills.get(v.level, fills["neutral"])
         wb.save(path)
         self.ws.message.emit(f"Double determination exported: {path}")
