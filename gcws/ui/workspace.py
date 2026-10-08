@@ -37,6 +37,7 @@ class RunState:
     run: Run
     color: str
     visible: bool = True
+    overlay: bool = False                             # drawn on the current chromatogram (Overlay off too)
     methods: dict[str, IntegrationMethod] = field(default_factory=dict)   # per signal kind
     manual: dict[str, list[ManualEvent]] = field(default_factory=dict)    # per signal key
     results: dict[str, IntegrationResult] = field(default_factory=dict)   # per signal key

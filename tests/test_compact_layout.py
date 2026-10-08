@@ -68,19 +68,33 @@ def test_loaded_samples_order_rename_close_and_menu(qtbot, win, samples, monkeyp
     monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("Renamed sample", True))
     items._rename(ids[0])
     assert items.item(0).text().startswith("Renamed sample")
-    items._visible(ids[0], False)
-    assert not win.ws.runs[ids[0]].visible
+    # overlay on the current chromatogram, and the same action again takes it off
+    other = next(r for r in ids if r != win.ws.active_id)
+    win.chrom.others.setChecked(False)
+    assert [s.id for s in win.chrom.visible_states()] == [win.ws.active_id]
+    items.set_overlay(other, True)
+    assert items.overlaid(other) and set(win.chrom.curves) == set(ids)
+    items.set_overlay(other, False)
+    assert not items.overlaid(other) and set(win.chrom.curves) == {win.ws.active_id}
+    win.chrom.others.setChecked(True)
+    assert items.overlaid(other)
+    items.set_overlay(other, False)                 # Overlay on: taken off the overlay too
+    assert not items.overlaid(other) and not win.ws.runs[other].visible
+    items.set_overlay(other, True)
 
     class Menu(QMenu):
         def exec(self, *_):
             labels = {a.text() for a in self.actions()}
-            assert {"Role", "Assign blanks...", "Rename sample...", "Colour...", "Show in overlay",
-                    "Show in folder tree", "Close", "Close others"} <= labels
+            assert {"Role", "Assign blanks...", "Rename sample...", "Colour...",
+                    "Overlay on current chromatogram", "Show in folder tree", "Close", "Close others",
+                    "Close all loaded samples"} <= labels
     monkeypatch.setattr(run_tabs, "QMenu", Menu)
     items._menu(items.visualItemRect(items.item(0)).center())
     items.closeRequested.emit(win.ws.active_id)
     assert items.count() == 1
     assert items.currentItem().data(Qt.UserRole) == win.ws.active_id
+    items.closeAllRequested.emit()
+    assert items.count() == 0 and not win.ws.order
 
 
 def test_ms_shared_actions_scan_overlay_and_details(qtbot, win, samples):

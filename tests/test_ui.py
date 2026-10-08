@@ -60,14 +60,14 @@ def test_loaded_sample_display_and_name_edits_mark_project_dirty(monkeypatch):
     from gcws.ui.run_tabs import LoadedSamples
 
     changes = []
-    state = SimpleNamespace(name="Old", color="#111111", visible=True,
+    state = SimpleNamespace(name="Old", color="#111111", visible=True, overlay=False,
                             run=SimpleNamespace(meta=SimpleNamespace(sample_name="Old")))
     ws = SimpleNamespace(runs={"a": state}, dirty=False,
                          runChanged=SimpleNamespace(emit=changes.append))
-    tabs = SimpleNamespace(ws=ws)
+    tabs = SimpleNamespace(ws=ws, overlay_all=lambda: True)
 
-    LoadedSamples._visible(tabs, "a", False)
-    assert ws.dirty and not state.visible
+    LoadedSamples.set_overlay(tabs, "a", False)
+    assert ws.dirty and not state.visible and not state.overlay
     ws.dirty = False
     monkeypatch.setattr("gcws.ui.run_tabs.QColorDialog.getColor", lambda *args: QColor("#222222"))
     LoadedSamples._color(tabs, "a")

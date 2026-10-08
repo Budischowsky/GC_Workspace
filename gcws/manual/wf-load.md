@@ -30,11 +30,11 @@ A right-click on a loaded sample gives:
 | **Double determination / replicates...** | Opens the **Replicates / results** panel. |
 | **Signal in Chromatogram 1** | FID, TIC, BPC or an extracted ion for this run. |
 | **Extracted ion (EIC)...** | Asks for the m/z values and shows their chromatogram. |
-| **Show in overlay** | Whether this run is drawn behind the active one. |
+| **Overlay on current chromatogram** | Draws this run on the current (active) chromatogram, also with **Overlay** off. The same item again takes it off. |
 | **Colour...** | The colour of this run in all plots. |
 | **Rename sample...** | Another label for this run (the files keep their names). |
 | **Show in folder tree** | Selects the run in the **Folders** panel. |
-| **Close** / **Close others** | Removes runs from the project (nothing is deleted on disk). |
+| **Close** / **Close others** / **Close all loaded samples** | Removes runs from the project (nothing is deleted on disk). A right-click on the empty part of the list also offers **Close all loaded samples**. |
 
 Drag entries to change their order.
 

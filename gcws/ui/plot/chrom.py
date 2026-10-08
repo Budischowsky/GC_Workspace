@@ -410,9 +410,10 @@ class ChromPanel(QWidget):
     # -- drawing -------------------------------------------------------------------------------
 
     def visible_states(self):
+        """The active run, the runs overlaid on it, and with Overlay on every run shown in the overlay."""
         active = self.ws.active
-        states = self.ws.states() if self.others.isChecked() else ([active] if active else [])
-        return [s for s in states if s is not None and (s.visible or s is active)]
+        every = self.others.isChecked()
+        return [s for s in self.ws.states() if s is active or s.overlay or (every and s.visible)]
 
     def refresh(self, *_, autorange: bool = False, fit: bool = False):
         active = self.ws.active

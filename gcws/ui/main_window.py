@@ -693,6 +693,8 @@ class MainWindow(QMainWindow):
         for sig in (self.ws.activeRunChanged, self.ws.runChanged, self.ws.runRemoved):
             sig.connect(lambda *_: self._refresh_run_chips())
         self.loaded_samples.closeRequested.connect(self.close_run)
+        self.loaded_samples.closeAllRequested.connect(self.close_all)
+        self.loaded_samples.overlay_all = self.chrom.others.isChecked
         self.loaded_samples.roleRequested.connect(self.set_role)
         self.loaded_samples.blanksRequested.connect(self.assign_blanks)
         self.loaded_samples.revealRequested.connect(lambda rid: (self._show_dock("tree"),

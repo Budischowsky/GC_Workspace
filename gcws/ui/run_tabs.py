@@ -16,12 +16,15 @@ class LoadedSamples(QListWidget):
     replicateRequested = QtSignal(str)
     pairRequested = QtSignal(str, str)          # run id, partner id
     closeRequested = QtSignal(str)
+    closeAllRequested = QtSignal()
     revealRequested = QtSignal(str)
     eicRequested = QtSignal()
 
     def __init__(self, ws, parent=None):
         super().__init__(parent)
         self.ws = ws
+        #: whether Chromatogram 1 shows every run of the overlay (its Overlay switch); set by the main window
+        self.overlay_all = lambda: False
         self.setSelectionMode(QAbstractItemView.SingleSelection)
         self.setDragDropMode(QAbstractItemView.InternalMove)
         self.setDefaultDropAction(Qt.MoveAction)
@@ -78,6 +81,10 @@ class LoadedSamples(QListWidget):
         item = self.itemAt(pos)
         if item is not None:
             self.run_menu(item.data(Qt.UserRole)).exec(self.viewport().mapToGlobal(pos))
+        elif self.count():
+            m = QMenu(self)
+            m.addAction("Close all loaded samples").triggered.connect(self.closeAllRequested.emit)
+            m.exec(self.viewport().mapToGlobal(pos))
 
     def run_menu(self, rid) -> QMenu:
         """The right-click menu of one loaded run (also used by the squares of the collapsed Folders strip)."""
@@ -112,10 +119,16 @@ class LoadedSamples(QListWidget):
             a.triggered.connect(lambda _=False, k=key: self.ws.set_panel(0, key=k))
         if st.run.ms is not None:
             sig.addAction("Extracted ion (EIC)...").triggered.connect(self.eicRequested.emit)
-        vis = m.addAction("Show in overlay")
+        vis = m.addAction("Overlay on current chromatogram")
         vis.setCheckable(True)
-        vis.setChecked(st.visible)
-        vis.toggled.connect(lambda on: self._visible(rid, on))
+        if rid == self.ws.active_id:
+            vis.setChecked(True)
+            vis.setEnabled(False)
+            vis.setToolTip("This is the current chromatogram")
+        else:
+            vis.setChecked(self.overlaid(rid))
+            vis.setToolTip("Draw this sample on the current chromatogram; again to remove it")
+        vis.toggled.connect(lambda on: self.set_overlay(rid, on))
         m.addAction("Colour...").triggered.connect(lambda: self._color(rid))
         m.addAction("Rename sample...").triggered.connect(lambda: self._rename(rid))
         m.addSeparator()
@@ -124,10 +137,22 @@ class LoadedSamples(QListWidget):
         others = [r for r in self.ws.order if r != rid]
         if others:
             m.addAction("Close others").triggered.connect(lambda: [self.closeRequested.emit(r) for r in others])
+        m.addAction("Close all loaded samples").triggered.connect(self.closeAllRequested.emit)
         return m
 
-    def _visible(self, rid, on):
-        self.ws.runs[rid].visible = on
+    def overlaid(self, rid) -> bool:
+        """Whether run ``rid`` is drawn on the current chromatogram."""
+        st = self.ws.runs[rid]
+        return st.overlay or (st.visible and self.overlay_all())
+
+    def set_overlay(self, rid, on):
+        """Draw run ``rid`` on the current chromatogram, or take it off (also when Overlay shows every run)."""
+        st = self.ws.runs[rid]
+        st.overlay = on
+        if on:
+            st.visible = True
+        elif self.overlay_all():
+            st.visible = False
         self.ws.dirty = True
         self.ws.runChanged.emit(rid)
 
