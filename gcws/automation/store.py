@@ -113,13 +113,25 @@ def alive(pid, started: float | None = None) -> bool:
     k32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
     k32.GetProcessTimes.argtypes = (wintypes.HANDLE,) + (ctypes.POINTER(wintypes.FILETIME),) * 4
     k32.CloseHandle.argtypes = (wintypes.HANDLE,)
-    handle = k32.OpenProcess(0x1000, False, pid)        # PROCESS_QUERY_LIMITED_INFORMATION
+    k32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    k32.WaitForSingleObject.restype = wintypes.DWORD
+    # SYNCHRONIZE: a process is signalled only once Windows closed its handles (its locks too); the exit
+    # code is set before that, so a lock of a process found ended by it was still held for a moment
+    sync = True
+    handle = k32.OpenProcess(0x00101000, False, pid)    # SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        sync = False
+        handle = k32.OpenProcess(0x1000, False, pid)
     if not handle:
         return ctypes.get_last_error() == 5             # access denied: it exists (another user's)
     try:
-        code = wintypes.DWORD()
-        if not k32.GetExitCodeProcess(handle, ctypes.byref(code)) or code.value != 259:     # STILL_ACTIVE
-            return False
+        if sync:
+            if k32.WaitForSingleObject(handle, 0) != 0x102:    # WAIT_TIMEOUT: still running
+                return False
+        else:
+            code = wintypes.DWORD()
+            if not k32.GetExitCodeProcess(handle, ctypes.byref(code)) or code.value != 259:     # STILL_ACTIVE
+                return False
         if started:
             times = [wintypes.FILETIME() for _ in range(4)]
             if k32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):

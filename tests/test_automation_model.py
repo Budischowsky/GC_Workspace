@@ -109,6 +109,11 @@ def test_filters_and_collisions(tmp_path):
     assert R.resolve_collision(tmp_path / "a.docx", "version") == tmp_path / "a_2.docx"
     assert R.target_dir({"path": str(tmp_path), "subfolder": "{batch}/{status}"},
                         {"batch": "B1", "status": "control"}) == tmp_path / "B1" / "control needed"
+    # a placeholder without a value (the batch report has no sample) leaves its level out, not "unnamed"
+    assert R.target_dir({"path": str(tmp_path), "subfolder": "{batch}/{sample}"},
+                        {"batch": "B1", "sample": ""}) == tmp_path / "B1"
+    assert R.target_dir({"path": str(tmp_path), "subfolder": "{kind}/{batch}"},
+                        {"batch": "B1", "kind": None}) == tmp_path / "B1"
 
 
 def _evidence(**kw):
@@ -215,3 +220,17 @@ def test_feature_review_rule():
     assert [x.level for x in found] == [RU.CONTROL, "info"]
     assert RU.evaluate([rule], {"features": ev["features"][1:]}).status == RU.ACCEPTED_AUTO
     assert RU.evaluate([rule], ev).status == RU.CONTROL
+
+
+def test_batch_summary_writes_text_starting_with_equals_as_text(tmp_path):
+    """A comment or finding starting with "=" was written as a formula: Excel offered to repair the file."""
+    from openpyxl import load_workbook
+    from gcws.automation import batch
+    entries = [{"name": "=26016606", "state": "control", "comment": "=check again", "reviewer": "+me",
+                "findings": [{"text": "=1/0"}]}]
+    target = batch.summary_workbook("B1", entries, tmp_path / "s.xlsx")
+    sh = load_workbook(target).active
+    row = [c for c in sh[4]]
+    assert [c.data_type for c in row] == [c.data_type if c.value is None or not isinstance(c.value, str) else "s"
+                                          for c in row]
+    assert row[0].value == "=26016606" and row[4].value == "=check again" and row[6].value == "=1/0"

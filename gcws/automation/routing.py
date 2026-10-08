@@ -25,7 +25,7 @@ def deliveries(wf: Workflow, method_id: str, ctx: dict, files: dict, tokens: Opt
 
     ``ctx``: status, kind (per report node, filled in here), name, batch. ``files``:
     ``{report node id: {format: path}}``. Every arrow on the path must let the file through."""
-    out = []
+    out, seen = [], set()
     for report, path_edges in wf.report_nodes(method_id):
         produced = files.get(report.id) or {}
         for fmt, src in produced.items():
@@ -38,6 +38,9 @@ def deliveries(wf: Workflow, method_id: str, ctx: dict, files: dict, tokens: Opt
                 folder = wf.node(e.dst)
                 if folder is None or folder.type != "folder" or not passes(e.filter, c):
                     continue
+                if (folder.id, report.id, fmt) in seen:
+                    continue                           # the report reached by a second path: delivered once
+                seen.add((folder.id, report.id, fmt))
                 dst_dir = target_dir(folder.params, dict(tokens or {}, kind=report.p("kind"),
                                                          status=ctx.get("status", "")), wf.name)
                 out.append(Delivery(folder.id, report.id, fmt, Path(src), dst_dir / Path(src).name))
@@ -52,7 +55,10 @@ def target_dir(params: dict, tokens: dict, workflow_name: str = "") -> Path:
     values = {"batch": tokens.get("batch", ""), "sample": tokens.get("sample", ""), "kind": tokens.get("kind", ""),
               "status": status.get(tokens.get("status", ""), tokens.get("status", "")),
               "date": tokens.get("date") or datetime.now().strftime("%Y-%m-%d"), "workflow": workflow_name}
-    text = re.sub(r"\{(\w+)\}", lambda m: store.safe_name(values.get(m.group(1), m.group(0))), sub or "")
+    def value(m) -> str:
+        v = values.get(m.group(1), m.group(0))
+        return store.safe_name(v) if v else ""         # no value (a batch report's {sample}): the level is left out
+    text = re.sub(r"\{(\w+)\}", value, sub or "")
     parts = [p for p in re.split(r"[\\/]+", text) if p.strip(" .")]
     return base.joinpath(*parts) if parts else base
 

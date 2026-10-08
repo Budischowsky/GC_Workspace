@@ -737,7 +737,7 @@ class WatcherCore(QObject):
     # -- the queue ---------------------------------------------------------------------------------------
 
     def check_timeout(self, now: float) -> None:
-        if self.current and now - self.current["started"] > self.current["timeout"]:
+        if self.current and not self.current.get("timed_out") and now - self.current["started"] > self.current["timeout"]:
             self.journal.event("error", f"Job {self.current['job']} stopped after "
                                f"{self.current['timeout'] / 60:.0f} min", job_id=self.current["job"])
             self.current["timed_out"] = True

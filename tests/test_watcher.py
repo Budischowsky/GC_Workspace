@@ -385,6 +385,38 @@ def test_crash_timeout_and_retry(env, qapp):
     assert launcher.job is None                             # waits for the back-off
 
 
+def test_a_job_stopped_after_its_time_limit_is_logged_once(env, qapp):
+    """A killed job process that takes a while to end (a hung network read) was killed and logged as
+    "stopped" again at every tick until it ended."""
+    from gcws.automation import journal as J
+    from gcws.automation.watcher import WatcherCore
+
+    class SlowKill(FakeLauncher):
+        def kill(self):
+            self.killed += 1                               # the process ends later
+
+    jr, launcher = env["journal"], SlowKill()
+    now = [time.time()]
+    core = WatcherCore(jr, launcher, clock=lambda: now[0])
+    core.tick()
+    now[0] += 61
+    batch = env["watch"] / "26016605_TEST"
+    batch.mkdir()
+    _log(batch, BATCH[:3], completed=True)
+    for n in BATCH[:3]:
+        _acquire(batch, n)
+    core.tick()
+    job_id = launcher.started[0][0]
+    for _ in range(3):
+        now[0] += 31 * 60
+        core.check_timeout(now[0])
+    assert launcher.killed == 1
+    assert len([e for e in jr.events(job_id=job_id) if "stopped after" in e["text"]]) == 1
+    launcher.complete(None, code=-1)
+    j = jr.job(job_id)
+    assert j.state == J.FAILED and "timeout" in j.reason
+
+
 def test_a_new_attempt_never_takes_the_result_of_the_one_before(env, qapp):
     """A job tried again after a back-off runs in the same folder: when the new attempt ends without a
     result (stopped after the time limit), the result of the attempt before is not taken for it."""
@@ -638,6 +670,38 @@ def test_delivered_file_deleted_in_the_target_is_delivered_again(env):
     assert not (b.parent / "26016606_x_NIAS_Report_2.docx").exists()   # its own copy replaced, not versioned
     assert jr.job(job.id).export_state == "done"
     assert set(jr.targets()[job.id]) == {str(a), str(b)}
+
+
+def test_a_report_reached_by_two_arrows_is_delivered_once(env):
+    """The method passes to the report straight and through Report² as well: each file was delivered
+    twice, the second time as a "_2" version beside the first."""
+    from gcws.automation import export
+    wf = env["wf"]
+    m = wf.methods()[0]
+    rep = next(n for n in wf.nodes if n.type == "report")
+    wf.connect(m.id, rep.id)
+    jr = env["journal"]
+    job, folder = _accepted_with_files(env)
+    lines = export.deliver(jr, wf, job)
+    a = env["tmp"] / "A" / folder.name
+    b = env["tmp"] / "B" / folder.name
+    assert sorted(p.name for p in a.iterdir()) == ["26016606_x_NIAS_Report.xlsx"]
+    assert sorted(p.name for p in b.iterdir()) == ["26016606_x_NIAS_Report.docx"]
+    assert len(lines) == 2
+
+
+def test_a_failed_delivery_leaves_no_temporary_file_in_the_target(env):
+    """A report open in Excel cannot be replaced: the delivery fails (and is logged), but the copy under
+    its temporary name stayed in the customer's folder."""
+    from gcws.automation import export
+    jr = env["journal"]
+    job, folder = _accepted_with_files(env)
+    export.deliver(jr, env["wf"], job)
+    a = env["tmp"] / "A" / folder.name / "26016606_x_NIAS_Report.xlsx"
+    with open(a, "rb"):                                    # open in Excel: no delete or replace
+        export.deliver(jr, env["wf"], jr.job(job.id), force=True)
+    assert jr.job(job.id).export_state == "error"
+    assert sorted(p.name for p in a.parent.iterdir()) == [a.name]
 
 
 # -- detection (Oct 2026): data put in again, loose runs, old folders, copies --------------------------
@@ -1007,6 +1071,25 @@ def test_the_lock_keeps_a_second_process_out_until_the_first_ends(lock_name):
     assert store.take_lock(lock_name) and store.lock_held(lock_name)
     store.release_lock(lock_name)
     assert not store.lock_held(lock_name)
+
+
+def test_a_process_found_ended_holds_its_lock_no_more(lock_name):
+    """``alive`` said "ended" as soon as the exit code was set, a few ms before Windows closed the
+    process's handles: its lock was still held then (the lock test above flaked)."""
+    import signal
+    from gcws.automation import store
+    for i in range(5):
+        name = f"{lock_name}-{i}"
+        proc = _holder(name)
+        try:
+            os.kill(proc.real_pid, signal.SIGTERM)        # TerminateProcess; returns before the process is gone
+            end = time.monotonic() + 10
+            while store.alive(proc.real_pid) and time.monotonic() < end:
+                pass
+            assert not store.alive(proc.real_pid)
+            assert not store.lock_held(name)
+        finally:
+            _end(proc)
 
 
 def test_no_second_watcher_beside_a_busy_one(env, lock_name, monkeypatch):

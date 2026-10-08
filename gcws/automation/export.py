@@ -20,8 +20,15 @@ DELIVERABLE = J.DELIVERABLE
 def copy_atomic(src: Path, dst: Path) -> Path:
     dst.parent.mkdir(parents=True, exist_ok=True)
     tmp = dst.with_name(f".{dst.name}.gcws-tmp")
-    shutil.copy2(src, tmp)
-    os.replace(tmp, dst)
+    try:
+        shutil.copy2(src, tmp)
+        os.replace(tmp, dst)
+    except BaseException:
+        try:                                           # e.g. the report is open in Excel: nothing left behind
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return dst
 
 

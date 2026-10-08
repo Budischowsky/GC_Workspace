@@ -52,6 +52,9 @@ def summary_workbook(batch_name: str, entries: list[dict], target: Path) -> Path
             e.get("name", ""), STATUS.get(e.get("state"), e.get("state", "")), e.get("reviewer") or "",
             e.get("reviewed") or "", e.get("comment") or "", len(findings), details, str(e.get("report") or ""))])
         row = sh.max_row
+        for c in sh[row]:
+            if isinstance(c.value, str) and c.value.startswith("="):
+                c.data_type = "s"                      # text, not a formula (Excel would repair the file)
         fill = fills.get(e.get("state"))
         if fill:
             sh.cell(row, 2).fill = PatternFill("solid", fgColor=fill)
