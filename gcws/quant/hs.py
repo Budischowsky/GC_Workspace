@@ -325,5 +325,5 @@ def engine_peaks(sample, value=None):
                  mg_kg=value(r) if value else r.derived.get("conc"),
                  id_status=r.derived["id_status"], review="",
                  score=r.score, area=r.area,
-                 blank_area=r.derived["blank_area"], blank_istd_area=0.0)
+                 blank_area=r.derived["blank_area"], blank_istd_area=0.0, gcws_index=r.derived.get("gcws_index"))
             for r in sample.rows if not r.derived.get("istd")]

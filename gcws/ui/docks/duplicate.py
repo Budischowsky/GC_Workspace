@@ -437,11 +437,8 @@ class DuplicatePage(QWidget):
         self.show_limit()
 
     def labels(self):
-        from gcws.io.sequence import replicate_label
-        out = []
-        for i, m in enumerate(self.members):
-            lab = replicate_label(self.ws.runs[m].run.path.name) if m in self.ws.runs else ""
-            out.append(lab if lab and lab not in out else "AB"[i] if i < 2 else str(i + 1))
+        from gcws.quant.conversion import labels
+        out = labels(self.ws, self.members)
         return tuple(out) if len(out) == 2 else ("A", "B")
 
     def edits_key(self):
@@ -1033,39 +1030,8 @@ class DuplicatePage(QWidget):
     def _unit_cells(self, row: dict, units: list[str], settings) -> list[tuple]:
         """``(value, calculation)`` of the further-unit columns of ``row``: its A, B and mean
         (the analyst's edits included) converted from the mode's unit."""
-        mode = self.ws.quant.get("mode", "nias_mgkg")
-        if mode == "extraction":
-            return self._extraction_cells(row, units)
-        conv = {side: QS.from_mode_unit(mode, settings, row.get(field)) if units else None
-                for side, field in UNIT_SIDES}
-        return [(conv[side][unit], conv[side]["calc"].get(unit)) if unit in units else (None, None)
-                for unit in QS.CONC_UNITS for side, _field in UNIT_SIDES]
-
-    def _extraction_cells(self, row: dict, units: list[str]) -> list[tuple]:
-        """Extraction: A and B converted with their own run's sample amount, the mean from both
-        (without a dismissed outlier)."""
-        from gcws.quant import extraction as EX
-        from gcws.quant import units as U
-        q, ids = self.ws.quant, list(self.members[:2])
-        ids += [""] * (2 - len(ids))
-        u1 = EX.unit(q)
-        out = []
-        for key in QS.CONC_UNITS:
-            u = U.label_of(key)
-            for (side, field), rid in zip(UNIT_SIDES, ids + [None]):
-                if key not in units:
-                    out.append((None, None))
-                elif side == "mean":
-                    v = EX.mean_in(q, ids, [row.get("c1"), row.get("c2")], row.get("mean"), u,
-                                   int(row.get("dismissed") or 0))
-                    out.append((v, f"Mean of {self.labels()[0]} and {self.labels()[1]} in {u}, each with its own "
-                                   "sample amount" if v is not None else ""))
-                else:
-                    v = EX.convert_value(q, rid, row.get(field), u)
-                    r = U.ratio(u1, u, EX.basis(q, rid))
-                    out.append((v, U.missing(u, EX.basis(q, rid)) or
-                                (f"{u} = {row.get(field):.6g} {u1} × {r:.6g}" if v is not None else "")))
-        return out
+        from gcws.quant.conversion import unit_cells
+        return unit_cells(self.ws.quant, settings, row, self.members, units, self.labels())
 
     def _fill_table(self):
         from PySide6.QtGui import QFont

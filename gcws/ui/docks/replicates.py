@@ -557,11 +557,8 @@ class ReplicatesDock(QWidget):
         self.rows = rows
         n = len(members)
         unit = self.ws.quant_unit()
-        from gcws.io.sequence import replicate_label
-        letters = []
-        for k, m in enumerate(members):
-            lab = replicate_label(self.ws.runs[m].run.path.name)
-            letters.append(lab if lab and lab not in letters else chr(65 + k))
+        from gcws.quant.conversion import labels
+        letters = labels(self.ws, members)
         headers = ["", "RT", "Name", "CAS", f"Mean [{unit}]"] + [f"{letters[k]} [{unit}]" for k in range(n)] + \
                   (["Rel. diff %"] if n == 2 else ["SD", "RSD %"]) + ["Status", "ID status", "Review"]
         self._filling = True
