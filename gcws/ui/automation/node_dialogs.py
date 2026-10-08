@@ -138,6 +138,8 @@ class NodeDialog(QDialog):
             self._show_rules()
         elif t == "report":
             self.w["kind"] = _combo(W.REPORT_KINDS, p("kind"))
+            self.w["kind"].setToolTip("Template Report: the columns, header and rows of the processing method's "
+                                      "report template (Method > Report template...)")
             form.addRow("Report", self.w["kind"])
             box = QGroupBox("Files")
             bl = QVBoxLayout(box)

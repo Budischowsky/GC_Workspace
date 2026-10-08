@@ -234,3 +234,17 @@ def test_batch_summary_writes_text_starting_with_equals_as_text(tmp_path):
     assert [c.data_type for c in row] == [c.data_type if c.value is None or not isinstance(c.value, str) else "s"
                                           for c in row]
     assert row[0].value == "=26016606" and row[4].value == "=check again" and row[6].value == "=1/0"
+
+
+def test_the_template_report_needs_the_methods_template(data):
+    from gcws.automation import workflow as W
+    from gcws.report import template as TP
+    wf = _example(data)
+    wf.by_type("report")[0].params["kind"] = "template"
+    texts = lambda loader: " | ".join(i.text for i in W.validate(wf, method_names=["NIAS"], word=True,
+                                                                 method_loader=loader))
+    without = texts(lambda name: {"sections": {"quant": {"mode": "hs_screening"}}})
+    assert "has no report template" in without and "cannot make" not in without      # every mode
+    with_it = texts(lambda name: {"sections": {"quant": {"mode": "extraction"},
+                                               "report_template": TP.preset("NIAS")}})
+    assert "report template" not in with_it and "Template Report" in W.REPORT_KINDS.values()

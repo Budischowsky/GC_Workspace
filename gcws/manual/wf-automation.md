@@ -88,7 +88,7 @@ You need a processing method first: set everything up for one batch by hand and 
 
 | Setting | Default | Meaning |
 |---|---|---|
-| **Report** | NIAS Report | Which report. |
+| **Report** | NIAS Report | Which report. **Template Report** writes the report the processing method's report template designs, in any quantification mode; the method must carry a template (see [Report templates](wf-report-templates.md)). |
 | **Files** | Excel and Word | Per sample: Excel report, Word report, PDF report (needs Microsoft Word), double determination workbook. Per batch: one Word / PDF report of all samples, a Report² summary workbook. |
 | **Batch report** | When every sample of the batch is accepted | When the report of the whole batch is written. The other choice: **When every sample is processed**. |
 | **Keep the intermediate workbook** | off | |

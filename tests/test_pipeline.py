@@ -246,3 +246,29 @@ def test_single_determination_rule():
     ev = {"double_determination": {"members": ["a", "b"], "pairing": "features", "text": "a + b: 3 features"}}
     res = RU.evaluate(RU.default_rules(), ev)
     assert res.status == RU.ACCEPTED_AUTO and res.findings[0].level == "info"
+
+
+def test_template_report_in_the_automation(qapp, samples, data, tmp_path):
+    import copy
+    from gcws.automation import headless as H
+    from gcws.automation import pipeline as PL
+    from gcws.report import template as TP
+    batch = copy_batch(samples, tmp_path / "watch", ["06_", "07_", "08_", "11_", "13_"])
+    method = copy.deepcopy(METHOD)
+    tpl = TP.stamped(TP.preset("NIAS"), "Customer A")
+    tpl["columns"].append({"field": "reldiff"})
+    method["sections"]["report_template"] = tpl
+    res = PL.run_job(spec(batch, tmp_path / "job", method=method,
+                          reports=[{"node": "r1", "kind": "template", "formats": ["xlsx", "docx"]}]),
+                     identify=lib_oracle)
+    assert res.state in (PL.ACCEPTED_AUTO, PL.CONTROL), res.reason
+    files = res.files["r1"]
+    assert Path(files["xlsx"]).name.endswith("_Customer_A_Report.xlsx") and Path(files["docx"]).is_file()
+    assert res.evidence["kind"] == "template" and res.evidence["rows"]
+    # the analyst's project keeps the template: a re-report makes the same report
+    ws = H.new_workspace()
+    H.open_project(ws, res.project)
+    assert TP.of(ws.quant)["name"] == "Customer A"
+    again = PL.run_job(spec(batch, tmp_path / "job2", mode="rereport", project_path=res.project,
+                            reports=[{"node": "r1", "kind": "template", "formats": ["xlsx"]}]))
+    assert Path(again.files["r1"]["xlsx"]).name.endswith("_Customer_A_Report.xlsx")

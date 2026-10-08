@@ -36,7 +36,7 @@ ALLOWED = {("source", "method"), ("source", "copy"), ("copy", "method"), ("metho
 
 REPORT_KINDS = {"nias": "NIAS Report", "fingerprint": "Fingerprint Report",
                 "total_extraction": "Total Extraction Report", "hs_screening": "HS-Screening Report",
-                "quant": "Quantification Report"}
+                "quant": "Quantification Report", "template": "Template Report"}
 #: files a Report node can produce: per sample, then per batch folder
 FORMATS = {
     "xlsx": "Excel report",
@@ -541,6 +541,10 @@ def validate(wf: Workflow, *, method_names: Optional[list] = None, check_paths: 
                 except Exception:  # noqa: BLE001 - reported as missing above
                     continue
                 mode = (sec.get("quant") or {}).get("mode", "nias_mgkg")
+                tpl = sec.get("report_template") or {}
+                if kind == "template" and not tpl.get("columns"):
+                    err(r.id, f"The method '{m.p('method')}' has no report template: design one under Method > "
+                              "Report template..., choose Use in method (or Save to method) and save the method.")
                 if kind == "nias" and not sec.get("migration"):
                     warn(r.id, f"The method '{m.p('method')}' has no migration conditions: the NIAS report "
                                "cannot be made (enter them and save the method again).")
