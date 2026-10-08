@@ -3,6 +3,14 @@
 Default mode ``average_bg`` uses the retained component on split peaks.
 For unassigned peaks it averages the peak top and subtracts an interpolated
 background. Explicit ``raw_*`` modes bypass component and manual assignments.
+
+The background is the baseline under the peak. Next to a peak's boundaries the scans are
+normally baseline; in a cluster they sit on the neighbouring peaks, and subtracting them takes
+the peak's own ions away together with the neighbours' (a peak between two neighbours of a
+similar spectrum kept little more than noise). There the baseline is taken from the nearest
+scans before and after that lie on the baseline (the trace's SNIP envelope), and of the valley
+next to the peak only what is not the peak's own spectrum is subtracted: the ions of a different
+neighbour. ``average_bg_classic`` keeps the adjacent scans.
 """
 from __future__ import annotations
 
@@ -13,8 +21,17 @@ import numpy as np
 from gcws.core.keys import is_fid
 from gcws.core.model import parse_key
 
+#: Scans are baseline when the trace there is at most this share of the peak's height above its
+#: SNIP envelope (window ``BASELINE_WINDOW`` min); baseline scans are looked for up to ``MAX_WALK``
+#: min before and after the peak. Measured on synthetic clusters of real peaks (known spectra) and
+#: on the A/B runs of the sample batch.
+CLEAN_FRACTION = 0.1
+BASELINE_WINDOW = 1.0
+MAX_WALK = 1.0
+
 MODES = {
     "average_bg": "Assigned component, otherwise average minus background",
+    "average_bg_classic": "Assigned component, otherwise average minus adjacent scans (classic)",
     "apex": "Apex scan",
     "apex_minus_start": "Apex minus start scan (PBM)",
     "deconvoluted": "Deconvoluted component",
@@ -174,7 +191,7 @@ def extract(run, peak, key: str, delay: float, mode: str = "average_bg",
         spec = _sub(mean, ms.nominal_spectrum(bg_scans)) if bg_scans else mean
         mz, ab = _from_dict(spec)
         return Spectrum(mz, ab, ta, "manual", apex_scans, bg_scans, "analyst-defined scans")
-    if not raw and mode in ("average_bg", "deconvoluted"):
+    if not raw and mode in ("average_bg", "average_bg_classic", "deconvoluted"):
         from gcws.ms.deconv import allocated_component
         assigned = allocated_component(ms, peak)
         if assigned is not None:
@@ -231,6 +248,12 @@ def extract(run, peak, key: str, delay: float, mode: str = "average_bg",
     first, last = int(scans[0]), int(scans[-1])
     pre = [s for s in range(first - n_bg, first) if 0 <= s < ms.n_scans]
     post = [s for s in range(last + 1, last + 1 + n_bg) if 0 <= s < ms.n_scans]
+    if mode == "average_bg" and positive_top:
+        spec = _clean_background(ms, trace, sig_key, apex, apex_scans, first, last, pre, post, n_bg)
+        if spec is not None:
+            if "fallback_note" in locals():
+                spec.note = fallback_note + "; " + spec.note
+            return spec
     mean = ms.nominal_spectrum(apex_scans)
     if pre and post:
         bpre, bpost = ms.nominal_spectrum(pre), ms.nominal_spectrum(post)
@@ -249,7 +272,96 @@ def extract(run, peak, key: str, delay: float, mode: str = "average_bg",
         note += "; no positive peak top: nearest scan to requested apex"
     if "fallback_note" in locals():
         note = fallback_note + "; " + note
-    return Spectrum(mz, ab, float(np.mean(ms.rt[apex_scans])), "average_bg", apex_scans, pre + post, note)
+    return Spectrum(mz, ab, float(np.mean(ms.rt[apex_scans])), mode, apex_scans, pre + post, note)
+
+
+def _envelope(ms, key: str, trace: np.ndarray) -> np.ndarray:
+    """The SNIP baseline of the run's ``key`` trace, computed once per run."""
+    from gcws.signal.envelope import envelope
+    cache = getattr(ms, "_bg_envelope", None)
+    if cache is None:
+        cache = ms._bg_envelope = {}
+    env = cache.get(key)
+    if env is None or env.size != trace.size:
+        env = cache[key] = envelope(ms.rt, trace, BASELINE_WINDOW)
+    return env
+
+
+def _baseline_group(excess: np.ndarray, starts: np.ndarray, n_bg: int):
+    """The first group of ``n_bg`` scans from ``starts`` (in the order they are looked at) whose mean
+    excess over the envelope is baseline, and True; otherwise the lowest group and False."""
+    starts = starts[(starts >= 0) & (starts + n_bg <= excess.size)]
+    if not starts.size:
+        return None, False
+    c = np.concatenate([[0.0], np.cumsum(excess)])
+    level = (c[starts + n_bg] - c[starts]) / n_bg
+    hit = np.flatnonzero(level <= CLEAN_FRACTION)
+    s = int(starts[hit[0]] if hit.size else starts[int(np.argmin(level))])
+    return list(range(s, s + n_bg)), bool(hit.size)
+
+
+def _clean_background(ms, trace, key: str, apex: int, apex_scans: list, first: int, last: int, pre0: list,
+                      post0: list, n_bg: int) -> Spectrum | None:
+    """The peak top minus its baseline when the scans next to the peak (scans ``first`` to ``last``)
+    are not baseline (a peak in a cluster), or None when they are (then the adjacent scans are the
+    background, as always).
+
+    The baseline spectrum is interpolated between the nearest baseline scans before and after the
+    peak (one side only when the other has none within ``MAX_WALK``; the lowest scans of both sides
+    when neither has). Of each valley next to the peak, minus that baseline, the least-squares share
+    of the peak's own spectrum stays: the rest - the ions of a different neighbour - is interpolated
+    to the peak top and subtracted as well."""
+    trace = np.asarray(trace, dtype=float)
+    env = _envelope(ms, key, trace)
+    height = trace[apex] - env[apex]
+    if not height > 0:
+        return None
+    excess = (trace - env) / height
+
+    def baseline(group):
+        return not group or float(np.mean(excess[group])) <= CLEAN_FRACTION
+    clean0 = (baseline(pre0), baseline(post0))
+    if all(clean0):
+        return None
+    reach = max(1, int(round(MAX_WALK / float(np.median(np.diff(ms.rt))))))
+    pre, pre_ok = (pre0, True) if clean0[0] and pre0 else \
+        _baseline_group(excess, np.arange(first - n_bg, first - n_bg - reach, -1), n_bg)
+    post, post_ok = (post0, True) if clean0[1] and post0 else \
+        _baseline_group(excess, np.arange(last + 1, last + 1 + reach), n_bg)
+    if pre_ok or post_ok:                     # a side without baseline in reach is left out
+        pre, post = (pre if pre_ok else None), (post if post_ok else None)
+    groups = {"top": apex_scans, "pre": pre, "post": post,
+              "valley_pre": None if clean0[0] else pre0, "valley_post": None if clean0[1] else post0}
+    arrays = {k: ms.nominal_spectrum_arrays(g) for k, g in groups.items() if g}
+    axis = np.unique(np.concatenate([mz for mz, _ab in arrays.values()]))
+    vec, when = {}, {}
+    for k, (mz, ab) in arrays.items():
+        vec[k] = np.zeros(axis.size)
+        vec[k][np.searchsorted(axis, mz)] = ab
+        when[k] = float(np.mean(ms.rt[groups[k]]))
+
+    def interpolated(a, b, t):
+        if a in vec and b in vec and when[b] > when[a]:
+            f = (t - when[a]) / (when[b] - when[a])
+            return (1.0 - f) * vec[a] + f * vec[b]
+        return vec[a] if a in vec else vec[b] if b in vec else np.zeros(axis.size)
+    spec = np.maximum(vec["top"] - interpolated("pre", "post", when["top"]), 0.0)
+    norm = float(spec @ spec)
+    for k in ("valley_pre", "valley_post"):
+        if k in vec:
+            net = np.maximum(vec[k] - interpolated("pre", "post", when[k]), 0.0)
+            share = max(float(net @ spec) / norm, 0.0) if norm > 0 else 0.0
+            vec[k] = np.maximum(net - share * spec, 0.0)          # the ions that are not the peak's own
+    spec = np.maximum(spec - interpolated("valley_pre", "valley_post", when["top"]), 0.0)
+    keep = spec > 0
+    used = [g for g in (pre, post) if g]
+    where = " and ".join(f"{ms.rt[g[0]]:.3f}-{ms.rt[g[-1]]:.3f}" for g in used)
+    note = (f"{len(apex_scans)} scans averaged, background from the baseline scans at {where} min "
+            if pre_ok or post_ok else
+            f"{len(apex_scans)} scans averaged, no baseline within {MAX_WALK:g} min: background from the "
+            f"lowest scans at {where} min ") + "(neighbouring peaks skipped), ions of the neighbours removed"
+    return Spectrum(axis[keep].astype(np.int64), spec[keep], when["top"], "average_bg", apex_scans,
+                    [s for g in used for s in g], note)
 
 
 def deconvoluted_component(run, peak, key: str, delay: float, settings=None):
