@@ -21,6 +21,10 @@ def dlg(qtbot, win, tmp_path, monkeypatch):
 
 def test_starts_from_the_layout_of_the_mode_and_edits_columns(dlg):
     assert dlg.tpl["columns"][0]["field"] == "rt"                     # NIAS layout (NIAS mode)
+    # every setting of the layout survives filling the window (rows, limit, sums, extras)
+    assert not TP.differs(dlg.tpl, TP.preset("NIAS")) and dlg.name == ""
+    assert dlg.skip_istd.isChecked() and dlg.category_sums.isChecked() and dlg.limit_mode.currentData() == "value"
+    assert dlg.changed_chip.text() == "not saved"
     assert dlg.cols.topLevelItemCount() == len(TP.preset("NIAS")["columns"])
     dlg.new_from("Empty")
     assert dlg.cols.topLevelItemCount() == 0 and dlg.name == ""

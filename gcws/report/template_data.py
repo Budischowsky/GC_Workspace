@@ -209,17 +209,16 @@ def determinations(ws, members, labels) -> list[dict]:
     return out
 
 
-def _flags(name: str, cas: str, istd_codes) -> dict:
-    main_cas_ok = True
+def _flags(name: str, cas: str, istd_codes, main=None) -> dict:
+    """What the row rules ask of a merged row: internal standard, no name and no valid CAS, a library's
+    "Sum of" row, unidentified. ``main``: the NIAS script (its CAS check)."""
     try:
-        from gcws.report.legacy_api import main_script
-        main = main_script()
-        main_cas_ok = main.is_valid_cas_number(main.normalize_cas(cas))
+        cas_ok = main.is_valid_cas_number(main.normalize_cas(cas)) if main is not None else bool(cas)
     except Exception:  # noqa: BLE001
-        main_cas_ok = bool(cas)
+        cas_ok = bool(cas)
     low = (name or "").strip().casefold()
     return {"istd": (name or "").strip().upper() in ISTD_CODES or low in ISTD_NAMES or any(istd_codes),
-            "nameless": not low and not main_cas_ok,
+            "nameless": not low and not cas_ok,
             "library_sum": low.startswith("sum of "),
             "unidentified": not low or low.startswith("unknown")}
 
@@ -320,7 +319,7 @@ def collect(ws, members: list, group: Optional[dict], *, fields=(), method_name:
             "index": i, "rt": r.get("rt"), "name": name, "cas": cas, "mean": mean, "dismissed": dismissed,
             "report": bool(r.get("report")) and not r.get("deleted"), "deleted": bool(r.get("deleted")),
             "level": v.level if v is not None else "", "values": vals,
-            "flags": _flags(name, cas, [c for c in istd_codes if c]),
+            "flags": _flags(name, cas, [c for c in istd_codes if c], main),
             "slim": {k: r.get(k) for k in ("rt", "name", "cas", "mean", "c1", "c2", "reldiff", "status",
                                            "id_status", "review")},
         })

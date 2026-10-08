@@ -153,8 +153,9 @@ class ReportTemplateDialog(QDialog):
         split = QSplitter(Qt.Vertical)
         split.addWidget(self.tabs)
         split.addWidget(prev)
-        split.setStretchFactor(0, 3)
-        split.setStretchFactor(1, 2)
+        split.setStretchFactor(0, 1)
+        split.setStretchFactor(1, 1)
+        split.setSizes([420, 380])
 
         bottom = QHBoxLayout()
         self.word_btn = QPushButton("Word preview...")
@@ -195,7 +196,10 @@ class ReportTemplateDialog(QDialog):
             s = getattr(ws, sig, None)
             if s is not None:
                 s.connect(self._data_changed)
-        self.open_template(TP.of(ws.quant) or TP.preset(TP.starter_for(ws.quant)), from_method=True)
+        if TP.of(ws.quant) is not None:
+            self.open_template(TP.of(ws.quant), from_method=True)
+        else:
+            self.new_from(TP.starter_for(ws.quant))
 
     # -- tabs ----------------------------------------------------------------------------------
 
@@ -508,7 +512,7 @@ class ReportTemplateDialog(QDialog):
     # -- widgets <-> template --------------------------------------------------------------------
 
     def _refresh_names(self):
-        self._loading = True
+        was, self._loading = self._loading, True
         self.templates.clear()
         names = TP.names()
         if not self.name or self.name not in names:
@@ -518,7 +522,7 @@ class ReportTemplateDialog(QDialog):
         i = self.templates.findData(self.name) if self.name in names else 0
         self.templates.setCurrentIndex(max(0, i))
         self.delete_btn.setEnabled(self.name in names)
-        self._loading = False
+        self._loading = was
 
     def _chosen(self, index):
         name = self.templates.itemData(index)
@@ -831,8 +835,8 @@ class ReportTemplateDialog(QDialog):
 
     def _update_state(self):
         modified = self.is_modified()
-        theme.set_chip(self.changed_chip, "● changed" if modified and self.name else
-                       ("not saved" if not self.name else ""), "warn")
+        theme.set_chip(self.changed_chip, "not saved" if self._baseline is None else
+                       ("● changed" if modified else ""), "warn")
         theme.set_chip(self.method_chip, "In method" if self.in_method() else "", "ok")
         self.save_btn.setEnabled(modified or not self.name)
         name = self._method_name()
@@ -895,6 +899,7 @@ class ReportTemplateDialog(QDialog):
             self.preview.setHtml("")
             self.warnings.setText(f"No preview: {exc}")
             return
+        self.warnings.setVisible(True)
         if data is None:
             self.what.setText("")
             self.warnings.setText("Activate a sample (or a replicate group) to see the report here.")
@@ -903,6 +908,7 @@ class ReportTemplateDialog(QDialog):
         table = TB.build(data, self.tpl)
         self.what.setText(f"{data.values.get('samples', '')} — {data.values.get('determination', '')}")
         self.warnings.setText("\n".join("⚠ " + w for w in table.warnings[:6]))
+        self.warnings.setVisible(bool(table.warnings))
         self.preview.setHtml(to_html(table))
         self.last_table = table
 
