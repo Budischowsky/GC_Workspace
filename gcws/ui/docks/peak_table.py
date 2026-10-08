@@ -74,6 +74,7 @@ class PeakTable(QWidget):
     searchRequested = QtSignal()
     integrateRequested = QtSignal(bool)       # all runs?
     deleteRequested = QtSignal(list)
+    reportRequested = QtSignal(str, bool)     # report kind, preview? - of the active run alone
 
     def __init__(self, ws, parent=None):
         super().__init__(parent)
@@ -153,6 +154,12 @@ class PeakTable(QWidget):
         top.setContentsMargins(0, 0, 0, 0)
         top.addWidget(tb)
         top.addStretch(1)
+        from gcws.ui.widgets.report_button import report_button
+        self.b_report = report_button(self, self._preview, lambda kind: self.reportRequested.emit(kind, False),
+                                      self.export, "Export peak table...")
+        self.b_report.setToolTip("The report of the active chromatogram alone (single determination); "
+                                 "the arrow: the other reports and the export")
+        top.addWidget(self.b_report)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(2, 2, 2, 2)
         lay.setSpacing(2)
@@ -177,6 +184,11 @@ class PeakTable(QWidget):
         ws.runRemoved.connect(lambda *_: self.reload())
         ws.hints.updated.connect(lambda rid: self.model.refresh_column("class_hint") if rid == ws.active_id else None)
         self.reload()
+
+    def _preview(self):
+        """The report that fits the quantification (HS-Screening on the TIC, else NIAS), as a preview."""
+        from gcws.quant.service import quant_detector
+        self.reportRequested.emit("hs_screening" if quant_detector(self.ws.quant) == "TIC" else "nias", True)
 
     # -- data ----------------------------------------------------------------
 

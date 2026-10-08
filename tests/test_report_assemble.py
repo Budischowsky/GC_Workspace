@@ -83,3 +83,31 @@ def test_report_menu_messages_unchanged(qtbot, win, monkeypatch):
         w.report("hs_screening")
     assert shown[0][:2] == ("information", "Report") and "replicate group" in shown[0][2]
     assert shown[1][:2] == ("information", "Report") and "HS-Screening mode" in shown[1][2]
+
+
+def test_peaks_panel_reports_the_active_run_alone(qtbot, win, samples, monkeypatch):
+    """The Peaks panel's report button: a single determination, even when the run is in a replicate group."""
+    from PySide6.QtWidgets import QMessageBox
+    from gcws.report import assemble as AS
+    from test_ui import _load
+    w = win
+    shown = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *a: shown.append(a[2]))
+    w.table.reportRequested.emit("nias", True)                 # nothing loaded: said, nothing written
+    assert shown and "on its own" in shown[0]
+    _load(qtbot, w, samples, ["07_", "08_"], process=False)
+    ids = [s.id for s in w.ws.states()]
+    for s in w.ws.states():
+        s.run.role = "sample"
+    w.ws.replicate_groups = [{"id": "g", "name": "pair", "members": ids, "policy": "all"}]
+    w.ws.set_active(ids[1])
+    seen = []
+
+    def prepare(ws, kind, group):
+        seen.append(group)
+        raise AS.ReportNotPossible("stop", "stop", "information")
+    monkeypatch.setattr(AS, "prepare", prepare)
+    w.table.reportRequested.emit("nias", True)
+    assert seen[-1]["members"] == [ids[1]]
+    w.report("nias")                                            # the Report menu still takes the group
+    assert seen[-1]["members"] == ids

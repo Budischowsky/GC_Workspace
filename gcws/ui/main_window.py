@@ -729,6 +729,7 @@ class MainWindow(QMainWindow):
         self.spectrum.investigateRequested.connect(self.atlas_research)
         self.spectrum.ionClicked.connect(self.show_ion_eic)
         self.spectrum.libraryRequested.connect(lambda: self.edit_library(True))
+        self.table.reportRequested.connect(lambda kind, preview: self.report(kind, preview=preview, single=True))
         self.replicates.reportRequested.connect(lambda kind, gid: self.report(kind, gid))
         self.replicates.previewRequested.connect(lambda kind, gid: self.report(kind, gid, preview=True))
         self.automation.showReport2.connect(lambda: self._show_dock("report2"))
@@ -2062,6 +2063,13 @@ class MainWindow(QMainWindow):
             self.report2.refresh()
         return True
 
+    def _single_for_report(self):
+        """The active run alone as a group (single determination), or None when it is no sample."""
+        rid = self.ws.active_id
+        if rid and self.ws.runs[rid].role == "sample":
+            return {"id": "", "name": self.ws.runs[rid].name, "members": [rid], "policy": "all"}
+        return None
+
     def _group_for_report(self, group_id=None):
         groups = self.ws.replicate_groups
         if group_id:
@@ -2073,14 +2081,16 @@ class MainWindow(QMainWindow):
         g = next((g for g in groups if rid in g["members"]), None)
         if g is not None:
             return g
-        if rid and self.ws.runs[rid].role == "sample":
-            return {"id": "", "name": self.ws.runs[rid].name, "members": [rid], "policy": "all"}
-        return None
+        return self._single_for_report()
 
-    def report(self, kind, group_id=None, preview=False):
+    def report(self, kind, group_id=None, preview=False, single=False):
+        """Write (or preview) a ``kind`` report of a replicate group; ``single``: of the active run alone."""
         from gcws.report import assemble as AS
         from gcws.report import service as RS
-        g = self._group_for_report(group_id)
+        if single and self._single_for_report() is None:
+            QMessageBox.information(self, "Report", "Activate a sample (role Sample) to report it on its own.")
+            return
+        g = self._single_for_report() if single else self._group_for_report(group_id)
         try:
             try:
                 members, samples = AS.prepare(self.ws, kind, g)
