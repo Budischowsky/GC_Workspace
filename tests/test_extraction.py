@@ -98,3 +98,30 @@ def test_nias_standards_are_the_default():
     assert [s["code"] for s in stds] == ["IS1", "IS2", "IS3", "IS4"]
     assert [s["quantify"] for s in stds] == [True, True, True, False]
     assert stds[0]["concentration"] == pytest.approx(0.82)
+
+
+def test_named_quant_methods_round_trip(tmp_path, monkeypatch):
+    from gcws import paths
+    from gcws.quant import qmethod as QM
+    monkeypatch.setattr(paths, "DATA", tmp_path)
+    q = _quant(sample_type="foil", amount=0.6, units=["µg/dm²", "mg/dm²"])
+    q["istd_defs"] = [{"code": "IS1", "name": "C17-d36", "concentration": 0.5, "quantify": True, "target_rt": 13.4}]
+    q["method_samples"] = {"r1": {"amount": 0.2}}
+    data = QM.collect(q, "Foil 0.6 dm²: ethanol")
+    QM.save(data)
+    assert QM.names() == ["Foil 0.6 dm²: ethanol"]
+    back = QM.applied({"mode": "nias_mgkg", "method_samples": {"r9": {"amount": 1}}}, QM.load("Foil 0.6 dm²: ethanol"))
+    assert back["mode"] == "extraction"
+    assert back["method"]["amount"] == 0.6 and back["method"]["units"] == ["µg/dm²", "mg/dm²"]
+    assert back["istd_defs"][0]["concentration"] == 0.5
+    assert back["method_samples"] == {"r9": {"amount": 1}}        # a run's amount is never part of a method
+    assert "method_samples" not in data
+    assert QM.delete("Foil 0.6 dm²: ethanol") and QM.names() == []
+
+
+def test_processing_methods_carry_the_quant_method():
+    from gcws.core import proc_method as PM
+    method = {"sections": {"quant": {"mode": "extraction", "method": {"amount": 3.0}}}}
+    q = PM.plan_quant({"mode": "nias_mgkg", "method_samples": {"r": {"amount": 1}}}, method, ["quant"])
+    assert q["method"] == {"amount": 3.0} and q["mode"] == "extraction"
+    assert q["method_samples"] == {"r": {"amount": 1}}
