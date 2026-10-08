@@ -689,8 +689,12 @@ def run_nias_duplicate(session: M.Session, output_path: Path, settings, *,
                        blank_istd_path: Optional[Path] = None,
                        seen_counts: Optional[dict] = None,
                        ri_options: Optional[dict] = None,
-                       combined: Optional[list] = None) -> Path:
+                       combined: Optional[list] = None,
+                       save=None) -> Path:
     """Write the NIAS workbook from the edited session.
+
+    GCWS-PATCH: ``save(workbook, path)`` replaces the plain ``workbook.save`` (the caller adds
+    the report metadata before the one save instead of loading the file again).
 
     One determination is a complete analysis (spec v2.1 SS V.6). The layout does
     not change for it: ``Area 2``, ``Concentration 2 [mg/kg]`` and
@@ -759,8 +763,13 @@ def run_nias_duplicate(session: M.Session, output_path: Path, settings, *,
     _write_audit_sheet(wb, session)
 
     output_path = Path(output_path)
-    wb.save(output_path)
+    (save or _plain_save)(wb, output_path)      # GCWS-PATCH: one save with the caller's additions
     return output_path
+
+
+def _plain_save(wb, path: Path) -> None:
+    """GCWS-PATCH: the writers' default save."""
+    wb.save(path)
 
 
 # --------------------------------------------------------------------------
@@ -825,8 +834,11 @@ def _batch_istd_rows(n_istds: int) -> tuple[int, int, int]:
 def write_batch_workbook(session: M.Session, output_path: Path, settings, *,
                          blank_path: Optional[Path] = None,
                          blank_istd_path: Optional[Path] = None,
-                         sample_name: str = "") -> Path:
+                         sample_name: str = "",
+                         save=None) -> Path:
     """The ``Doppelbestimmung Batch auswerten`` workbook, from the edited session.
+
+    GCWS-PATCH: ``save(workbook, path)`` as in :func:`run_nias_duplicate`.
 
     Same sheets, same positions and the same formula chain as
     ``AutoLib.make_duplicate_workbook``: ``Bestimmung_n!V`` marks the ISTD
@@ -995,7 +1007,7 @@ def write_batch_workbook(session: M.Session, output_path: Path, settings, *,
     except Exception:                        # pragma: no cover - old openpyxl
         pass
     output_path = Path(output_path)
-    wb.save(output_path)
+    (save or _plain_save)(wb, output_path)      # GCWS-PATCH: one save with the caller's additions
     return output_path
 
 

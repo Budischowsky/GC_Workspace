@@ -105,9 +105,9 @@ def search_range(points: list, method) -> tuple[int, int]:
 
 def search_consensus(table, method, needed: list[Feature], progress=lambda t: None) -> str:
     """Search the consensus spectrum of ``needed`` features (sets ``consensus``/``consensus_hits``);
-    returns a note when the libraries cannot be used ("" otherwise). Spectra of one search range go
-    through the Fast search together when the method has it switched on (the hits of the search
-    spectrum by spectrum); the ranges are taken in ascending order, so the library norms resume."""
+    returns a note when the libraries cannot be used ("" otherwise). With the Fast search switched on
+    in the method, all spectra go through it together, each with its own search range (the hits of
+    the search spectrum by spectrum); otherwise they are searched one by one, by ascending range."""
     if not needed:
         return ""
     try:
@@ -118,32 +118,31 @@ def search_consensus(table, method, needed: list[Feature], progress=lambda t: No
         prepare_local(method, progress)
     except Exception as exc:  # noqa: BLE001 - no library: the hit lists decide
         return f"consensus spectra not searched ({exc})"
-    groups: dict = {}
+    todo = []
     for f in needed:
         points = [(int(m), float(a)) for m, a in zip(*f.consensus)]
-        groups.setdefault(search_range(points, method), []).append((f, points))
-    fast = is_fast(method)
-    for rng in sorted(groups):
-        group = groups[rng]
-        results = None
-        if fast:
-            settings = SM.to_api_settings(method, rng, lite=True)
+        todo.append((search_range(points, method), f, points))
+    todo.sort(key=lambda t: t[0])
+    results = None
+    if is_fast(method):
+        settings = SM.to_api_settings(method, todo[0][0], lite=True)
+        try:
+            results = LS.analyze_many([(f.id or "consensus", points) for _rng, f, points in todo], settings,
+                                      ranges=[rng for rng, _f, _points in todo])
+        except Exception:  # noqa: BLE001 - the batch failed as a whole: spectrum by spectrum
+            results = None
+    if results is None:
+        results = []
+        for _rng, f, points in todo:
             try:
-                results = LS.analyze_many([(f.id or "consensus", points) for f, points in group], settings)
-            except Exception:  # noqa: BLE001 - the batch failed as a whole: spectrum by spectrum
-                results = None
-        if results is None:
-            results = []
-            for f, points in group:
-                try:
-                    results.append({"hits": search_spectrum(points, f.id or "consensus", method)})
-                except Exception as exc:  # noqa: BLE001
-                    results.append(exc)
-        for (f, _points), result in zip(group, results):
-            if isinstance(result, BaseException):
-                f.reasons.append(f"consensus search failed: {result}")
-                continue
-            f.consensus_hits = [dict(GI.hit_record(h), peaks=h.get("peaks") or []) for h in result.get("hits") or []]
+                results.append({"hits": search_spectrum(points, f.id or "consensus", method)})
+            except Exception as exc:  # noqa: BLE001
+                results.append(exc)
+    for (_rng, f, _points), result in zip(todo, results):
+        if isinstance(result, BaseException):
+            f.reasons.append(f"consensus search failed: {result}")
+            continue
+        f.consensus_hits = [dict(GI.hit_record(h), peaks=h.get("peaks") or []) for h in result.get("hits") or []]
     return ""
 
 

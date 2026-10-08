@@ -141,6 +141,16 @@ def feature_rows(job: ReportJob, lists: list, tol: float):
     return rows
 
 
+def _metadata_save(main, metadata: dict):
+    """``save(workbook, path)`` for the workbook writers: the migration metadata written into the
+    loaded workbook and saved as ``write_migration_metadata_to_workbook`` saves it (recalculation
+    flags, normalised package), the same file without reading it back first."""
+    def save(workbook, path):
+        main._apply_migration_metadata(workbook, main.validate_migration_metadata(metadata))
+        main._save_recalculating(workbook, Path(path))
+    return save
+
+
 def apply_overrides(middle: Path, overrides: dict) -> int:
     """Write the analyst's values into the intermediate NIAS workbook as numbers (the NIAS main
     script takes a saved number before its formula fallback). Returns the rows changed."""
@@ -194,11 +204,16 @@ def generate(job: ReportJob, progress: Callable[[str], None] = lambda s: None) -
     middle = tmp / f"{job.target.stem}_intermediate.xlsx"
     progress("1/4 intermediate workbook")
     audit = None
+    main = main_script()
+    # the report metadata go into the workbook before its one save (no load and save again); with
+    # the analyst's overrides, written into the saved file, they follow those as before
+    with_metadata = _metadata_save(main, job.migration) if job.migration and job.kind == "nias" else None
     if job.kind == "nias":
         gc_export.run_nias_duplicate(session, middle, job.settings,
                                      blank_path=Path(job.blank_names[0]) if job.blank_names[0] else None,
                                      blank_istd_path=Path(job.blank_names[1]) if job.blank_names[1] else None,
-                                     combined=combined, ri_options=job.ri_options)
+                                     combined=combined, ri_options=job.ri_options,
+                                     save=None if job.overrides else with_metadata)
         n = apply_overrides(middle, job.overrides)
         if n:
             warnings.append(f"{n} value(s) set by the analyst in the double determination")
@@ -208,8 +223,7 @@ def generate(job: ReportJob, progress: Callable[[str], None] = lambda s: None) -
         if any(any(v.get(k) is not None for k in ("a1", "a2", "c1", "c2")) for v in job.overrides.values()):
             warnings.append("Values edited in the double determination are used in the NIAS report only")
     progress("2/4 report (NIAS main script)")
-    main = main_script()
-    if job.migration and job.kind == "nias":
+    if with_metadata is not None and job.overrides:
         main.write_migration_metadata_to_workbook(middle, job.migration)
     job.target.parent.mkdir(parents=True, exist_ok=True)
     summary = main.process_workbook(middle, job.cas_path if job.kind == "nias" else None, job.target)
@@ -223,9 +237,8 @@ def generate(job: ReportJob, progress: Callable[[str], None] = lambda s: None) -
     if job.kind == "nias" and job.batch_target is not None:
         try:
             gc_export.write_batch_workbook(session, job.batch_target, job.settings,
-                                           sample_name=job.target.stem.replace(SUFFIXES["nias"], ""))
-            if job.migration:
-                main.write_migration_metadata_to_workbook(job.batch_target, job.migration)
+                                           sample_name=job.target.stem.replace(SUFFIXES["nias"], ""),
+                                           save=with_metadata)
             batch = job.batch_target
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"Batch workbook not written: {exc}")
