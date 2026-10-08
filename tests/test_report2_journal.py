@@ -273,3 +273,28 @@ def test_change_check_and_stamp_are_cheap_and_ignore_the_heartbeat(tmp_path):
     assert job.findings is job.findings                     # decoded once
     other.close()
     jr.close()
+
+
+def test_history_of_a_report_shows_its_newest_events(tmp_path):
+    """A report with a long history: the history window shows the latest events, not the first ones."""
+    J, jr, b = _journal(tmp_path)
+    job = _done(J, jr, b, "S1", J.CONTROL)
+    for i in range(30):
+        jr.event("info", f"event {i}", job_id=job.id)
+    texts = [e["text"] for e in jr.events(job_id=job.id, limit=10)]
+    assert texts == [f"event {i}" for i in range(20, 30)]                  # the newest, oldest first
+    jr.close()
+
+
+def test_stamp_moves_when_only_the_reason_of_a_waiting_sample_changes(tmp_path):
+    """The watcher updates why a sample waits (Report² shows it): the panel sees it at its next poll."""
+    J, jr, b = _journal(tmp_path)
+    w = jr.ensure_job("wf", "m", b["id"], "W", "W", ["W.D"], {}, "fp", reason="waiting for 2 runs")
+    stamp = jr.stamp()
+    jr.update_job(w.id, reason="waiting for 1 run")
+    assert jr.stamp() != stamp
+    stamp = jr.stamp()
+    jr.ensure_job("wf", "m", b["id"], "W", "W", ["W.D"], {}, "fp", reason="waiting for 9 run")   # same length
+    assert jr.job(w.id).reason == "waiting for 9 run" and jr.stamp() != stamp
+    jr.close()
+

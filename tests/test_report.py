@@ -301,3 +301,35 @@ def test_report_metadata_written_before_the_one_save(samples, qapp, tmp_path, mo
     new = _cells(job.batch_target)
     assert new == _cells(old)
     assert any(v[0] == "EtOH 95 %" for sheet in new.values() for v in sheet.values())
+
+
+def test_failed_report_leaves_no_temporary_folder(tmp_path, monkeypatch):
+    """A report that fails (the NIAS main script raises, Excel holds the target, ...) removes its
+    temporary folder as a finished one does."""
+    import tempfile
+
+    import gc_export
+    from gcws.report import service as RS
+    made = []
+
+    def mkdtemp(prefix=""):
+        made.append(tmp_path / f"{prefix}{len(made)}")
+        made[-1].mkdir()
+        return str(made[-1])
+
+    class Main:
+        @staticmethod
+        def process_workbook(*_a, **_k):
+            raise RuntimeError("the target is open in Excel")
+
+    monkeypatch.setattr(tempfile, "mkdtemp", mkdtemp)
+    monkeypatch.setattr(RS, "build_session", lambda job: object())
+    monkeypatch.setattr(RS, "combined_rows", lambda job: [])
+    monkeypatch.setattr("gcws.report.legacy_api.main_script", lambda: Main)
+    monkeypatch.setattr(gc_export, "write_fingerprint_workbook",
+                        lambda session, middle, *a, **k: Path(middle).write_bytes(b"x"))
+    job = RS.ReportJob("fingerprint", [], ["S1"], object(), tmp_path / "out" / "S1.xlsx", tmp_path / "out" / "S1.docx",
+                       None)
+    with pytest.raises(RuntimeError, match="open in Excel"):
+        RS.generate(job)
+    assert made and not any(p.exists() for p in made)

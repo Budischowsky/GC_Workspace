@@ -237,58 +237,60 @@ def generate(job: ReportJob, progress: Callable[[str], None] = lambda s: None) -
     from gcws.core.text import clean_rows
     clean_rows(combined)
     tmp = Path(tempfile.mkdtemp(prefix="gcws_report_"))
-    middle = tmp / f"{job.target.stem}_intermediate.xlsx"
-    progress("1/4 intermediate workbook")
-    audit = None
-    main = main_script()
-    # the report metadata go into the workbook before its one save (no load and save again); with
-    # the analyst's overrides, written into the saved file, they follow those as before
-    with_metadata = _metadata_save(main, job.migration) if job.migration and job.kind == "nias" else None
-    if job.kind == "nias":
-        gc_export.run_nias_duplicate(session, middle, job.settings,
-                                     blank_path=Path(job.blank_names[0]) if job.blank_names[0] else None,
-                                     blank_istd_path=Path(job.blank_names[1]) if job.blank_names[1] else None,
-                                     combined=combined, ri_options=job.ri_options,
-                                     save=None if job.overrides else with_metadata)
-        n = apply_overrides(middle, job.overrides)
-        if n:
-            warnings.append(f"{n} value(s) set by the analyst in the double determination")
-    else:
-        audit = gc_export.write_fingerprint_workbook(session, middle, job.kind, job.settings, combined=combined,
-                                                     ri_options=job.ri_options)
-        if any(any(v.get(k) is not None for k in ("a1", "a2", "c1", "c2")) for v in job.overrides.values()):
-            warnings.append("Values edited in the double determination are used in the NIAS report only")
-    progress("2/4 report (NIAS main script)")
-    if with_metadata is not None and job.overrides:
-        main.write_migration_metadata_to_workbook(middle, job.migration)
-    job.target.parent.mkdir(parents=True, exist_ok=True)
-    summary = main.process_workbook(middle, job.cas_path if job.kind == "nias" else None, job.target)
-    progress("3/4 Word document")
-    word = None
     try:
-        word = Path(main.create_combined_word([job.target], job.word))
-    except Exception as exc:  # noqa: BLE001 - the .xlsx is the report
-        warnings.append(f"Word document not created: {exc}")
-    batch = None
-    if job.kind == "nias" and job.batch_target is not None:
+        middle = tmp / f"{job.target.stem}_intermediate.xlsx"
+        progress("1/4 intermediate workbook")
+        audit = None
+        main = main_script()
+        # the report metadata go into the workbook before its one save (no load and save again); with
+        # the analyst's overrides, written into the saved file, they follow those as before
+        with_metadata = _metadata_save(main, job.migration) if job.migration and job.kind == "nias" else None
+        if job.kind == "nias":
+            gc_export.run_nias_duplicate(session, middle, job.settings,
+                                         blank_path=Path(job.blank_names[0]) if job.blank_names[0] else None,
+                                         blank_istd_path=Path(job.blank_names[1]) if job.blank_names[1] else None,
+                                         combined=combined, ri_options=job.ri_options,
+                                         save=None if job.overrides else with_metadata)
+            n = apply_overrides(middle, job.overrides)
+            if n:
+                warnings.append(f"{n} value(s) set by the analyst in the double determination")
+        else:
+            audit = gc_export.write_fingerprint_workbook(session, middle, job.kind, job.settings, combined=combined,
+                                                         ri_options=job.ri_options)
+            if any(any(v.get(k) is not None for k in ("a1", "a2", "c1", "c2")) for v in job.overrides.values()):
+                warnings.append("Values edited in the double determination are used in the NIAS report only")
+        progress("2/4 report (NIAS main script)")
+        if with_metadata is not None and job.overrides:
+            main.write_migration_metadata_to_workbook(middle, job.migration)
+        job.target.parent.mkdir(parents=True, exist_ok=True)
+        summary = main.process_workbook(middle, job.cas_path if job.kind == "nias" else None, job.target)
+        progress("3/4 Word document")
+        word = None
         try:
-            gc_export.write_batch_workbook(session, job.batch_target, job.settings,
-                                           sample_name=job.target.stem.replace(SUFFIXES["nias"], ""),
-                                           save=with_metadata)
-            batch = job.batch_target
-        except Exception as exc:  # noqa: BLE001
-            warnings.append(f"Batch workbook not written: {exc}")
-    progress("4/4 register")
-    rows = reported_rows(job, combined, audit)
-    if job.record_seen:
-        err = record_seen(job.kind, rows, job.target, job.sample_key)
-        if err:
-            warnings.append(err)
-    kept = None
-    if job.keep_middle is not None:
-        kept = job.keep_middle
-        shutil.copy2(middle, kept)
-    shutil.rmtree(tmp, ignore_errors=True)
+            word = Path(main.create_combined_word([job.target], job.word))
+        except Exception as exc:  # noqa: BLE001 - the .xlsx is the report
+            warnings.append(f"Word document not created: {exc}")
+        batch = None
+        if job.kind == "nias" and job.batch_target is not None:
+            try:
+                gc_export.write_batch_workbook(session, job.batch_target, job.settings,
+                                               sample_name=job.target.stem.replace(SUFFIXES["nias"], ""),
+                                               save=with_metadata)
+                batch = job.batch_target
+            except Exception as exc:  # noqa: BLE001
+                warnings.append(f"Batch workbook not written: {exc}")
+        progress("4/4 register")
+        rows = reported_rows(job, combined, audit)
+        if job.record_seen:
+            err = record_seen(job.kind, rows, job.target, job.sample_key)
+            if err:
+                warnings.append(err)
+        kept = None
+        if job.keep_middle is not None:
+            kept = job.keep_middle
+            shutil.copy2(middle, kept)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)               # also when the report failed
     return ReportResult(job.target, word, len(rows), batch, kept, warnings, rows, json_safe(summary or {}),
                         slim_rows(combined, job.overrides))
 

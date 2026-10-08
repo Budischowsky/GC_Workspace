@@ -508,6 +508,7 @@ class Report2Dock(QWidget):
             # nothing written (the usual case): not even the stamp is read
             stamp = self._stamp_now() if self.journal.changed("report2") or stale else self._stamp
         except Exception:  # noqa: BLE001 - the watcher may be writing
+            self.journal._data_version.pop("report2", None)   # the change seen is looked at next time
             return
         if stamp != self._stamp or stale:
             self.refresh()
@@ -1391,7 +1392,7 @@ class Report2Dock(QWidget):
         self.bar.style().polish(self.bar)
         self.b_undo.setVisible(undo is not None)
         self.bar.show()
-        self._bar_timer.start()
+        self._bar_timer.start(int(J.UNDO_GRACE * 1000))       # start(ms) of an accept changed the interval
 
     def dismiss_message(self):
         """The message ends: what it offered to undo is final now (and delivered)."""
@@ -1482,6 +1483,12 @@ class Report2Dock(QWidget):
             parts.append(f"{self._names([j for j in done if j.id in regenerated])}: the edited report is made "
                          "again now - check it, then accept it")
         self.notify("; ".join(parts) + ".", self._undo_review(before) if before else None)
+        # the watcher delivers an accept once its undo time from the accept on is over: Undo ends then too,
+        # however long the list took to refresh meanwhile
+        due = [float(j.deliver_after) for j in (self.journal.job(jid) for jid, _ in before)
+               if j is not None and j.deliver_after]
+        if due:
+            self._bar_timer.start(max(0, int((min(due) - time.time()) * 1000)))
         return True
 
     def update_report(self, job_id: str) -> bool:

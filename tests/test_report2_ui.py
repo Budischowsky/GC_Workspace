@@ -1208,3 +1208,51 @@ def test_register_lists_every_sample_done_or_not(qtbot, data, tmp_path, monkeypa
     assert cell.data_type == "s"
     dock.set_mode("todo")
     assert not dock.done_filter.isVisibleTo(dock) and dock.list_stack.currentWidget() is not dock.register
+
+
+def test_undo_is_offered_only_until_the_watcher_may_deliver(qtbot, data, tmp_path, monkeypatch):
+    """The watcher delivers an accept once its undo time is over (from the accept on): Undo is gone by then,
+    also when the list took a while to refresh after the accept (else an undo could race the delivery)."""
+    from gcws.ui.docks.report2 import Report2Dock
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    monkeypatch.setattr("gcws.automation.control.WatcherControl", lambda *a, **k: RunningWatcher())
+    monkeypatch.setattr("gcws.report.service.docx_to_pdf", _no_word)
+    dock = Report2Dock(journal=jr, poll_ms=60000)
+    qtbot.addWidget(dock)
+    dock.select(ids["S-control"])
+    slow = Report2Dock.refresh
+
+    def refresh(self):
+        slow(self)
+        time.sleep(1.0)                               # a large journal on a network drive
+    monkeypatch.setattr(Report2Dock, "refresh", refresh)
+    assert dock.review(True) and dock.b_undo.isVisibleTo(dock)
+    left = jr.job(ids["S-control"]).deliver_after - time.time()
+    assert dock._bar_timer.isActive() and dock._bar_timer.remainingTime() / 1000 <= left + 0.05
+
+
+def test_a_change_seen_while_the_journal_was_busy_is_shown_at_the_next_poll(qtbot, data, tmp_path, monkeypatch):
+    """The stamp could not be read (the watcher was writing): the change is not forgotten, the next poll
+    refreshes the list."""
+    import sqlite3
+    from gcws.automation import journal as J
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    dock = _dock(jr, monkeypatch, qtbot)
+    dock.show()
+    other = J.Journal(jr.path)                                # the watcher
+    other.update_job(ids["S-wait"], state=J.QUEUED)
+    real, calls = dock._stamp_now, []
+
+    def busy():
+        calls.append(1)
+        if len(calls) == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return real()
+    monkeypatch.setattr(dock, "_stamp_now", busy)
+    refreshed = []
+    monkeypatch.setattr(dock, "refresh", lambda: refreshed.append(1))
+    dock._poll()
+    assert calls and not refreshed
+    dock._poll()
+    assert refreshed
+    other.close()

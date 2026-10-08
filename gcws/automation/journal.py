@@ -234,7 +234,11 @@ class Journal:
         b = self.con.execute("SELECT COUNT(*), SUM(deleted), MAX(COALESCE(reopened,0)), SUM(missing), "
                              "SUM(LENGTH(COALESCE(force_json,''))), SUM(LENGTH(COALESCE(plan_json,''))) "
                              "FROM batches").fetchone()
-        return tuple(a) + tuple(b) + (self.con.execute("SELECT MAX(id) FROM events").fetchone()[0],)
+        # the watcher rewrites why a sample waits without another change (the few rows of the queue)
+        marks = ", ".join("?" * len(QUEUE))
+        c = self.con.execute(f"SELECT GROUP_CONCAT(id || ':' || COALESCE(reason,'') || ':' || COALESCE(group_name,''), "
+                             f"'|') FROM jobs WHERE state IN ({marks})", QUEUE).fetchone()[0]
+        return tuple(a) + tuple(b) + (self.con.execute("SELECT MAX(id) FROM events").fetchone()[0], c)
 
     @contextmanager
     def tx(self):
