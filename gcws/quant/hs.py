@@ -6,7 +6,35 @@ from dataclasses import dataclass, field
 
 from gcws.core.model import TIC
 
-UNITS = ("µg/HS", "µg/dm²", "µg/g")
+UNITS = ("µg/HS", "µg/dm²", "µg/g", "mg/m²")
+#: Conc. 1 and Conc. 2 of the HS report unless the HS panel sets others
+REPORT_UNITS = ("µg/dm²", "mg/m²")
+
+
+def per_ug(unit, inputs):
+    """Multiplier from µg per vial to ``unit`` with the sample's ``inputs`` (area_dm2, mass_g); None when the
+    unit needs an input that is missing."""
+    if unit == "µg/HS":
+        return 1.0
+    from gcws.quant import units as U
+    basis = {k: U.positive((inputs or {}).get(k)) for k in ("area_dm2", "mass_g")}
+    f = U.factor(unit, basis)
+    return f / 1000.0 if f is not None else None
+
+
+def report_units(cfg) -> list:
+    """Conc. 1 and Conc. 2 of the HS report (two different HS units)."""
+    units = [u for u in (cfg or {}).get("report_units") or REPORT_UNITS if u in UNITS][:2]
+    for u in REPORT_UNITS + UNITS:
+        if len(units) >= 2:
+            break
+        if u not in units:
+            units.append(u)
+    return units
+
+
+def input_label(unit) -> str:
+    return "sample mass (g)" if unit == "µg/g" else "sample area (dm²)"
 
 
 def default_defs():
@@ -220,16 +248,17 @@ def compute(ws):
                     normalizers[input_key] = positive(inputs.get(input_key), input_key)
                 except ValueError:
                     normalizers[input_key] = None
-            denominator = 1.0
+            multiplier = 1.0
             if unit not in UNITS:
                 problems.append("Unsupported HS result unit")
             elif unit != UNITS[0]:
-                key, label = ("area_dm2", "sample area (dm²)") if unit == UNITS[1] else ("mass_g", "sample mass (g)")
                 try:
-                    denominator = positive(inputs.get(key), label)
+                    positive(inputs.get("mass_g" if unit == "µg/g" else "area_dm2"), input_label(unit))
+                    multiplier = per_ug(unit, normalizers)
                 except ValueError as exc:
                     problems.append(str(exc))
-            sample.meta = dict(unit=unit, inputs=dict(inputs), source=str(st.run.path),
+            denominator = 1.0 / multiplier
+            sample.meta = dict(unit=unit, inputs=dict(inputs), source=str(st.run.path), report_units=report_units(cfg),
                                factor=sample.mean_factor, denominator=denominator,
                                calculation=calculation(cfg, cal_runs if external(cfg) else ()),
                                method=METHODS[calibration_mode(cfg)],
@@ -265,10 +294,11 @@ def compute(ws):
                 amount = area * sample.mean_factor if sample.mean_factor and amount_valid else None
                 ug_dm2 = amount / normalizers["area_dm2"] if amount is not None and normalizers["area_dm2"] else None
                 ug_g = amount / normalizers["mass_g"] if amount is not None and normalizers["mass_g"] else None
+                mg_m2 = ug_dm2 / 10.0 if ug_dm2 is not None else None
                 d = dict(gcws_index=i, istd=standards[i]["code"] if i in standards else "",
                          raw_area=p.area, blank_area=correction, corr_area=area,
-                         amount_ug=amount, ug_hs=amount, ug_dm2=ug_dm2, ug_g=ug_g,
-                         conc=amount / denominator if amount is not None and not problems else None,
+                         amount_ug=amount, ug_hs=amount, ug_dm2=ug_dm2, ug_g=ug_g, mg_m2=mg_m2,
+                         conc=amount * multiplier if amount is not None and not problems else None,
                          status="; ".join(problems), id_status=getattr(ident, "status", "") or "Unknown",
                          blank_status="Blank corrected" if correction else "", review="")
                 rows[i] = d

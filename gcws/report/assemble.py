@@ -48,6 +48,14 @@ def prepare(ws, kind: str, group: Optional[dict]) -> tuple[list[str], list]:
         errors = [ws.quant_result.errors[m] for m in members if m in ws.quant_result.errors]
         if errors:
             raise ReportNotPossible("hs_errors", "\n".join(errors))
+        from gcws.quant import hs as HS
+        cfg = ws.quant.get("hs", {})
+        inputs = cfg.get("samples", {})
+        missing = [f"{ws.runs[m].name}: enter the {HS.input_label(u)} (HS panel) for {u}"
+                   for m in members for u in HS.report_units(cfg) if HS.per_ug(u, inputs.get(m)) is None]
+        if missing:
+            raise ReportNotPossible("hs_amount", "The HS report gives Conc. 1 and Conc. 2 in "
+                                    + " and ".join(HS.report_units(cfg)) + ":\n" + "\n".join(dict.fromkeys(missing)))
     if not samples or any(s is None for s in samples):
         from gcws.quant.service import quant_detector
         errs = [ws.quant_result.errors.get(m, "") for m in members]

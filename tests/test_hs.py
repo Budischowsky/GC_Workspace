@@ -151,7 +151,8 @@ def test_external_calibration_blank_and_report(tmp_path):
     job = ReportJob("hs_screening", [result.samples["sample"]], ["Sample"], make_settings(),
                     tmp_path / "HS.xlsx", tmp_path / "HS.docx", None, record_seen=False)
     wb = load_workbook(generate(job).target)
-    assert wb["HS Result"]["E6"].value == pytest.approx(1.5)
+    assert wb["HS Result"]["E6"].value == pytest.approx(3.0)          # 1.5 µg in a 0.5 dm² sample
+    assert wb["HS Result"]["F6"].value == pytest.approx(0.3)          # mg/m²
     assert wb["HS calculation"]["G2"].value.startswith("External 1-point calibration")
     assert wb["HS standards"]["H2"].value == "Mean of 1 Standard run"
     assert wb["HS standards"]["I2"].value == "Std 1: 100"
@@ -196,28 +197,90 @@ def test_actual_qgd_sample():
     assert sources(p) == {"MS": p.name}
 
 
-@pytest.mark.parametrize("unit,expected", [("µg/HS", 2), ("µg/dm²", 4), ("µg/g", 1)])
-def test_report_quantities_replace_area(tmp_path, unit, expected):
+@pytest.mark.parametrize("units,expected", [(["µg/dm²", "mg/m²"], (4, 0.4)), (["µg/HS", "µg/g"], (2, 1)),
+                                            (["mg/m²", "µg/dm²"], (0.4, 4))])
+def test_report_gives_conc1_and_conc2(tmp_path, units, expected):
     from gcws.report.service import ReportJob, generate
     from gcws.quant.nias_bridge import make_settings
     from openpyxl import load_workbook
     from docx import Document
     ws = workspace()
-    ws.quant["hs"]["unit"] = unit
+    ws.quant["hs"]["report_units"] = units
     result = compute(ws)
     job = ReportJob("hs_screening", list(result.samples.values()), ["Sample"], make_settings(),
                     tmp_path / "HS.xlsx", tmp_path / "HS.docx", None, record_seen=False)
     report = generate(job)
     wb = load_workbook(report.target)
-    assert wb["HS Result"]["E5"].value == unit
-    assert wb["HS Result"]["E6"].value == expected
-    assert report.rows == 1
+    sh = wb["HS Result"]
+    assert [sh.cell(5, c).value for c in range(1, 7)] == ["RT (min)", "Name", "CAS-No.", "Qual",
+                                                         f"Conc. 1 [{units[0]}]", f"Conc. 2 [{units[1]}]"]
+    assert (sh["E6"].value, sh["F6"].value) == pytest.approx(expected)
+    assert "Single determination" in sh["A2"].value
+    assert report.rows == 1 and len(report.combined) == 1
     assert wb["HS standards"].max_row == 8
     doc = Document(report.word)
-    assert doc.tables[0].cell(4, 4).text == unit
-    assert doc.tables[0].cell(5, 4).text == f"{expected:.4f}"
+    assert doc.tables[0].cell(4, 4).text == f"Conc. 1 [{units[0]}]"
+    from gcws.quant.units import DECIMALS
+    assert doc.tables[0].cell(5, 5).text == f"{expected[1]:.{DECIMALS[units[1]]}f}"
     # Header and body cell widths must agree or Word expands the table off-page.
     assert [c.width for c in doc.tables[0].rows[4].cells] == [c.width for c in doc.tables[0].rows[5].cells]
+
+
+def double_workspace():
+    """Two HS determinations: analyte 2 µg (A, 0.5 dm²) and 2.2 µg (B, 0.25 dm²)."""
+    ws = workspace()
+    a = ws.runs["sample"]
+    b = copy.copy(workspace().runs["sample"])
+    b.id, b.name = "b", "Sample B"
+    b.results["TIC"].peaks[7].area = 220
+    ws.runs["b"] = b
+    ws.states = lambda: [a, b]
+    ws.quant["hs"]["samples"]["b"] = {"area_dm2": 0.25}
+    return ws
+
+
+def _hs_job(tmp_path, result, edits=None):
+    from gcws.report.service import ReportJob
+    from gcws.quant.nias_bridge import make_settings
+    return ReportJob("hs_screening", [result.samples["sample"], result.samples["b"]], ["Sample", "Sample B"],
+                     make_settings(), tmp_path / "HS2.xlsx", tmp_path / "HS2.docx", None, record_seen=False,
+                     edits=edits or {})
+
+
+def test_double_determination_report_means_each_unit_with_its_own_area(tmp_path):
+    from gcws.report.service import generate
+    from openpyxl import load_workbook
+    result = compute(double_workspace())
+    assert not result.errors
+    report = generate(_hs_job(tmp_path, result))
+    wb = load_workbook(report.target)
+    sh = wb["HS Result"]
+    assert "Double determination" in sh["A2"].value and sh["B3"].value == "Sample; Sample B"
+    assert report.rows == 1
+    assert sh["E6"].value == pytest.approx((4.0 + 8.8) / 2)            # µg/dm²: 2 ÷ 0.5 and 2.2 ÷ 0.25
+    assert sh["F6"].value == pytest.approx((0.4 + 0.88) / 2)           # mg/m²
+    det = [c.value for c in wb["Determinations"][2]]
+    assert det[3:5] == pytest.approx([4.0, 0.4]) and det[6:8] == pytest.approx([8.8, 0.88])
+
+
+def test_double_determination_report_with_a_dismissed_outlier(tmp_path):
+    from gcws.report.service import generate
+    from gcws.quant.duplicate_view import edit_key
+    from openpyxl import load_workbook
+    result = compute(double_workspace())
+    rt = result.samples["sample"].rows[7].rt
+    report = generate(_hs_job(tmp_path, result, {edit_key(rt): {"dismiss": 1}}))
+    sh = load_workbook(report.target)["HS Result"]
+    assert sh["E6"].value == pytest.approx(8.8) and sh["F6"].value == pytest.approx(0.88)   # B alone
+
+
+def test_report_needs_the_sample_area_of_every_determination(tmp_path):
+    from gcws.report.service import generate
+    ws = double_workspace()
+    ws.quant["hs"]["samples"]["b"] = {"mass_g": 1.0}
+    result = compute(ws)
+    with pytest.raises(ValueError, match="Sample B: enter the sample area"):
+        generate(_hs_job(tmp_path, result))
 
 
 def test_hs_ui_switch_and_project(qtbot, tmp_path):
@@ -306,6 +369,17 @@ def test_hs_full_window_qgd(qtbot, monkeypatch, tmp_path):
     win.replicates.show_pair(st.id)
     win.replicates.duplicate.compare()
     assert win.replicates.duplicate.quant_signal() == "TIC"
+    # the HS report from the Peaks panel: the active run alone (single determination)
+    from gcws.report import assemble as AS
+    from gcws.report import service as RS
+    from openpyxl import load_workbook
+    single = win._single_for_report()
+    assert single["members"] == [st.id] and RS.default_kind(ws.quant) == "hs_screening"
+    res = RS.generate(AS.build_job(ws, "hs_screening", single, tmp_path / "single_HS.xlsx", record_seen=False))
+    sh = load_workbook(res.target)["HS Result"]
+    assert res.rows > 0 and "Single determination" in sh["A2"].value
+    assert sh["E5"].value == "Conc. 1 [µg/dm²]" and sh["F5"].value == "Conc. 2 [mg/m²]"
+    assert sh["F6"].value == pytest.approx(sh["E6"].value / 10)
     method = proc_method.collect(win, "HS test")
     assert len(method["sections"]["quant"]["hs"]["istd_defs"]) == 7
     assert "samples" not in method["sections"]["quant"]["hs"]
@@ -323,6 +397,21 @@ def test_hs_full_window_qgd(qtbot, monkeypatch, tmp_path):
     run, results, delay = load_and_integrate(p, "sample", ws.methods)
     extra = ws.add_run(run, results, delay=delay)
     assert all(p.apex_rt >= 3 for p in extra.results["TIC"].peaks)
+    # the same run loaded twice as a double determination (the second with half the area)
+    ws2, first = win.ws, win.ws.active
+    q = copy.deepcopy(ws2.quant)
+    q["hs"].setdefault("istd_bindings", {})[extra.id] = dict(q["hs"]["istd_bindings"][first.id])
+    q["hs"].setdefault("samples", {})[extra.id] = {"area_dm2": 0.5}
+    ws2.push_quant("Test pair", q)
+    assert not ws2.quant_result.errors
+    pair = {"id": "g", "name": "AB", "members": [first.id, extra.id], "policy": "all"}
+    res = RS.generate(AS.build_job(ws2, "hs_screening", pair, tmp_path / "double_HS.xlsx", record_seen=False))
+    wb = load_workbook(res.target)
+    assert res.rows > 0 and "Double determination" in wb["HS Result"]["A2"].value
+    det = wb["Determinations"]
+    a, b = det.cell(2, 4).value, det.cell(2, 7).value       # µg/dm² of A (1 dm²) and B (0.5 dm²)
+    assert b == pytest.approx(2 * a)
+    assert wb["HS Result"]["E6"].value == pytest.approx((a + b) / 2)
     win.ws.dirty = False
     win.close()
 

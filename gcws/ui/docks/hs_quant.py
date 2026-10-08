@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QFormLayout, QComboBox, QDo
                                QLabel, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
                                QPushButton, QHBoxLayout, QCheckBox, QMessageBox, QListWidget, QListWidgetItem)
 
-from gcws.quant.hs import UNITS, default_defs, external, manual
+from gcws.quant.hs import UNITS, default_defs, external, manual, report_units
 
 CALIBRATIONS = (("internal", "Internal standards in each sample"),
                 ("external", "External: calibration runs"),
@@ -69,6 +69,12 @@ class HSQuantPanel(QWidget):
         self.unit.addItems(UNITS)
         self.unit.activated.connect(self.save_inputs)
         form.addRow("Result unit", self.unit)
+        self.report_units = [QComboBox(), QComboBox()]
+        for i, combo in enumerate(self.report_units, 1):
+            combo.addItems(UNITS)
+            combo.setToolTip(f"Conc. {i} of the HS report (single and double determination)")
+            combo.activated.connect(self.save_inputs)
+            form.addRow(f"Report Conc. {i}", combo)
         self.mean = QCheckBox("Use mean of activated ISTD areas")
         self.mean.toggled.connect(self.save_inputs)
         form.addRow(self.mean)
@@ -212,6 +218,8 @@ class HSQuantPanel(QWidget):
                           "Divide by sample area (dm²) or mass (g) for normalized results.\n"
                           "Define seven standards; their default amount is 1 µg per vial.")
         self.unit.setCurrentText(cfg.get("unit", UNITS[0]))
+        for combo, u in zip(self.report_units, report_units(cfg)):
+            combo.setCurrentText(u)
         self.mean.setChecked(cfg.get("use_mean_area", True))
         self.blank.setChecked(cfg.get("blank_correction", True))
         st = self.ws.active
@@ -337,7 +345,11 @@ class HSQuantPanel(QWidget):
         if self.loading:
             return
         cfg = copy.deepcopy(self.config()) if cfg is None else cfg
-        cfg.update(unit=self.unit.currentText(), use_mean_area=self.mean.isChecked(),
+        chosen = [c.currentText() for c in self.report_units]
+        if chosen[0] == chosen[1]:
+            chosen = chosen[:1]                     # report_units() completes it with another unit
+        cfg.update(unit=self.unit.currentText(), use_mean_area=self.mean.isChecked(), report_units=report_units(
+                   {"report_units": chosen}),
                    calibration=self.calibration.currentData(),
                    blank_correction=self.blank.isChecked())
         if self.ws.active:
