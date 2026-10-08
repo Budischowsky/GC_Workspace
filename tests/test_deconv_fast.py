@@ -105,3 +105,82 @@ def test_nnls_of_many_columns_survives_identical_shapes():
     assert (got >= 0).all()
     assert np.linalg.norm(a @ got - b) == pytest.approx(np.linalg.norm(a @ want - b), abs=1e-6)
     assert got[0] + got[1] == pytest.approx(500.0, rel=1e-9)
+
+
+def test_identical_shapes_share_the_mass_as_lawson_hanson_does():
+    """How the singular problem splits a mass between the copies depends on the solver's path;
+    the window is solved by the original routine."""
+    a = _shapes(40, [10, 10, 25], 2.0)
+    b = a @ np.array([[300.0, 10.0], [200.0, 0.0], [50.0, 70.0]])
+    got = F.nnls_columns(a, b)
+    for c in range(b.shape[1]):
+        np.testing.assert_array_equal(got[:, c], gc_deconv.nnls(a, b[:, c]))
+
+
+def _saturated(cap, height=1e6):
+    """SPEC_A as one large compound whose ions are cut flat at ``cap`` (a saturated detector)."""
+    idx = np.arange(N)
+    profile = np.exp(-0.5 * ((idx - 200) / (6.0 / 2.355)) ** 2)
+    masses = sorted(SPEC_A) + [207]
+    x = np.zeros((N, len(masses)))
+    for j, m in enumerate(masses[:-1]):
+        x[:, j] = np.minimum(height * SPEC_A[m] / 100 * profile, cap)
+    x[:, -1] = 2000.0 + np.random.default_rng(1).normal(0, 30, N)
+    x = np.round(x)
+    return MSMatrix._build(RT, x.sum(axis=1), [np.array([masses[j] + 0.1 for j in np.flatnonzero(row > 0)])
+                                               for row in x], [row[row > 0] for row in x])
+
+
+@pytest.mark.parametrize("cap,level", [(5e4, 3), (5e4, 5), (1e5, 5)])
+def test_saturated_top_is_one_component_as_in_the_vendored_engine(cap, level):
+    """A flat top has a smoothed maximum at either end with the same flanks; the second model
+    shape is a copy of the first, which the original NNLS leaves empty (no twin component)."""
+    ms = _saturated(cap)
+    params = _level_params(level)
+    expected = gc_deconv.deconvolute(_DataMSAdapter(ms), float(RT[200]), params)
+    assert len(expected) == 1
+    assert_same(F.deconvolute(ms, float(RT[200]), params), expected)
+
+
+def test_smoothing_is_the_vendored_savgol_to_the_last_bit():
+    """Ions with alike traces tie on score; the tie is decided by the last bit of the smoothed edge
+    points, so these must be computed as savgol computes them (on the strided column)."""
+    rng = np.random.default_rng(3)
+    for m in (1, 2, 7, 40):
+        x = np.round(rng.uniform(0, 1e5, (23, m)) * (rng.random((23, m)) < 0.7))
+        cols = np.arange(m)[::2]
+        got = F._smooth(x, cols)
+        for j, c in enumerate(cols):
+            np.testing.assert_array_equal(got[j], gc_deconv.savgol(x[:, c], width=5, order=2))
+
+
+def test_spectrum_figures_on_a_rounding_step_come_from_the_original_nnls():
+    a = _shapes(40, [10, 16], 2.0)
+    x = a @ np.array([[999.0, 721.5, 0.5, 3.0], [300.0, 100.0, 50.0, 40.0]])
+    want = np.column_stack([gc_deconv.nnls(a, x[:, c]) for c in range(x.shape[1])])
+    contrib = want * (1.0 + np.array([[1e-13, -1e-13, 1e-13, -1e-13], [-1e-13, 1e-13, -1e-13, 1e-13]]))
+    F.settle_spectrum_ties(a, x, contrib)
+    np.testing.assert_array_equal(contrib[:, :3], want[:, :3])     # the ties and their base mass
+    assert contrib[0, 3] != want[0, 3]                              # no tie: left as it is
+
+
+def test_ill_conditioned_shapes_are_solved_by_lawson_hanson():
+    """Two shapes a two-hundredth of a scan apart: the normal equations would lose the agreement."""
+    a = _shapes(40, [10, 10.005, 25], 2.0)
+    assert np.linalg.cond(a) > 1e3
+    b = np.maximum(a @ np.array([[300.0, 10.0, 0.0], [200.0, 0.0, 5.0], [50.0, 70.0, 1.0]])
+                   + np.random.default_rng(2).normal(0, 1, (40, 3)), 0.0)
+    got = F.nnls_columns(a, b)
+    for c in range(b.shape[1]):
+        np.testing.assert_array_equal(got[:, c], gc_deconv.nnls(a, b[:, c]))
+
+
+def test_variables_at_the_tolerance_are_decided_by_lawson_hanson():
+    """A trace of a mass in a second component, at the size of the solver's tolerance: whether
+    that component gets it (and so exists at all) depends on the solver's path."""
+    a = _shapes(40, [10, 14, 25], 2.0)
+    tol = 40 * np.finfo(float).eps * 1000.0
+    b = np.column_stack([1000.0 * a[:, 0] + d * tol * a[:, 1] for d in (-2.0, -0.5, 0.5, 1.0, 2.0)])
+    got = F.nnls_columns(a, b)
+    for c in range(b.shape[1]):
+        np.testing.assert_array_equal(got[:, c], gc_deconv.nnls(a, b[:, c]))

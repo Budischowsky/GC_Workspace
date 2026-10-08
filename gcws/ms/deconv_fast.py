@@ -49,6 +49,7 @@ def deconvolute(ms, rt: float, params: legacy.DeconvParams) -> list:
     contrib = np.zeros((len(groups), mzs.size), dtype=float)
     cols = np.flatnonzero(x.any(axis=0))
     contrib[:, cols] = nnls_columns(a, x[:, cols])
+    settle_spectrum_ties(a, x, contrib)
     return _components(peaks, groups, a, contrib, x.sum(axis=1), mzs, win_rt, lo)
 
 
@@ -86,23 +87,27 @@ def _ion_sigmas(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return sigma, nonzero
 
 
-def _smooth(x: np.ndarray) -> np.ndarray:
-    """``gc_deconv.savgol(width=5, order=2)`` of every column of ``x`` (n >= 5), as rows."""
-    n, k = x.shape
+def _smooth(x: np.ndarray, cols: np.ndarray | None = None) -> np.ndarray:
+    """``gc_deconv.savgol(width=5, order=2)`` of the columns ``cols`` of ``x`` (all by default;
+    n >= 5), as rows."""
+    cols = np.arange(x.shape[1]) if cols is None else cols
+    n, k = x.shape[0], cols.size
     kernel = legacy._sg_kernels(5, 2)
-    y = np.ascontiguousarray(x.T)
+    y = np.ascontiguousarray(x[:, cols].T)
     out = np.empty((k, n))
     # One pass over all traces laid end to end; values straddling two traces are dropped.
     centre = np.empty(k * n)
     valid = np.correlate(y.ravel(), kernel[2], mode="valid")
     centre[:valid.size] = valid
     out[:, 2:n - 2] = centre.reshape(k, n)[:, :n - 4]
-    head = np.ascontiguousarray(y[:, :5]).ravel()
-    tail = np.ascontiguousarray(y[:, -5:]).ravel()
-    out[:, 0] = np.correlate(head, kernel[0], mode="valid")[::5]
-    out[:, 1] = np.correlate(head, kernel[1], mode="valid")[::5]
-    out[:, n - 2] = np.correlate(tail, kernel[3], mode="valid")[::5]
-    out[:, n - 1] = np.correlate(tail, kernel[4], mode="valid")[::5]
+    # The edge points are dot products on the columns of ``x`` itself (views), as savgol takes
+    # them: BLAS sums a strided and a contiguous vector in different orders, and that last bit can
+    # decide a tie between two ions with alike traces (saturated tops).
+    head, tail = x[:5].T, x[-5:].T
+    out[:, 0] = np.vecdot(head, kernel[0])[cols]
+    out[:, 1] = np.vecdot(head, kernel[1])[cols]
+    out[:, n - 2] = np.vecdot(tail, kernel[3])[cols]
+    out[:, n - 1] = np.vecdot(tail, kernel[4])[cols]
     return out
 
 
@@ -133,7 +138,7 @@ def _perceive_ions(x, mzs, sigma, nonzero, params) -> _Peaks | None:
                           & ~(x.max(axis=0) < params.noise_factor * sigma))
     if cols.size == 0:
         return None
-    s = _smooth(x[:, cols])
+    s = _smooth(x, cols)
     is_max = (s[:, 1:-1] > s[:, :-2]) & (s[:, 1:-1] >= s[:, 2:])
     r, i = np.nonzero(is_max)
     i = i + 1
@@ -337,6 +342,10 @@ def _model_shape(p: _Peaks, k: int, n: int) -> np.ndarray:
 # Joint purification
 # --------------------------------------------------------------------------
 
+#: smallest ratio of the extreme eigenvalues of ``a'a`` (condition of ``a`` about 300) solved by pivoting
+MIN_GRAM_RATIO = 1e-5
+
+
 def nnls_columns(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """``x[:, c] = argmin ||a x - b[:, c]||`` subject to ``x >= 0``, for every column of ``b``.
 
@@ -344,7 +353,8 @@ def nnls_columns(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     once, so all columns settle in a few joint steps. Optimality is judged with the
     tolerance of ``gc_deconv.nnls``: a variable stays in while its value exceeds ``tol``
     and stays out while its gradient ``a'(b - a x)`` does not. Columns that do not settle
-    within the step budget are solved by the original Lawson-Hanson routine.
+    within the step budget or end with a variable at the tolerance, and ill-conditioned
+    problems, are solved by the original Lawson-Hanson routine.
     """
     m, g = a.shape
     nc = b.shape[1]
@@ -353,6 +363,15 @@ def nnls_columns(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     scale = float(max(np.abs(a).max(), 1.0)) * np.maximum(np.abs(b).max(axis=0), 1.0)
     tol = max(m, g) * _EPS * scale
     gram = a.T @ a
+    # The normal equations square the condition of ``a``. Beyond a condition of 300 (real
+    # windows stay below 30) they would lose the agreement with the pseudo-inverse of the
+    # original routine, and a singular ``a`` (identical shapes: the two maxima of a saturated model
+    # ion share its flanks) has no unique solution: how the original shares a mass between the
+    # copies depends on its path. Such a window is solved by the original routine.
+    ev = np.linalg.eigvalsh(gram)
+    if not ev[0] > ev[-1] * MIN_GRAM_RATIO:
+        solve = legacy._lstsq_solver(a)
+        return np.column_stack([legacy._nnls(a, b[:, q], None, solve) for q in range(nc)])
     atb = (a.T @ b).T
     passive = np.zeros((nc, g), dtype=bool)
     x = np.zeros((nc, g))
@@ -384,12 +403,44 @@ def nnls_columns(a: np.ndarray, b: np.ndarray) -> np.ndarray:
         sol = _solve_passive(a, gram, atb[todo], b[:, todo], passive[todo])
         x[todo] = sol
         y[todo] = np.where(passive[todo], 0.0, sol @ gram - atb[todo])
-    else:
+    # ``todo``: the columns that did not settle. Those whose optimum has a variable within rounding
+    # of the tolerance are solved by the original routine as well: there (e.g. two near-collinear
+    # shapes sharing a trace of a mass) which variable ends up in depends on the solver's path.
+    near = 4.0 * tol[:, None]
+    edge = (passive & (x <= near)) | (~passive & (y != 0.0) & (np.abs(y) <= near))
+    redo = np.union1d(todo, np.flatnonzero(edge.any(axis=1)))
+    if redo.size:
         solve = legacy._lstsq_solver(a)
-        for q in todo.tolist():
+        for q in redo.tolist():
             x[q] = legacy._nnls(a, b[:, q], None, solve)
     x[x < 0.0] = 0.0
     return x.T
+
+
+#: distance (in spectrum units of 999) to a rounding step or to the cutoff within which the
+#: figure is taken from the original NNLS routine (the two routines agree to about 1e-9 of a row)
+SPECTRUM_TIE = 1e-6
+
+
+def settle_spectrum_ties(a: np.ndarray, x: np.ndarray, contrib: np.ndarray) -> None:
+    """Recompute with ``gc_deconv._nnls`` the masses whose spectrum figure lies within rounding
+    of a rounding step (k + 0.5 of 999) or of the 1 permille cutoff, and the base masses of
+    their components: the purified spectra are then the vendored engine's exactly."""
+    base = contrib.max(axis=1)
+    rows = np.flatnonzero(base > 0.0)
+    if rows.size == 0:
+        return
+    r = contrib[rows] / base[rows, None] * 999
+    cut = legacy.SPECTRUM_MIN_PERMILLE * 999 / 1000.0
+    near = (np.abs(r - np.floor(r) - 0.5) < SPECTRUM_TIE) | (np.abs(r - cut) < SPECTRUM_TIE)
+    if not near.any():
+        return
+    masses = set(np.flatnonzero(near.any(axis=0)).tolist())
+    masses |= set(np.argmax(contrib[rows[near.any(axis=1)]], axis=1).tolist())
+    solve = legacy._lstsq_solver(a)
+    for c in sorted(masses):
+        if x[:, c].any():
+            contrib[:, c] = legacy._nnls(a, x[:, c], None, solve)
 
 
 def _solve_passive(a, gram, atb, b, passive) -> np.ndarray:

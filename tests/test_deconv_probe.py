@@ -63,6 +63,34 @@ def test_gate_borderline_detects_rounding_zeros():
     assert not gate_borderline(*_gate_case(-5.0, big=3), 2.0)
 
 
+def _maxima_case(flat_top: bool, rounding_zero: bool, fitted: bool = True):
+    """One residual trace: a spike whose smoothing undershoots into a stretch of zeros, or a flat
+    (saturated) top; ``rounding_zero`` makes one zero of the stretch zero only by rounding."""
+    residual = np.zeros(24)
+    if flat_top:
+        residual[8:14] = 4000.0
+    else:
+        residual[5] = 4000.0
+    residual[20:] = 3000.0                       # where the walk to the right ends
+    diff = np.where(residual > 0, residual, -100.0)
+    if rounding_zero:
+        diff[9] = -1e-13
+    x = np.full(24, 5000.0) if fitted else np.where(residual > 0, residual, 5000.0)
+    if not fitted:
+        diff = np.where(residual > 0, x, diff)   # outside every model shape: residual = data
+    return x[:, None], diff[:, None], np.maximum(diff, 0.0)[:, None], np.array([1.0])
+
+
+def test_maxima_borderline_detects_ties_that_rounding_decides():
+    """Seen on noise-free and saturated windows: the residual perception put a maximum one scan
+    over (a zero by rounding on a flat stretch) or dropped a saturated top whose two ends tie."""
+    from gcws.ms.deconv_probe_fast import maxima_borderline
+    assert maxima_borderline(*_maxima_case(False, True), 1.5)
+    assert not maxima_borderline(*_maxima_case(False, False), 1.5)
+    assert maxima_borderline(*_maxima_case(True, False), 1.5)
+    assert not maxima_borderline(*_maxima_case(True, False, fitted=False), 1.5)
+
+
 @pytest.mark.parametrize("prefix", ["07_", "09_"])
 def test_fast_probe_matches_reference_on_real_runs(monkeypatch, prefix):
     from tests.conftest import run_dir

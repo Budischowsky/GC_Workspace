@@ -54,6 +54,59 @@ def gate_borderline(x: np.ndarray, diff: np.ndarray, residual: np.ndarray, sigma
     return bool((count | level).any())
 
 
+def maxima_borderline(x: np.ndarray, diff: np.ndarray, residual: np.ndarray, sigma: np.ndarray,
+                      noise_factor: float) -> bool:
+    """True when the residual perception could find its maxima differently for a residual equal up
+    to rounding. Two cases are ties that rounding decides:
+
+    * on a stretch of zeros, an entry that is zero only by rounding (see :func:`gate_borderline`)
+      decides which of the flat points is the maximum, and the undershoot of the smoothing around
+      it can make that a peak of ``noise_factor`` sigma;
+    * a maximum as high as another point of its trace (a flat, saturated top): which of them is
+      higher decides where the flank walk stops, and so the peak's base and whether it is kept."""
+    tol = EPS * np.maximum(np.abs(x).max(axis=0), 1e-300)
+    cols = np.flatnonzero(~(residual.max(axis=0) < noise_factor * sigma * (1.0 - EPS)))
+    if cols.size == 0:
+        return False
+    s = F._smooth(residual, cols)
+    n = s.shape[1]
+    t = 2.0 * tol[cols][:, None]
+    left, here, right = s[:, :-2], s[:, 1:-1], s[:, 2:]
+    loose = (here > left - t) & (here >= right - t)
+    tight = (here > left + t) & (here >= right + t)
+    tall = (here - s.min(axis=1)[:, None]) >= noise_factor * sigma[cols][:, None] * (1.0 - EPS)
+
+    def touched(entries):
+        """The smoothed points within reach of ``entries`` (the edge points take the first and
+        last five)."""
+        near = entries[:, cols].T
+        out = near.copy()
+        for k in (1, 2):
+            out[:, k:] |= near[:, :-k]
+            out[:, :-k] |= near[:, k:]
+        out[:, :2] |= near[:, :5].any(axis=1)[:, None]
+        out[:, n - 2:] |= near[:, n - 5:].any(axis=1)[:, None]
+        return out
+
+    fitted = x - diff != 0.0
+    zero = touched((np.abs(diff) <= tol) & (x > 0.0) & fitted)
+    if (loose & ~tight & tall & (zero[:, :-2] | zero[:, 1:-1] | zero[:, 2:])).any():
+        return True
+    # points with another point of their trace within rounding, one of them computed from the fit
+    # (where the fit is exactly zero, the residual is the data in either routine)
+    rounded = touched(fitted & (diff > -tol))
+    order = np.argsort(s, axis=1, kind="stable")
+    close = np.diff(np.take_along_axis(s, order, axis=1), axis=1) <= t
+    by_value = np.take_along_axis(rounded, order, axis=1)
+    close &= by_value[:, :-1] | by_value[:, 1:]
+    pair = np.zeros(s.shape, dtype=bool)
+    pair[:, :-1] |= close
+    pair[:, 1:] |= close
+    twin = np.zeros(s.shape, dtype=bool)
+    np.put_along_axis(twin, order, pair, axis=1)
+    return bool((loose & tall & (here > t) & twin[:, 1:-1]).any())
+
+
 class _Legacy:
     """The vendored perception of single ions of the window, for ties that rounding decides.
 
@@ -159,7 +212,8 @@ def probe_fast(ms, t0: float, t1: float, apex: float,
     fitted[:, cols] = a @ F.nnls_columns(a, x[:, cols])
     diff = x - fitted
     residual = np.maximum(diff, 0.0)
-    if gate_borderline(x, diff, residual, sigma, params.noise_factor):
+    if gate_borderline(x, diff, residual, sigma, params.noise_factor) \
+            or maxima_borderline(x, diff, residual, sigma, params.noise_factor):
         flag.ok = False
     q = F._perceive_ions(residual, mzs, sigma, np.count_nonzero(residual, axis=0), params)
     if q is not None:
@@ -191,6 +245,7 @@ def probe_fast(ms, t0: float, t1: float, apex: float,
     a = _shapes(p, groups, n)
     contrib = np.zeros((len(groups), mzs.size), dtype=float)
     contrib[:, cols] = F.nnls_columns(a, x[:, cols])
+    F.settle_spectrum_ties(a, x, contrib)
     comps = [D.Component(**vars(c)) for c in F._components(p, groups, a, contrib, x.sum(axis=1), mzs, win_rt, lo)]
     if any(_near(c.rt, t0) or _near(c.rt, t1) for c in comps):
         flag.ok = False
