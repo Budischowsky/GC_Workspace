@@ -71,7 +71,8 @@ From left to right:
 | `Ctrl+Q` | Exit |
 | `Z` `H` `B` `S` `D` `A` `M` `G` `K` `N` `R` | The integration tools |
 | `Delete` (in the peak table) | Delete the marked peaks |
-| `Ctrl+C` (in the peak table) | Copy the marked rows |
+| `Ctrl+C` (in the peak table) | Copy the marked rows; numbers with every digit, as Excel copies them (the table shows them rounded) |
+| `Ctrl+C` (in the Replicates tables) | Copy the marked cells (double determination) or rows (group of three or more), numbers with every digit |
 | `←` / `→` (in the spectrum) | One scan back / forward |
 | `Esc` | Back to the spectrum of the selected peak; ends **Subtract baseline** |
 | `F3` (double determination) | Next red row |

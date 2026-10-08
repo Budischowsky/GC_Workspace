@@ -7,9 +7,11 @@ from typing import Any, Callable, Optional
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QBrush, QColor, QFont
 
+from gcws.core.text import copy_number
 from gcws.quant import peak_values as PV
 from gcws.quant.peak_values import Row  # noqa: F401 (re-export)
 from gcws.ui import theme
+from gcws.ui.widgets.sheet_table import COPY_ROLE
 
 
 def _f(v, fmt):
@@ -176,6 +178,8 @@ class PeakTableModel(QAbstractTableModel):
         col = COLUMNS[index.column()]
         if role in (Qt.DisplayRole, Qt.EditRole):
             return col.text(row, self.ws)
+        if role == COPY_ROLE:            # Ctrl+C: a number with every digit (it is shown rounded)
+            return copy_number(col.get(row, self.ws)) if col.numeric and col.fmt else col.text(row, self.ws)
         if role == Qt.UserRole:          # sort key
             v = col.get(row, self.ws)
             return v if v is not None else (-1e300 if col.numeric else "")

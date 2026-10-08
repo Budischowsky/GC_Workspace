@@ -572,7 +572,8 @@ class PeakTable(QWidget):
         cols = [hh.logicalIndex(v) for v in range(hh.count())]
         return [c for c in cols if not self.view.isColumnHidden(c)]
 
-    def table_rows(self, only_selected=False):
+    def table_rows(self, only_selected=False, role=Qt.DisplayRole):
+        """Header and rows of the shown columns as shown (``role``: COPY_ROLE gives every digit)."""
         cols = self._visible_columns()
         rows = [[self.model.headerData(c, Qt.Horizontal) for c in cols]]
         prows = range(self.proxy.rowCount())
@@ -580,11 +581,13 @@ class PeakTable(QWidget):
         for r in prows:
             if sel is not None and r not in sel:
                 continue
-            rows.append([self.proxy.index(r, c).data() for c in cols])
+            rows.append([self.proxy.index(r, c).data(role) for c in cols])
         return rows
 
     def copy(self):
-        rows = self.table_rows(only_selected=bool(self.view.selectionModel().selectedRows()))
+        """Ctrl+C: the header and the marked rows (else all), numbers with every digit as Excel copies them."""
+        from gcws.ui.widgets.sheet_table import COPY_ROLE
+        rows = self.table_rows(only_selected=bool(self.view.selectionModel().selectedRows()), role=COPY_ROLE)
         QGuiApplication.clipboard().setText("\n".join("\t".join(str(v) for v in r) for r in rows))
 
     def export(self):

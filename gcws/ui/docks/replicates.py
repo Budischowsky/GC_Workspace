@@ -11,7 +11,7 @@ import copy
 import uuid
 
 from PySide6.QtCore import Qt, Signal as QtSignal
-from PySide6.QtGui import QBrush, QFont, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QBrush, QFont, QGuiApplication, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
                                QMenu, QScrollArea, QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem,
                                QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
@@ -130,6 +130,11 @@ class ReplicatesDock(QWidget):
         self._sheet_sort = (0, Qt.AscendingOrder)           # most severe first, until a header is clicked
         self._sheet_hidden: set[str] = set()                # header texts hidden for this session
         self.sheet.horizontalHeader().sortIndicatorChanged.connect(self._sheet_sorted)
+        copy_action = QAction("Copy", self.sheet)
+        copy_action.setShortcut(QKeySequence.Copy)
+        copy_action.setShortcutContext(Qt.WidgetShortcut)
+        copy_action.triggered.connect(self.copy_sheet)
+        self.sheet.addAction(copy_action)
         self._filling = False
         self.info = QLabel()
         self.info.setObjectName("hint")
@@ -569,6 +574,7 @@ class ReplicatesDock(QWidget):
         self.info.setText(err or f"{g['name']}: {n} determination(s) - " + ", ".join(names)
                           + (f". Valid when: {rule.lower()}." if rule else ""))
         from gcws.ui.docks.duplicate import ICON, SEVERITY, SORT_ROLE, _SeverityItem
+        from gcws.ui.widgets.sheet_table import COPY_ROLE
         lights = [nfold_light(r) for r in rows]
         self.sheet_counts = {key: sum(1 for lt in lights if key == "all" or lt == key) for key in self.sheet_chips}
         for row_index, (r, light) in enumerate(zip(rows, lights)):
@@ -586,6 +592,7 @@ class ReplicatesDock(QWidget):
                 it = _SeverityItem() if c == 0 else QTableWidgetItem()
                 if isinstance(v, float):
                     it.setData(Qt.DisplayRole, round(v, 4) if c == 1 else round(v, 6))
+                    it.setData(COPY_ROLE, v)                                 # Ctrl+C: every digit
                 elif v is None:
                     it.setText("")
                 else:
@@ -626,6 +633,20 @@ class ReplicatesDock(QWidget):
     def _sheet_sorted(self, column: int, order) -> None:
         if not self._filling:
             self._sheet_sort = (column, order)
+
+    def copy_sheet(self) -> None:
+        """Ctrl+C on the worksheet: the header and the marked rows as tab-separated text, the shown columns
+        without the icon, numbers with every digit (they are shown rounded)."""
+        from gcws.ui.widgets.sheet_table import copy_text
+        rows = sorted({i.row() for i in self.sheet.selectedIndexes()})
+        if not rows:
+            return
+        hh = self.sheet.horizontalHeader()
+        cols = [c for c in (hh.logicalIndex(v) for v in range(hh.count()))
+                if c > 0 and not self.sheet.isColumnHidden(c)]
+        lines = [[self.sheet.horizontalHeaderItem(c).text() for c in cols]]
+        lines += [[copy_text(self.sheet, r, c) for c in cols] for r in rows]
+        QGuiApplication.clipboard().setText("\n".join("\t".join(line) for line in lines))
 
     def _sheet_columns(self, pos) -> None:
         """Right-click on the worksheet's header: show or hide its columns (for this session)."""

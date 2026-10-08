@@ -4,8 +4,9 @@
 * **Backspace** / **Enter** emit ``markRequested(rows, False / True)`` (e.g. the Report box);
 * **Delete** emits ``deleteRequested(rows)`` (the owner deletes or restores the rows);
 * **Space** on a check box emits ``toggleRequested(rows)``: the owner switches every marked row;
-* **Ctrl+C** copies the marked cells as tab-separated text, **Ctrl+V** pastes one value into
-  every marked cell or a block from the current cell on;
+* **Ctrl+C** copies the marked cells as tab-separated text (a number shown rounded with every digit of
+  its ``COPY_ROLE`` value, as Excel does), **Ctrl+V** pastes one value into every marked cell or a block
+  from the current cell on;
 * **Ctrl+D** fills the marked cells of each column with the value of its top cell;
 * the **fill handle** (small square at the bottom right of the marking) can be dragged down
   or up: the marked values are repeated into the cells passed over, as in Excel.
@@ -24,6 +25,18 @@ from PySide6.QtGui import QColor, QGuiApplication, QKeySequence, QPainter
 from PySide6.QtWidgets import QAbstractItemView, QTableWidget
 
 HANDLE = 7          # px, the fill handle's size
+#: a cell's full value when it shows a number rounded: what Ctrl+C copies
+COPY_ROLE = Qt.UserRole + 20
+
+
+def copy_text(table, row: int, col: int) -> str:
+    """What Ctrl+C copies of a cell of a ``QTableWidget``: every digit of its ``COPY_ROLE`` value, else its text."""
+    from gcws.core.text import copy_number
+    it = table.item(row, col)
+    if it is None:
+        return ""
+    full = it.data(COPY_ROLE)
+    return copy_number(full) if full is not None else it.text()
 
 
 class SheetTable(QTableWidget):
@@ -128,7 +141,7 @@ class SheetTable(QTableWidget):
             if (r, c) not in marked:
                 return ""
             v = self.cell_value(r, c)
-            return ("x" if v else "") if isinstance(v, bool) else str(v)
+            return ("x" if v else "") if isinstance(v, bool) else copy_text(self, r, c)
         QGuiApplication.clipboard().setText("\n".join("\t".join(text(r, c) for c in cols) for r in rows))
 
     def paste(self, text: str | None = None):

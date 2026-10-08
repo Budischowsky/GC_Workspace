@@ -7,10 +7,30 @@ workspace and again before a workbook is written.
 """
 from __future__ import annotations
 
+import math
+import numbers
 import re
+from decimal import Decimal
 
 #: the characters an Excel cell cannot hold (openpyxl's ILLEGAL_CHARACTERS_RE)
 ILLEGAL = re.compile(r"[\000-\010\013\014\016-\037]")
+
+
+def copy_number(value) -> str:
+    """``value`` as Ctrl+C puts it on the clipboard: a number with every digit Excel keeps (15 significant),
+    without exponent or thousands separator and with a point as decimal mark; anything else as its text."""
+    if value is None:
+        return ""
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        return str(value)
+    if isinstance(value, numbers.Integral):
+        return str(int(value))
+    v = float(value)
+    if not math.isfinite(v):
+        return ""
+    if v == 0:
+        return "0"
+    return format(Decimal(format(v, ".15g")), "f")
 
 
 def excel_safe(value):

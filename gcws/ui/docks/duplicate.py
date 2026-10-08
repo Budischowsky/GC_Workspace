@@ -1036,6 +1036,7 @@ class DuplicatePage(QWidget):
     def _fill_table(self):
         from PySide6.QtGui import QFont
         from gcws.quant.nias_bridge import make_settings
+        from gcws.ui.widgets.sheet_table import COPY_ROLE
         labels = self.labels()
         names = [self.ws.runs[m].name for m in self.members if m in self.ws.runs]
         headers = self.headers()
@@ -1105,6 +1106,7 @@ class DuplicatePage(QWidget):
                     else:
                         decimals = UNIT_DECIMALS[UNIT_OF[c]] if c in UNIT_OF else {C_RT: 3, C_DIFF: 1, C_SIM: 2}.get(c, 4)
                         it.setData(Qt.DisplayRole, round(val, decimals))
+                    it.setData(COPY_ROLE, val)                               # Ctrl+C: every digit
                     it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 else:
                     it.setText("" if val is None else str(val))
@@ -1426,9 +1428,12 @@ class DuplicatePage(QWidget):
         r = self._visual_row(row)
         if r is None:
             return
-        cells = [self.table.cell_value(r, c) for c in self.table.shown_columns() if c != C_ICON]
-        QGuiApplication.clipboard().setText("\t".join("yes" if v is True else "no" if v is False else str(v)
-                                                       for v in cells))
+        from gcws.ui.widgets.sheet_table import copy_text
+
+        def text(c):
+            v = self.table.cell_value(r, c)
+            return "yes" if v is True else "no" if v is False else copy_text(self.table, r, c)
+        QGuiApplication.clipboard().setText("\t".join(text(c) for c in self.table.shown_columns() if c != C_ICON))
 
     def row_actions(self, row) -> list:
         """``[(text, callable)]`` of the right-click menu of ``row``; ``(None, None)`` is a separator."""

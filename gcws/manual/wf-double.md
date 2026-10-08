@@ -74,7 +74,7 @@ Right-click a row:
 | **Dismiss A (outlier): result = B** / **Dismiss B (outlier): result = A** | both determinations have a concentration | Removes an outlier: no mean is calculated, the result is the concentration of the other determination. The dismissed cells are struck out; the report notes it in the Review column. |
 | **Use A again (mean of both)** | a determination is dismissed | Takes the dismissal back. |
 | **Show in A** / **Show in B** | the substance is in that determination | Opens that determination with the peak selected. |
-| **Copy row** | always | Copies the visible cells of the row as text. |
+| **Copy row** | always | Copies the visible cells of the row as text, numbers with every digit. |
 | **Name: ...** | two candidate names, or differing spectra | Gives both determinations that name. |
 | **Remove the gap fill** | the row has a gap fill | Takes the gap-filled peak out again. |
 | **Harmonise the boundaries** | boundaries are proposed | Moves the peak boundaries of one determination to match the other. |
@@ -93,7 +93,8 @@ Move with the arrow keys, mark several cells with `Shift` or by dragging, type o
 `Enter` puts the marked substances into the report and `Backspace` takes them out; `Space` on a **Report** box
 switches all marked rows (into the report, or out of it when all are in already). `Delete` deletes the marked
 rows (see below). `Ctrl+C` / `Ctrl+V` copy and
-paste, `Ctrl+D` copies a value down. A changed cell is written in italics with a small triangle in its corner (as a comment in a
+paste (a number is copied with every digit, as in Excel, though the table shows it rounded), `Ctrl+D` copies a
+value down. A changed cell is written in italics with a small triangle in its corner (as a comment in a
 spreadsheet), so it is never mistaken for a yellow row; its tooltip shows the old value. Every edit is one undo
 step and is written to the audit trail.
 
