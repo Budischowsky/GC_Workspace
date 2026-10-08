@@ -1606,7 +1606,8 @@ def test_double_determination_row_menu_always_has_actions(qtbot, win, samples, m
 
 def test_replicates_report_button_and_more_menu(qtbot, win, monkeypatch):
     page = win.replicates.duplicate
-    kinds = ["NIAS report...", "Fingerprint report...", "Total extraction report...", "HS-Screening report..."]
+    kinds = ["NIAS report...", "Fingerprint report...", "Total extraction report...", "HS-Screening report...",
+             "Quantification report..."]
     for button in (page.b_report, win.replicates.b_report):
         texts = [a.text() for a in button.menu().actions() if a.text()]
         assert texts == kinds + ["Export worksheet..."] and button.text() == "Report preview"
