@@ -261,3 +261,43 @@ def test_nias_report_without_reportable_substance(samples, qapp, tmp_path):
     texts = [c for row in load_workbook(target).worksheets[0].iter_rows(values_only=True) for c in row if c]
     assert "No substance above 10 ppb detected." in texts
     assert not any(isinstance(t, str) and t.startswith("=") for t in texts)
+
+
+def _cells(path):
+    """Every sheet's cells: value, number format, bold, fill colour (what a reader of the file sees)."""
+    from openpyxl import load_workbook
+    wb = load_workbook(path)
+    return {ws.title: {c.coordinate: (c.value, c.number_format, c.font.b, c.fill.fgColor.rgb)
+                       for row in ws.iter_rows() for c in row if c.value is not None or c.has_style}
+            for ws in wb.worksheets if ws.title != "Manuelle Änderungen"}     # that sheet carries the time
+
+
+def test_report_metadata_written_before_the_one_save(samples, qapp, tmp_path, monkeypatch):
+    """The migration metadata go into the intermediate and the batch workbook before their save:
+    the same workbooks as writing them first and adding the metadata after loading them again."""
+    from gcws import paths
+    from gcws.quant.nias_bridge import make_settings
+    from gcws.report import service as RS
+    import gc_export
+    ws = _ws_with(samples, ["06_", "07_", "08_", "11_"], qapp)
+    ids = [s.id for s in ws.states() if s.role == "sample"]
+    target = tmp_path / "x_NIAS_Report.xlsx"
+    job = RS.ReportJob(kind="nias", samples=[ws.nias_sample(r) for r in ids], names=[ws.runs[r].name for r in ids],
+                       settings=make_settings(ws.quant.get("settings")), target=target,
+                       word=target.with_suffix(".docx"), cas_path=paths.RESOURCES / "CASINFO.xlsx",
+                       migration=MIGRATION, record_seen=False, batch_target=tmp_path / "x_Doppelbestimmung.xlsx")
+    from gcws.report.legacy_api import main_script
+    main = main_script()
+    reloads = []
+    real = main.write_migration_metadata_to_workbook
+    monkeypatch.setattr(main, "write_migration_metadata_to_workbook", lambda *a: reloads.append(a) or real(*a))
+    res = RS.generate(job)
+    assert reloads == [] and res.batch == job.batch_target
+    # the old way: written, loaded again, metadata added, saved again
+    old = tmp_path / "old_Doppelbestimmung.xlsx"
+    session = RS.build_session(job)
+    gc_export.write_batch_workbook(session, old, job.settings, sample_name="x")
+    real(old, MIGRATION)
+    new = _cells(job.batch_target)
+    assert new == _cells(old)
+    assert any(v[0] == "EtOH 95 %" for sheet in new.values() for v in sheet.values())
