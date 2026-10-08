@@ -97,6 +97,6 @@ def test_a_value_in_the_mode_unit_converts_like_the_peak_rows():
 
 
 def test_units_offered_per_mode():
-    assert Q.unit_keys("nias_mgkg") == list(Q.CONC_UNITS)
+    assert Q.unit_keys("nias_mgkg") == Q.NIAS_UNITS
     assert Q.unit_keys("total_ugl") == ["ug_l", "mg_l", "mg_ml"]
     assert Q.unit_keys("area_pct") == [] and Q.unit_keys("hs_screening") == []

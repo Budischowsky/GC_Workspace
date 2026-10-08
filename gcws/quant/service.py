@@ -15,10 +15,14 @@ MODES = {
     "total_ugl": "NIAS total extraction (µg/L)",
     "area_pct": "Area percent",
     "hs_screening": "HS-Screening (MS only)",
+    "extraction": "Extraction (quant method)",
 }
 UNITS = ["µg/L", "mg/L", "mg/mL", "µg/mL", "ng/mL", "mg/kg", "µg/g", "%"]
 #: the NIAS concentrations in further units (peak table, double determination): row key -> unit
-CONC_UNITS = {"mg_dm2": "mg/dm²", "ug_dm2": "µg/dm²", "ug_l": "µg/L", "mg_l": "mg/L", "mg_ml": "mg/mL"}
+CONC_UNITS = {"mg_dm2": "mg/dm²", "ug_dm2": "µg/dm²", "ug_l": "µg/L", "mg_l": "mg/L", "mg_ml": "mg/mL",
+              "mg_g": "mg/g", "mg_kg": "mg/kg", "ug_g": "µg/g", "ug_kg": "µg/kg"}
+#: the further units of NIAS mg/kg (mg/kg itself is its Conc.)
+NIAS_UNITS = ["mg_dm2", "ug_dm2", "ug_l", "mg_l", "mg_ml"]
 log = logging.getLogger(__name__)
 
 
@@ -43,6 +47,9 @@ def mode_unit(quant: dict) -> str:
         return "µg/L"
     if mode == "area_pct":
         return "%"
+    if mode == "extraction":
+        from gcws.quant import extraction as EX
+        return EX.unit(quant)
     return quant.get("unit", "µg/L")
 
 
@@ -225,6 +232,7 @@ def unit_values(mode, settings, *, corr_area=None, mg_dm2=None, conc=None, mean_
                                                   "ISTD found)"))
             return out
         out["mg_dm2"] = mg_dm2
+        out["mg_kg"] = conc
         if corr_area:
             calc["mg_dm2"] = (f"mg/dm² = corrected area × mean ISTD factor = {_g(corr_area)} × "
                               f"{_g(mg_dm2 / corr_area)} = {_g(mg_dm2)}")
@@ -254,16 +262,35 @@ def unit_values(mode, settings, *, corr_area=None, mg_dm2=None, conc=None, mean_
     return out
 
 
-def unit_keys(mode: str) -> list[str]:
-    """The further units (``CONC_UNITS`` keys) that ``mode`` computes."""
+def unit_keys(mode: str, quant: Optional[dict] = None) -> list[str]:
+    """The further units (``CONC_UNITS`` keys) that ``mode`` computes (extraction: those the method in
+    ``quant`` offers for its sample type)."""
     if mode == "nias_mgkg":
-        return list(CONC_UNITS)
+        return list(NIAS_UNITS)
+    if mode == "extraction":
+        from gcws.quant import extraction as EX
+        return EX.unit_keys(quant)
     return ["ug_l", "mg_l", "mg_ml"] if mode == "total_ugl" else []
 
 
-def from_mode_unit(mode, settings, value) -> dict:
+def from_mode_unit(mode, settings, value, *, quant: Optional[dict] = None, run_id: str = "") -> dict:
     """``value`` in the mode's unit (mg/kg or µg/L, e.g. a double determination's concentration with
-    the analyst's edits) in the further units, as :func:`unit_values` gives them for a peak."""
+    the analyst's edits) in the further units, as :func:`unit_values` gives them for a peak. Extraction:
+    ``value`` in Conc. 1's unit of the run ``run_id``, with the method in ``quant``."""
+    if mode == "extraction":
+        from gcws.quant import extraction as EX
+        from gcws.quant import units as U
+        out: dict = dict.fromkeys(CONC_UNITS)
+        calc: dict = {}
+        b, u1 = EX.basis(quant, run_id), EX.unit(quant)
+        for k in EX.unit_keys(quant):
+            u = U.label_of(k)
+            out[k] = EX.convert_value(quant, run_id, value, u)
+            r = U.ratio(u1, u, b)
+            calc[k] = U.missing(u, b) or (f"{u} = {_g(value)} {u1} × {_g(r)} = {_g(out[k])}"
+                                          if value is not None and r is not None else "")
+        out["calc"] = calc
+        return out
     if mode != "nias_mgkg" or value is None:
         return unit_values(mode, settings, conc=value)
     ov = _positive(getattr(settings, "ov_ratio", None))
@@ -295,6 +322,10 @@ def rows_for(sample, st, mode, quant, settings, defs, options) -> dict[int, dict
             c_istd = None
         mean_area = istd_reference_area(sample, options)
     out = {}
+    extracted = {}
+    if mode == "extraction":
+        from gcws.quant import extraction as EX
+        extracted, sample.meta["extraction"] = EX.rows(sample, quant, st.id, CONC_UNITS)
     res = st.results.get(quant_detector(quant))
     for row in sample.rows:
         idx = row.derived.get("gcws_index")
@@ -306,6 +337,8 @@ def rows_for(sample, st, mode, quant, settings, defs, options) -> dict[int, dict
             conc = d.get("mg_kg")
         elif mode in ("istd_conc", "total_ugl"):
             conc = (corr / mean_area * c_istd) if (corr is not None and mean_area and c_istd) else None
+        elif mode == "extraction":
+            conc = extracted.get(idx, {}).get("conc")
         else:
             conc = res.peaks[idx].area_pct if res is not None else None
         out[idx] = {
@@ -322,4 +355,6 @@ def rows_for(sample, st, mode, quant, settings, defs, options) -> dict[int, dict
             **unit_values(mode, settings, corr_area=corr, mg_dm2=d.get("mg_dm2") if mode == "nias_mgkg" else None,
                           conc=conc, mean_area=mean_area, c_istd=c_istd),
         }
+        if idx in extracted:
+            out[idx].update(extracted[idx])
     return out
