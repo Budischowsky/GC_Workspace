@@ -142,6 +142,7 @@ class QuantMethodPanel(QGroupBox):
         self.delete_btn.setEnabled(m["name"] in names)
         self.modified.setText("Changed since it was saved" if m["name"] and self.is_modified() else
                               "" if m["name"] else "Not saved yet: Save as... keeps it under a name")
+        self.modified.setVisible(bool(self.modified.text()))
         self.sample_type.setCurrentIndex(max(0, self.sample_type.findData(m["sample_type"])))
         basis = U.AMOUNT_BASIS[m["sample_type"]]
         suffix = " g" if basis == "mass_g" else " dm²"
