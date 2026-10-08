@@ -36,6 +36,7 @@ opens when both are moved together.
 - the migration conditions;
 - the library search method and the choices of the search dialog (TIC or FID peaks, spectrum, skip named);
 - the own-library search options and the report options;
+- the report template of the Template Report (see [Report templates](wf-report-templates.md));
 - the columns of the peak table and its value filter.
 
 **Method > Load Method...** lists the saved methods with a summary of each. Tick under **Apply** which parts
@@ -50,7 +51,10 @@ The status bar shows the name of the method loaded or saved last.
 ## Run Method
 
 Loading runs only reads them: the chromatograms are shown, but nothing is integrated, searched or quantified.
-**Method > Run Method** (`Ctrl+R`) processes all loaded runs with the method loaded (or saved) last: it integrates them with the method's integration (solvent cut and automatic deconvolution split included), rebuilds the blank-subtracted traces, runs the method's library search, binds the internal standards that the detection finds with high confidence, and quantifies. The bottom status bar shows the step it is on; the status bar and the audit trail tell what was done. Without a loaded method it offers **Load Method...** first. Running it again integrates the runs again; manual integration events are kept.
+**Method > Run Method** (`Ctrl+R`) processes all loaded runs with the method loaded (or saved) last: it integrates them with the method's integration (solvent cut and automatic deconvolution split included), rebuilds the blank-subtracted traces, runs the method's library search, binds the internal standards that the detection finds with high confidence, and quantifies. The bottom status bar shows the step it is on; the status bar and the audit trail tell what was done. Without a loaded method it offers **Load Method...** first. Running it again integrates the runs again; manual integration events are kept. When the method carries a
+report template with **Create the report when the method runs (Run Method, automation)**, Run Method then
+writes the Template Report of every processed sample next to the data (see
+[Report templates](wf-report-templates.md#when-the-report-is-made)).
 
 ## Integration methods and search methods
 

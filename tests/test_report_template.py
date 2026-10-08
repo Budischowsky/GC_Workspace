@@ -96,3 +96,16 @@ def test_named_store_round_trip(store):
         TP.save(dict(t, name=" "))
     assert TP.delete("Customer A: v1") and not TP.delete("Customer A: v1")
     assert TP.names() == []
+
+
+def test_the_processing_method_carries_the_template():
+    from gcws.core import proc_method as PM
+    tpl = TP.stamped(TP.preset("NIAS"), "Customer A")
+    method = {"name": "M", "sections": {"report_template": tpl}}
+    assert "report_template" in PM.chosen_sections(method) and "report_template" in PM.WORKSPACE_SECTIONS
+    q = PM.plan_quant({"mode": "nias_mgkg"}, method, PM.chosen_sections(method))
+    assert TP.of(q)["name"] == "Customer A"
+    # an older method without the section keeps the workspace's template; one saved without it removes it
+    assert TP.of(PM.plan_quant(q, {"sections": {"quant": {}}}, ["quant"]))["name"] == "Customer A"
+    assert TP.of(PM.plan_quant(q, {"sections": {"report_template": None}}, ["report_template"])) is None
+    assert "Report template: 'Customer A', 8 columns, made when the method runs" in PM.summary(method)
