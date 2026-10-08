@@ -866,9 +866,9 @@ class Journal:
         self._event_raw(level, workflow_id, batch_id, job_id, text, user)
 
     def events(self, *, job_id: Optional[str] = None, after: int = 0, limit: int = 500) -> list[dict]:
-        if job_id:
-            return self._rows("SELECT * FROM events WHERE job_id=? AND id>? ORDER BY id LIMIT ?",
-                              (job_id, after, limit))
+        if job_id:                                      # the newest ``limit`` (a long history), oldest first
+            return self._rows("SELECT * FROM (SELECT * FROM events WHERE job_id=? AND id>? ORDER BY id DESC "
+                              "LIMIT ?) ORDER BY id", (job_id, after, limit))
         return self._rows("SELECT * FROM (SELECT * FROM events WHERE id>? ORDER BY id DESC LIMIT ?) ORDER BY id",
                           (after, limit))
 
