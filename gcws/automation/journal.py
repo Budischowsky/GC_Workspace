@@ -228,7 +228,8 @@ class Journal:
         """Changes when a report, a batch or the log changes (not with the watcher's heartbeat). Read
         from an index: a fraction of a millisecond also with thousands of reports."""
         a = self.con.execute("SELECT COUNT(*), MAX(COALESCE(finished,0)), MAX(COALESCE(reviewed_at,0)), "
-                             "MAX(COALESCE(created,0)), SUM(LENGTH(state)), SUM(deleted), SUM(export_pending), "
+                             "MAX(COALESCE(created,0)), SUM(LENGTH(state) + 100 * UNICODE(state)), SUM(deleted), "
+                             "SUM(export_pending), "
                              "SUM(LENGTH(COALESCE(export_state,''))), SUM(revision), SUM(edited) FROM jobs").fetchone()
         b = self.con.execute("SELECT COUNT(*), SUM(deleted), MAX(COALESCE(reopened,0)), SUM(missing), "
                              "SUM(LENGTH(COALESCE(force_json,''))), SUM(LENGTH(COALESCE(plan_json,''))) "
@@ -690,7 +691,10 @@ class Journal:
                                 f"undone by {user}", user)
             return cur.rowcount == 1
 
-    def delete(self, job_ids: Iterable[str], user: Optional[str] = None) -> list[str]:
+    #: ``jobs.deleted`` of a job hidden with its batch (:meth:`delete_batch`); 1: hidden by itself
+    DELETED_WITH_BATCH = 2
+
+    def delete(self, job_ids: Iterable[str], user: Optional[str] = None, *, mark: int = 1) -> list[str]:
         """Hide jobs in Report² (nothing on disk is touched). A job still in the queue is removed from
         it as well, so the watcher does not process what nobody sees; :meth:`restore` shows it again."""
         user = user or _user()
@@ -702,7 +706,7 @@ class Journal:
             if j.state in REMOVABLE:
                 self.transition(jid, REMOVABLE, REMOVED, reason=f"deleted in Report² by {user} "
                                 f"(was: {j.label.lower()})", not_before=0)
-            self.con.execute("UPDATE jobs SET deleted=1 WHERE id=?", (jid,))
+            self.con.execute("UPDATE jobs SET deleted=? WHERE id=?", (mark, jid))
             done.append(jid)
             self.event("info", f"{j.group_name}: deleted in Report² by {user}", job_id=jid,
                        workflow_id=j.workflow_id, batch_id=j.batch_id, user=user)
@@ -728,7 +732,7 @@ class Journal:
         b = self.batch_by_id(batch_id)
         if not b or b.get("deleted"):
             return False
-        self.delete([j.id for j in self.jobs(batch_id=batch_id)], user)
+        self.delete([j.id for j in self.jobs(batch_id=batch_id)], user, mark=self.DELETED_WITH_BATCH)
         self.update_batch(batch_id, deleted=1)
         self.event("info", f"Batch {b['name']}: deleted in Report² by {user}", workflow_id=b["workflow_id"],
                    batch_id=batch_id, user=user)
@@ -740,7 +744,10 @@ class Journal:
         if not b or not b.get("deleted"):
             return False
         self.update_batch(batch_id, deleted=0)
-        self.restore([j.id for j in self.jobs(batch_id=batch_id)], user)
+        jobs = self.jobs(batch_id=batch_id)
+        # the reports deleted one by one before the batch stay deleted (a journal from before: all come back)
+        with_batch = [j.id for j in jobs if j.deleted == self.DELETED_WITH_BATCH]
+        self.restore(with_batch or [j.id for j in jobs], user)
         self.event("info", f"Batch {b['name']}: restored in Report² by {user}", workflow_id=b["workflow_id"],
                    batch_id=batch_id, user=user)
         return True

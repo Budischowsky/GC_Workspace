@@ -477,6 +477,26 @@ def test_delete_hides_and_show_deleted_restores(qtbot, data, tmp_path, monkeypat
     assert dock.restore_batch(bid) and len(_names(dock)) == 5
 
 
+def test_undo_of_a_delete_puts_queued_samples_back_in_the_queue(qtbot, data, tmp_path, monkeypatch):
+    """Delete takes a sample still in the queue out of it; Undo brings it back as it was (not "Removed"),
+    for one sample and for a whole batch."""
+    from gcws.automation import journal as J
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    dock = _dock(jr, monkeypatch, qtbot)
+    dock.select(ids["S-wait"])
+    assert dock.delete_selected(confirm=False) == [ids["S-wait"]]
+    assert jr.job(ids["S-wait"]).state == J.REMOVED
+    assert dock.undo()
+    back = jr.job(ids["S-wait"])
+    assert back.state == J.WAITING and back.reason == "waiting for B" and not back.deleted
+    bid = jr.batch(wf.id, batch)["id"]
+    assert dock.delete_batch(bid, confirm=False)
+    assert jr.job(ids["S-wait"]).state == J.REMOVED and jr.job(ids["S-failed"]).state == J.REMOVED
+    assert dock.undo()
+    assert jr.job(ids["S-wait"]).state == J.WAITING and jr.job(ids["S-failed"]).state == J.FAILED
+    assert jr.job(ids["S-control"]).state == J.CONTROL and not any(j.deleted for j in jr.jobs())
+
+
 def test_archive_and_reopen(qtbot, data, tmp_path, monkeypatch):
     from gcws.automation import journal as J
     wf, jr, ids, batch = _seed(data, tmp_path)
@@ -1180,5 +1200,11 @@ def test_register_lists_every_sample_done_or_not(qtbot, data, tmp_path, monkeypa
     sheet = load_workbook(out).active
     assert [c.value for c in sheet[1]][:5] == ["Sample", "Batch", "Workflow", "Status", "Done"]
     assert sheet.max_row == 6                                  # header + every sample
+    # a comment starting with "=" is text in the workbook, never a (broken) formula
+    jr.update_job(ids["S-control"], comment="=> recheck the ISTD")
+    dock.refresh()
+    sheet = load_workbook(dock.export_register(tmp_path / "register2.xlsx")).active
+    cell = next(c for c in sheet["K"] if c.value == "=> recheck the ISTD")
+    assert cell.data_type == "s"
     dock.set_mode("todo")
     assert not dock.done_filter.isVisibleTo(dock) and dock.list_stack.currentWidget() is not dock.register

@@ -1353,6 +1353,8 @@ class Report2Dock(QWidget):
             job = self.journal.job(self.register.item(r, 0).data(Qt.UserRole))
             values = [self.register.item(r, c).text() for c in range(len(REGISTER))]
             sh.append([excel_safe(v) for v in values + ([job.reason or "", job.comment or ""] if job else ["", ""])])
+            for c in sh[sh.max_row]:
+                c.data_type = "s"                     # text, also a comment starting with "=" (not a formula)
         for col, width in zip("ABCDEFGHIJK", (30, 30, 18, 22, 10, 14, 17, 10, 17, 40, 30)):
             sh.column_dimensions[col].width = width
         sh.auto_filter.ref = sh.dimensions
@@ -1620,10 +1622,11 @@ class Report2Dock(QWidget):
                 "deleted: the reports, the project and the delivered files stay. A sample still in the queue is "
                 "removed from it. View > Show deleted reports brings it back.") != QMessageBox.Yes:
             return []
+        before = {j.id: (j.state, j.reason) for j in jobs}
         ids = self.journal.delete([j.id for j in jobs])
         self.current = None
         self.refresh()
-        self.notify(f"Deleted {self._names(jobs)}.", lambda: (self.journal.restore(ids), "Restored.")[1])
+        self.notify(f"Deleted {self._names(jobs)}.", self._undo_delete(before, lambda: self.journal.restore(ids)))
         return ids
 
     def restore_selected(self) -> list:
@@ -1678,11 +1681,25 @@ class Report2Dock(QWidget):
                 "Nothing on disk is deleted. The watcher no longer looks at this folder. View > Show deleted "
                 "reports brings it back.") != QMessageBox.Yes:
             return False
+        before = {j.id: (j.state, j.reason) for j in self.journal.jobs(batch_id=bid) if not j.deleted}
         ok = self.journal.delete_batch(bid)
         self.refresh()
         if ok:
-            self.notify(f"Deleted the batch {name}.", lambda: (self.journal.restore_batch(bid), "Restored.")[1])
+            self.notify(f"Deleted the batch {name}.",
+                        self._undo_delete(before, lambda: self.journal.restore_batch(bid)))
         return ok
+
+    def _undo_delete(self, before: dict, restore: Callable) -> Callable[[], str]:
+        """Undo of a delete: shown again, and a sample the delete took out of the queue is back in it as it
+        was (``before``: job id -> (state, reason) before the delete)."""
+        def undo() -> str:
+            restore()
+            for jid, (state, reason) in before.items():
+                j = self.journal.job(jid)
+                if j is not None and not j.deleted and j.state == J.REMOVED and state in J.REMOVABLE:
+                    self.journal.update_job(jid, state=state, reason=reason)
+            return "Restored."
+        return undo
 
     def restore_batch(self, bid) -> bool:
         ok = self.journal.restore_batch(bid)

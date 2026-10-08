@@ -54,6 +54,21 @@ def test_delete_hides_and_restore_shows_again(tmp_path):
     assert "deleted in Report² by analyst" in texts and "restored in Report² by analyst" in texts
 
 
+def test_restoring_a_batch_keeps_reports_deleted_before_hidden(tmp_path):
+    """A report deleted on its own stays deleted when its batch is deleted and restored (or the batch
+    delete is undone); the reports hidden with the batch come back."""
+    J, jr, b = _journal(tmp_path)
+    a, c, d = (_done(J, jr, b, n, J.CONTROL) for n in ("A", "C", "D"))
+    assert jr.delete([a.id]) == [a.id]
+    assert jr.delete_batch(b["id"]) and all(j.deleted for j in jr.jobs())
+    assert jr.restore_batch(b["id"])
+    assert jr.job(a.id).deleted and not jr.job(c.id).deleted and not jr.job(d.id).deleted
+    # a batch deleted before reports remembered how they were hidden: all of it comes back
+    jr.delete_batch(b["id"])
+    jr.con.execute("UPDATE jobs SET deleted=1")
+    assert jr.restore_batch(b["id"]) and not any(j.deleted for j in jr.jobs())
+
+
 def test_deleted_batch_is_not_scanned_and_comes_back_when_restored(env, qapp):
     from gcws.automation import journal as J
     from gcws.automation.watcher import WatcherCore
@@ -233,6 +248,13 @@ def test_change_check_and_stamp_are_cheap_and_ignore_the_heartbeat(tmp_path):
     stamp = jr.stamp()
     jr.update_job(job.id, edited=1)                         # saved changes: Accept now makes it again
     assert jr.stamp() != stamp
+    # a state of the same length (removed -> waiting: a run put in again) changes the stamp as well
+    w = jr.ensure_job("wf", "m", b["id"], "W", "W", ["W.D"], {}, "fp")
+    assert jr.remove([w.id])
+    stamp = jr.stamp()
+    assert jr.put_in_again([w.id]) == [w.id] and jr.job(w.id).state == J.WAITING
+    assert jr.stamp() != stamp
+    stamp = jr.stamp()
     plan = jr.con.execute("EXPLAIN QUERY PLAN SELECT COUNT(*), SUM(edited), SUM(revision) FROM jobs").fetchall()
     assert "COVERING INDEX jobs_stamp" in " ".join(str(tuple(r)) for r in plan)
     job = jr.job(job.id)
