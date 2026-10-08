@@ -17,6 +17,8 @@ MODES = {
     "hs_screening": "HS-Screening (MS only)",
 }
 UNITS = ["µg/L", "mg/L", "mg/mL", "µg/mL", "ng/mL", "mg/kg", "µg/g", "%"]
+#: the NIAS concentrations in further units (peak table, double determination): row key -> unit
+CONC_UNITS = {"mg_dm2": "mg/dm²", "ug_dm2": "µg/dm²", "ug_l": "µg/L", "mg_l": "mg/L", "mg_ml": "mg/mL"}
 log = logging.getLogger(__name__)
 
 
@@ -192,6 +194,90 @@ def istd_reference_area(sample, options) -> Optional[float]:
     return sum(a for _c, a in found) / len(found)
 
 
+def _g(v: float) -> str:
+    return f"{v:.6g}"
+
+
+def _positive(v) -> Optional[float]:
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) and v > 0 else None
+
+
+def unit_values(mode, settings, *, corr_area=None, mg_dm2=None, conc=None, mean_area=None,
+                c_istd=None) -> dict:
+    """One substance's concentration in the further units of the NIAS modes (``CONC_UNITS``), and
+    ``calc``: unit key (and "conc") -> the calculation in numbers, shown as the cell's tooltip.
+
+    NIAS mg/kg: µg/dm² = mg/dm² × 1000; µg/L = mg/dm² × cell area × coverage × 10⁶ ÷ extract volume
+    [mL], the substance mass per litre of extract (the extract volume of the NIAS parameters, as for
+    the total extraction); mg/L and mg/mL follow from µg/L. NIAS total extraction: its µg/L as mg/L
+    and mg/mL. The other modes add none."""
+    out: dict = dict.fromkeys(CONC_UNITS)
+    calc: dict[str, str] = {}
+    out["calc"] = calc
+    ug_l = None
+    if mode == "nias_mgkg":
+        if mg_dm2 is None:
+            calc.update(dict.fromkeys(CONC_UNITS, "No mg/dm²: no ISTD factor in this run (no quantifying "
+                                                  "ISTD found)"))
+            return out
+        out["mg_dm2"] = mg_dm2
+        if corr_area:
+            calc["mg_dm2"] = (f"mg/dm² = corrected area × mean ISTD factor = {_g(corr_area)} × "
+                              f"{_g(mg_dm2 / corr_area)} = {_g(mg_dm2)}")
+        out["ug_dm2"] = mg_dm2 * 1000.0
+        calc["ug_dm2"] = f"µg/dm² = mg/dm² × 1000 = {_g(mg_dm2)} × 1000 = {_g(out['ug_dm2'])}"
+        ov = _positive(getattr(settings, "ov_ratio", None))
+        if conc is not None and ov:
+            calc["conc"] = f"mg/kg = mg/dm² × surface/volume = {_g(mg_dm2)} × {_g(ov)} dm²/kg = {_g(conc)}"
+        area, cov, vol = (_positive(getattr(settings, k, None))
+                          for k in ("cell_area_dm2", "coverage", "extract_volume_ml"))
+        if area and cov and vol:
+            ug_l = mg_dm2 * area * cov * 1e6 / vol
+            calc["ug_l"] = (f"µg/L = mg/dm² × cell area × coverage × 1 000 000 ÷ extract volume = {_g(mg_dm2)} × "
+                            f"{_g(area)} dm² × {_g(cov)} × 1 000 000 ÷ {_g(vol)} mL = {_g(ug_l)}")
+        else:
+            missing = "extract volume" if not vol else "cell area and coverage"
+            calc.update(dict.fromkeys(("ug_l", "mg_l", "mg_ml"), f"Needs the {missing} (NIAS parameters)"))
+    elif mode == "total_ugl" and conc is not None:
+        ug_l = conc
+        if corr_area is not None and mean_area and c_istd:
+            calc["conc"] = (f"µg/L = corrected area ÷ mean ISTD area × c(ISTD) = {_g(corr_area)} ÷ {_g(mean_area)} × "
+                            f"{_g(c_istd)} µg/L = {_g(conc)}")
+    if ug_l is not None:
+        out["ug_l"], out["mg_l"], out["mg_ml"] = ug_l, ug_l / 1e3, ug_l / 1e6
+        calc["mg_l"] = f"mg/L = µg/L ÷ 1000 = {_g(ug_l)} ÷ 1000 = {_g(out['mg_l'])}"
+        calc["mg_ml"] = f"mg/mL = µg/L ÷ 1 000 000 = {_g(ug_l)} ÷ 1 000 000 = {_g(out['mg_ml'])}"
+    return out
+
+
+def unit_keys(mode: str) -> list[str]:
+    """The further units (``CONC_UNITS`` keys) that ``mode`` computes."""
+    if mode == "nias_mgkg":
+        return list(CONC_UNITS)
+    return ["ug_l", "mg_l", "mg_ml"] if mode == "total_ugl" else []
+
+
+def from_mode_unit(mode, settings, value) -> dict:
+    """``value`` in the mode's unit (mg/kg or µg/L, e.g. a double determination's concentration with
+    the analyst's edits) in the further units, as :func:`unit_values` gives them for a peak."""
+    if mode != "nias_mgkg" or value is None:
+        return unit_values(mode, settings, conc=value)
+    ov = _positive(getattr(settings, "ov_ratio", None))
+    if not ov:
+        out = unit_values(mode, settings)
+        out["calc"] = dict.fromkeys(CONC_UNITS, "Needs the surface/volume ratio (NIAS parameters)")
+        return out
+    mg_dm2 = value / ov
+    out = unit_values(mode, settings, mg_dm2=mg_dm2, conc=value)
+    out["calc"]["mg_dm2"] = f"mg/dm² = mg/kg ÷ surface/volume = {_g(value)} ÷ {_g(ov)} dm²/kg = {_g(mg_dm2)}"
+    out["calc"].pop("conc", None)
+    return out
+
+
 def rows_for(sample, st, mode, quant, settings, defs, options) -> dict[int, dict]:
     import gc_fid
     istd_of = {}
@@ -228,11 +314,12 @@ def rows_for(sample, st, mode, quant, settings, defs, options) -> dict[int, dict
             "raw_area": d.get("raw_area"),
             "blank_area": max(d.get("blank_area") or 0.0, d.get("blank_istd_area") or 0.0) or None,
             "corr_area": corr,
-            "mg_dm2": d.get("mg_dm2") if mode == "nias_mgkg" else None,
             "conc": conc,
             "sml": d.get("sml") if d.get("sml") is not None else "",
             "status": d.get("status", "") if mode == "nias_mgkg" else "",
             "blank_status": d.get("blank_status", ""),
             "review": d.get("review", ""),
+            **unit_values(mode, settings, corr_area=corr, mg_dm2=d.get("mg_dm2") if mode == "nias_mgkg" else None,
+                          conc=conc, mean_area=mean_area, c_istd=c_istd),
         }
     return out

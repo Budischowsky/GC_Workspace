@@ -18,7 +18,8 @@ from gcws.ui.undo import IdentCommand
 
 #: columns the value filter can use, and its operators
 FILTER_COLUMNS = [("conc", "Conc."), ("corr_area", "Corr. area"), ("area", "Area"), ("area_pct", "Area %"),
-                  ("height", "Height"), ("mg_dm2", "mg/dm²"), ("score", "Score"), ("rt", "RT"),
+                  ("height", "Height"), ("mg_dm2", "mg/dm²"), ("ug_l", "µg/L"), ("mg_l", "mg/L"),
+                  ("mg_ml", "mg/mL"), ("score", "Score"), ("rt", "RT"),
                   ("ug_hs", "µg/HS"), ("ug_dm2", "µg/dm²"), ("ug_g", "µg/g"), ("rrt", "RRT")]
 FILTER_OPS = ["<", "≤", "=", "≥", ">", "between", "outside"]
 

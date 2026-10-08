@@ -111,11 +111,18 @@ COLUMNS: list[Column] = [
            default=False, tip="Sample area / blank area of the matching blank peak"),
     Column("area_minus_blank", "Area − blank", _area_minus_blank, ",.0f", default=False,
            tip="Peak area minus the matching blank peak's area (peak-level blank check)"),
-    Column("mg_dm2", "mg/dm²", lambda r, ws: r.quant.get("mg_dm2"), ".4f", default=False),
+    Column("mg_dm2", "mg/dm²", lambda r, ws: r.quant.get("mg_dm2"), ".4f", default=False,
+           tip="NIAS: corrected area × mean ISTD factor (hover a value for its calculation)"),
+    Column("ug_dm2", "µg/dm²", lambda r, ws: r.quant.get("ug_dm2"), ".4f", default=False,
+           tip="NIAS: mg/dm² × 1000. HS: HS amount divided by sample area; requires a positive area in dm²"),
+    Column("ug_l", "µg/L", lambda r, ws: r.quant.get("ug_l"), ".2f", default=False,
+           tip="NIAS: substance mass per litre of extract (extract volume of the NIAS parameters); "
+               "hover a value for its calculation"),
+    Column("mg_l", "mg/L", lambda r, ws: r.quant.get("mg_l"), ".4f", default=False, tip="NIAS: µg/L ÷ 1000"),
+    Column("mg_ml", "mg/mL", lambda r, ws: r.quant.get("mg_ml"), ".6f", default=False,
+           tip="NIAS: µg/L ÷ 1 000 000"),
     Column("ug_hs", "µg/HS", lambda r, ws: r.quant.get("ug_hs"), ".4f", default=False,
            tip="HS amount per vial relative to the activated internal standards"),
-    Column("ug_dm2", "µg/dm²", lambda r, ws: r.quant.get("ug_dm2"), ".4f", default=False,
-           tip="HS amount divided by sample area; requires a positive area in dm²"),
     Column("ug_g", "µg/g", lambda r, ws: r.quant.get("ug_g"), ".4f", default=False,
            tip="HS amount divided by sample mass; requires a positive mass in g"),
     Column("conc", "Conc.", lambda r, ws: r.quant.get("conc"), ".4f",
@@ -127,6 +134,8 @@ COLUMNS: list[Column] = [
            tip="Substance-class clue from the MS interpreter (spectrum of the peak); hover for details"),
 ]
 COLUMN_KEYS = [c.key for c in COLUMNS]
+#: concentration columns whose cells show their calculation as the tooltip
+CALC_KEYS = ("conc", "mg_dm2", "ug_dm2", "ug_l", "mg_l", "mg_ml")
 
 
 class PeakTableModel(QAbstractTableModel):
@@ -214,6 +223,8 @@ class PeakTableModel(QAbstractTableModel):
             return row.peak.extra.get("area_note")
         if role == Qt.ToolTipRole and col.key == "rrt":
             return row.quant.get("rrt_status", col.tip)
+        if role == Qt.ToolTipRole and col.key in CALC_KEYS:
+            return (row.quant.get("calc") or {}).get(col.key)
         if role == Qt.ToolTipRole and col.key == "class_hint":
             cache = getattr(self.ws, "hints", None)
             v = cache.get(self.ws.active, self.ws.signal_key, row.peak) if cache is not None else None
