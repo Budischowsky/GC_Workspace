@@ -236,3 +236,28 @@ def test_control_characters_in_names_do_not_break_the_report(samples, qapp, tmp_
     texts = [c.value for sh in load_workbook(tmp_path / "middle.xlsx").worksheets for row in sh.iter_rows()
              for c in row if isinstance(c.value, str)]
     assert not any("\x00" in t for t in texts)
+
+
+def test_nias_report_without_reportable_substance(samples, qapp, tmp_path):
+    """Nothing above the reporting limit: the report is still made, with one line instead of the
+    substances (it used to stop: 'Spalte D enthält nur unberechnete Formeln')."""
+    from openpyxl import load_workbook
+    from gcws.report.service import ReportJob, combined_rows, generate
+    from gcws.quant.nias_bridge import make_settings
+    from gcws.quant.replicates import combine, engine_peaks
+    from gcws import paths
+    ws = _ws_with(samples, ["06_", "07_", "08_", "11_"], qapp)
+    ids = [s.id for s in ws.states() if s.role == "sample"]
+    raw = combine([engine_peaks(ws.nias_sample(r)) for r in ids], 0.035)
+    target = tmp_path / "empty_NIAS_Report.xlsx"
+    job = ReportJob(kind="nias", samples=[ws.nias_sample(r) for r in ids], names=[ws.runs[r].name for r in ids],
+                    settings=make_settings(ws.quant.get("settings")), target=target,
+                    word=target.with_suffix(".docx"), cas_path=paths.RESOURCES / "CASINFO.xlsx",
+                    migration=MIGRATION, record_seen=False,
+                    edits={f"{r['rt']:.3f}": {"rt": r["rt"], "report": False} for r in raw})
+    assert combined_rows(job) == []
+    res = generate(job)
+    assert res.rows == 0 and res.word is not None and res.word.exists()
+    texts = [c for row in load_workbook(target).worksheets[0].iter_rows(values_only=True) for c in row if c]
+    assert "No substance above 10 ppb detected." in texts
+    assert not any(isinstance(t, str) and t.startswith("=") for t in texts)

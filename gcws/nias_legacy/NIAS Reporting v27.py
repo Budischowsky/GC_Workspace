@@ -6557,6 +6557,7 @@ def process_workbook(
     pubchem_cache_hits = 0
     pubchem_api_queries: set[str] = set()
     resolved_concentrations = 0
+    substance_rows = 0
 
     for row in range(data_start, source_ws.max_row + 1):
         name = text(source_ws.cell(row, columns["name"]).value)
@@ -6567,6 +6568,8 @@ def process_workbook(
             continue
         if name.lower().startswith("sum of "):
             continue
+        if name or text(raw_cas):
+            substance_rows += 1
 
         concentration = numeric_value(source_ws.cell(row, columns["conc_kg"]).value)
         if concentration is None and duplicate_mode:
@@ -6671,8 +6674,9 @@ def process_workbook(
     retained_rows, repeated_substances = split_repeated_substance_groups(retained_rows)
 
     if (not retained_rows and not any(sum_counts.values()) and not repeated_substances
-            and duplicate_mode and not resolved_concentrations):
-        # Not a single row yielded a number. Name the cause instead of reporting
+            and duplicate_mode and not resolved_concentrations and substance_rows):
+        # Not a single row yielded a number (an empty table - nothing above the
+        # reporting limit - is reported as such below). Name the cause instead of reporting
         # that no substance was detected, which would be plainly wrong.
         data_rows = sum(1 for row in range(data_start, source_ws.max_row + 1)
                         if text(source_ws.cell(row, columns["name"]).value))
@@ -6934,7 +6938,7 @@ def process_workbook(
     first_data_row = output_header_row + 1
     if not retained_rows:
         message_cell = target_ws.cell(
-            first_data_row, 1, "No substance was detected above 10 ppb."
+            first_data_row, 1, "No substance above 10 ppb detected."
         )
         target_ws.merge_cells(
             start_row=first_data_row, start_column=1,
