@@ -31,7 +31,7 @@ A right-click on a loaded sample gives:
 | **Signal in Chromatogram 1** | FID, TIC, BPC or an extracted ion for this run. |
 | **Extracted ion (EIC)...** | Asks for the m/z values and shows their chromatogram. |
 | **Overlay on current chromatogram** | Draws this run on the current (active) chromatogram, also with **Overlay** off. The same item again takes it off. |
-| **Colour...** | The colour of this run in all plots. |
+| **Colour...** | The colour of this run in all plots. The runs of a double determination (A and B of one sample, or a pair made with **Double determination with**) share one colour: A as it is, B paler. |
 | **Rename sample...** | Another label for this run (the files keep their names). |
 | **Show in folder tree** | Selects the run in the **Folders** panel. |
 | **Close** / **Close others** / **Close all loaded samples** | Removes runs from the project (nothing is deleted on disk). A right-click on the empty part of the list also offers **Close all loaded samples**. |

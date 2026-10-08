@@ -160,7 +160,7 @@ class LoadedSamples(QListWidget):
         st = self.ws.runs[rid]
         c = QColorDialog.getColor(QColor(st.color), self, f"Colour of {st.name}")
         if c.isValid():
-            st.color = c.name()
+            st.color, st.shade = c.name(), 0
             self.ws.dirty = True
             self.ws.runChanged.emit(rid)
 

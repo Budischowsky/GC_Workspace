@@ -55,6 +55,7 @@ def to_dict(ws, project_path: Path) -> dict:
             "color": st.color,
             "visible": st.visible,
             "overlay": st.overlay,
+            "shade": st.shade,
             "role": st.role,
             "blanks": st.blanks,
             "blanks_istd": st.blanks_istd,
@@ -131,6 +132,7 @@ def apply_run_state(st, entry: dict) -> list[str]:
     st.color = entry.get("color", st.color)
     st.visible = entry.get("visible", True)
     st.overlay = bool(entry.get("overlay", False))
+    st.shade = int(entry.get("shade", 0) or 0)
     st.run.role = entry.get("role", st.run.role)
     st.blanks = list(entry.get("blanks", []))
     st.blanks_istd = list(entry.get("blanks_istd", []))

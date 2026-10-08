@@ -153,6 +153,21 @@ def qcolor(value, alpha: int | None = None) -> QColor:
     return c
 
 
+#: shade of the n-th determination of a double (N-fold) determination: (towards, share)
+SHADES = {1: ("PAPER", 0.45), 2: ("INK", 0.3), 3: ("PAPER", 0.65)}
+
+
+def shade(color: str, rank: int) -> str:
+    """``color`` for the ``rank``-th determination of a double (N-fold) determination: the first as it
+    is, the second paler (towards the background), the third deeper, ..."""
+    if rank <= 0:
+        return color
+    towards, share = SHADES.get(rank, ("PAPER", 0.75))
+    a, b = QColor(color), QColor(globals()[towards])
+    mix = lambda x, y: round(x + (y - x) * share)
+    return QColor(mix(a.red(), b.red()), mix(a.green(), b.green()), mix(a.blue(), b.blue())).name()
+
+
 def glow_pen(color, width: float = 4.0, alpha: int = 50) -> QPen | None:
     """The halo drawn behind a trace (a wide, faint pen of its colour) in a theme whose traces
     glow (Dark Mode - Neon), else None - for pyqtgraph's ``shadowPen``."""

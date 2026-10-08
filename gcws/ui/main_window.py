@@ -1131,11 +1131,12 @@ class MainWindow(QMainWindow):
             return
         if name != theme.MODE:
             old = list(theme.RUN_COLORS)
+            bases = {st.id: self.ws.base_color(st) for st in self.ws.states()}
             theme.set_theme(name)
             QSettings().setValue("prefs/theme", name)
             for st in self.ws.states():
-                if st.color in old:
-                    st.color = theme.RUN_COLORS[old.index(st.color)]
+                if bases[st.id] in old:                # a double determination's shades follow too
+                    st.color = theme.shade(theme.RUN_COLORS[old.index(bases[st.id])], st.shade)
             for panel in (self.chrom, self.chrom2):
                 panel.refresh()
             self.table.reload()
@@ -1620,6 +1621,8 @@ class MainWindow(QMainWindow):
         """Double-determination page for ``run_id`` (with ``partner`` or the suggested one)."""
         self._show_dock("replicates")
         run_id = run_id or self.ws.active_id
+        if run_id and partner:
+            self.ws.shade_group([run_id, partner])      # a pair made by hand: one colour, two shades
         if run_id:
             self.replicates.show_pair(run_id, partner)
 

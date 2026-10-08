@@ -38,6 +38,7 @@ class RunState:
     color: str
     visible: bool = True
     overlay: bool = False                             # drawn on the current chromatogram (Overlay off too)
+    shade: int = 0                                    # place in its double determination (theme.shade)
     methods: dict[str, IntegrationMethod] = field(default_factory=dict)   # per signal kind
     manual: dict[str, list[ManualEvent]] = field(default_factory=dict)    # per signal key
     results: dict[str, IntegrationResult] = field(default_factory=dict)   # per signal key
@@ -171,6 +172,49 @@ class Workspace(QObject):
                 return c
         return PALETTE[len(self.runs) % len(PALETTE)]
 
+    def base_color(self, st) -> str:
+        """The palette colour ``st``'s colour is a shade of; a colour the analyst chose as it is."""
+        from gcws.ui import theme
+        return next((c for c in PALETTE if theme.shade(c, st.shade) == st.color), st.color)
+
+    def auto_color(self, st) -> bool:
+        """Whether ``st`` has a palette colour (or a shade of one), not one the analyst chose."""
+        return self.base_color(st) != st.color or st.color in PALETTE
+
+    def replicate_mates(self, st) -> list:
+        """The other loaded determinations of ``st``'s sample (same number and name, other A/B letter)."""
+        if st.role not in ("sample", "standard"):
+            return []
+        key = lambda s: (sequence.sample_number(s.run.path.name), sequence.replicate_stem(s.run.path.name))
+        own = key(st)
+        return [s for s in self.states() if s is not st and s.role in ("sample", "standard") and key(s) == own]
+
+    def shade_group(self, ids, emit: bool = True) -> list[str]:
+        """One colour for the determinations ``ids`` of a double (N-fold) determination: the first (A) as it
+        is, each further one a shade of it (B paler, ...). A colour the analyst chose stays. Returns the runs
+        whose colour changed."""
+        from gcws.ui import theme
+        states = [self.runs[i] for i in dict.fromkeys(ids) if i in self.runs]
+        if len(states) < 2:
+            return []
+        states.sort(key=lambda s: (sequence.replicate_label(s.run.path.name),
+                                   self.order.index(s.id) if s.id in self.order else len(self.order)))
+        base = self.base_color(states[0])
+        changed = []
+        for rank, s in enumerate(states):
+            if not self.auto_color(s):
+                continue
+            color = theme.shade(base, rank)
+            if (s.color, s.shade) != (color, rank):
+                s.color, s.shade = color, rank
+                changed.append(s.id)
+        if changed:
+            self.dirty = True
+            if emit:
+                for rid in changed:
+                    self.runChanged.emit(rid)
+        return changed
+
     def find_by_path(self, path) -> Optional[RunState]:
         p = Path(path).resolve()
         for s in self.runs.values():
@@ -180,6 +224,7 @@ class Workspace(QObject):
 
     def add_run(self, run: Run, results: dict | None = None, color: str | None = None,
                 delay: DelayEstimate | None = None, processed: bool = True) -> RunState:
+        auto = color is None
         st = RunState(run=run, color=color or self.next_color())
         st.undo = QUndoStack(self)
         self.undo_group.addStack(st.undo)
@@ -198,10 +243,17 @@ class Workspace(QObject):
                 self.integrate(st.id, key, emit=False)
         self.order.append(run.id)
         self._sort_order()
+        mates = self.replicate_mates(st) if auto else []
+        if mates and self.auto_color(mates[0]):
+            # a double determination: one colour, a shade per run (the new run's own colour stays free)
+            st.color = self.base_color(mates[0])
+        recolored = [r for r in self.shade_group([st.id] + [s.id for s in mates], emit=False) if r != st.id]
         if len(self.runs) == 1:                       # the first run: panels on signals it has
             self._fit_panels(run)
         self.dirty = True
         self.runAdded.emit(run.id)
+        for rid in recolored:
+            self.runChanged.emit(rid)
         if self.active_id is None:
             self.set_active(run.id)
         self._suggest_blanks()
