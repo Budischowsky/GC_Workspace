@@ -12,8 +12,11 @@ from __future__ import annotations
 
 import struct
 import threading
+from functools import lru_cache
 from pathlib import Path
 from typing import Callable, Optional
+
+import numpy as np
 
 import gcws.libsearch  # noqa: F401  (vendor on sys.path)
 from gcws.libsearch import store
@@ -27,9 +30,56 @@ from nist import NistLibrary
 from shimadzu import ShimadzuLibrary
 from spectral_index import open_index
 
+class _ShimadzuLibrary(ShimadzuLibrary):
+    """The vendored reader; the compound IDs of the spectrum records are read in one array pass
+    instead of one ``struct`` call per record (about 1 s per million records at every start).
+    The other checks are the vendored ones, in the same order."""
+
+    def __init__(self, path):
+        from shimadzu import u32
+        self.folder = Path(path).with_suffix('')
+        self.files = [self.folder.with_suffix('.' + ext) for ext in ('lib', 'spc', 'nam', 'fom')]
+        self.info, self.data, self.names, self.formulas = [p.read_bytes() for p in self.files]
+        if self.info[:4] != b'LH\x03\0' or self.info[28:32] != b'INF\0':
+            raise ValueError('Unsupported Shimadzu library header.')
+        self.count = u32(self.info, 36) // 16
+        self.info_start = 40 + u32(self.info, 32)
+        if u32(self.info, 36) % 16 or self.info_start + self.count * 16 > len(self.info):
+            raise ValueError('Invalid Shimadzu compound table.')
+        if not self.count:
+            self.scan_offsets = []
+            return
+        self.tables = {}
+        for key, data, signature in [('spc', self.data, b'SP\x02\0'), ('nam', self.names, b'NM\x02\0'),
+                                     ('fom', self.formulas, b'FM\x02\0')]:
+            if data[:4] != signature or u32(data, 20) != self.count * 4:
+                raise ValueError('Shimadzu record counts or versions disagree.')
+            start = 28 + self.count * 4
+            if start > len(data):
+                raise ValueError('Truncated Shimadzu index.')
+            offsets = np.frombuffer(data, dtype='<u4', count=self.count, offset=28).astype(np.int64)
+            ends = np.r_[offsets[1:], len(data) - start]
+            if self.count and (offsets[0] != 0 or np.any(ends <= offsets) or ends[-1] > len(data) - start):
+                raise ValueError('Invalid Shimadzu record boundaries.')
+            self.tables[key] = (start, offsets, ends)
+        self.scan_offsets = []
+        start, offsets, _ = self.tables['spc']
+        at = start + offsets + 4
+        raw = np.frombuffer(self.data, np.uint8)
+        if len(at) and int(at.max()) + 4 <= len(raw):
+            values = raw[at[:, None] + np.arange(4)].view('<u4').ravel()
+        else:                                   # a short record: the vendored read raises
+            values = np.array([u32(self.data, int(a)) for a in at], np.int64)
+        if values.max() > np.iinfo(np.int32).max:
+            raise OverflowError('Shimadzu compound ID out of range.')
+        self.ids = values.astype(np.int32)
+        if not np.array_equal(np.sort(self.ids), np.arange(1, self.count + 1)):
+            raise ValueError('Shimadzu spectrum IDs do not map uniquely to compound records.')
+
+
 READERS = {"agilent": (AgilentLibrary, "Agilent / ChemStation EI"),
            "nist": (NistLibrary, "NIST MS Search EI"),
-           "shimadzu": (ShimadzuLibrary, "Wiley / Shimadzu EI")}
+           "shimadzu": (_ShimadzuLibrary, "Wiley / Shimadzu EI")}
 
 
 class LocalEngine(_atlas_engine.Engine):
@@ -83,6 +133,13 @@ class LocalEngine(_atlas_engine.Engine):
                 self.sources.append(dict(name=spec.name, count=0, kind="MSP library", path=spec.path,
                                          status="Unavailable", error=str(error)))
         progress(f"Libraries ready · {self.count:,} reference spectra")
+
+    @lru_cache(maxsize=1)
+    def statistics(self):
+        """The vendored PBM statistics, from per-library counts kept beside the index
+        (:mod:`gcws.libsearch.stats`)."""
+        from gcws.libsearch import stats
+        return stats.statistics(self.shards, self.count)
 
     def shard_norms(self, index, minimum, maximum):
         """The vendored prefilter norms, bit for bit, resumed from the previous search range
