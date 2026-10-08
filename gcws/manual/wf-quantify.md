@@ -94,7 +94,8 @@ spectrum even without a library search.
 | **Internal standard concentration** | the unit you choose | Concentration = corrected area ÷ ISTD area × ISTD concentration. Enter **ISTD concentration** and **Unit**. |
 | **NIAS total extraction (µg/L)** | µg/L | |
 | **Area percent** | % | Each peak as a share of all peaks. |
-| **HS-Screening (MS only)** | µg/HS, µg/dm² or µg/g | Headspace screening on the TIC, with its own standards. See below. |
+| **HS-Screening (MS only)** | µg/HS, µg/dm², µg/g or mg/m² | Headspace screening on the TIC, with its own standards. See below. |
+| **Extraction (quant method)** | Conc. 1 of the quant method | A solid (g) or a foil (dm²) extracted into a volume (mL) with the internal standards. See [Quant method](#quant-method). |
 
 **Detector** chooses whether the quantities come from the **FID** peaks or from the **TIC (MS)** peaks.
 Internal standards, blanks and names are then taken from the same detector.
@@ -110,6 +111,47 @@ volume and surface-to-volume ratio. Cell area, coverage and surface / volume are
 change the NIAS parameters too. The report texts follow from them. A NIAS report cannot be made without them;
 the program opens this window if they are missing.
 
+### Quant method
+
+The mode **Extraction (quant method)** quantifies an extraction: a solid (g) or a foil (dm²) is extracted into
+a volume of solvent (mL) to which the internal standards are added. The panel shows the group **Quant method**
+instead of the NIAS parameters; the **Internal standards** table stays (by default the NIAS standards, with
+**Conc.** = the stock concentration of each standard in mg/mL).
+
+| Field | Meaning |
+|---|---|
+| **Sample** | **Solid (g)** or **Foil (dm²)**. |
+| **Sample amount** | The sample mass (g) or area (dm²) of the method. |
+| **Extract volume** | The volume of the extract (mL). |
+| **Spiked standard** | The volume of the standard solution added (µL). |
+| **Conc. 1**, **Conc. 2** | The two units of the result. Conc. 1 is the **Conc.** of the peak table and the double determination; the Quantification report gives both. |
+| **Reporting limit** | Substances below it (in the Conc. 1 unit) are left out of the report; **Off** reports all. |
+| **Active run amount** | The active run's own sample amount (e.g. its weighed mass); **Method amount** uses the method's. |
+| **NIAS standards** | Fills the **Internal standards** table with the NIAS standards and their stock concentrations again. |
+
+Units: a solid gives mg/mL, µg/L (of the extract), mg/g, mg/kg, µg/g and µg/kg; a foil gives mg/mL, µg/L,
+mg/dm² and µg/dm².
+
+Calculation:
+
+- standard amount (mg) = stock concentration (mg/mL) × spiked volume (µL) ÷ 1000
+- factor = mean standard amount ÷ mean standard area of the quantifying standards found in the run (with
+  **Factor from the mean of the ISTD areas** off: the reference standard alone)
+- substance (mg) = corrected area × factor
+- mg/kg = substance (mg) × 1000 ÷ sample mass (g); µg/L = substance (mg) × 1 000 000 ÷ extract volume (mL);
+  mg/dm² = substance (mg) ÷ sample area (dm²); and so on
+
+The panel shows the active run's factor and what is missing. Every substance is taken to respond like the
+standards (no response factors). The cells of the peak table show their calculation as a tooltip.
+
+Methods are kept by name: the list at the top of the group chooses a saved method, **Save** keeps the changes
+under its name, **Save as...** under a new one and **Delete** removes the saved method (the settings stay). The
+note under the list says when the method differs from its saved version. A quant method holds the fields above,
+the internal standards and the detector, never a run's own amount. It is also part of a processing method
+(**Method > Save current settings as Method...**).
+
+The report of this mode is the **Quantification Report** (see [Reports](wf-report.md)).
+
 ### HS-Screening
 
 1. Choose the mode **HS-Screening (MS only)**. Chromatogram 1 switches to the TIC.
@@ -117,7 +159,9 @@ the program opens this window if they are missing.
    **Bind selected TIC peak**. The amount is 1 µg per vial unless changed.
 3. Tick the standards to use. With **Use mean of activated ISTD areas** their mean is the reference; without
    it exactly one standard must be active.
-4. Choose the **Result unit**. For µg/dm² enter **Sample area (dm²)**, for µg/g **Sample mass (g)**.
+4. Choose the **Result unit**. For µg/dm² and mg/m² enter **Sample area (dm²)**, for µg/g **Sample mass (g)**.
+   **Report Conc. 1** and **Report Conc. 2** choose the two units of the HS report (by default µg/dm² and
+   mg/m²; 1 µg/dm² = 0.1 mg/m²); every determination of the report then needs its sample area.
 5. **Subtract matching Blank / Blank+ISTD (larger area)** subtracts the blank's peak area.
 
 Calculation: corrected TIC area × mean ISTD amount ÷ mean ISTD TIC area. These are screening estimates; the
@@ -168,7 +212,8 @@ To keep this setup, save it with **Method > Save current settings as Method...**
 
 The peak table shows **Conc.** in the unit of the mode, **Corr. area** (after the blank correction), **ISTD**
 (which standard a peak is), **SML** and **Status**. More columns - **mg/dm²**, **µg/dm²**, **µg/L**, **mg/L**,
-**mg/mL**, **µg/HS**, **µg/g**, **RRT**, **Blank area** - can be switched on with **Columns**.
+**mg/mL**, **mg/g**, **mg/kg**, **µg/kg**, **µg/HS**, **µg/g**, **mg/m²**, **RRT**, **Blank area** - can be
+switched on with **Columns**.
 
 The NIAS modes give every substance in these further units as well:
 

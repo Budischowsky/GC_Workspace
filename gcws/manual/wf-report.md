@@ -1,15 +1,25 @@
 # Reports
 
-## The four reports
+## The five reports
 
 | Report | For | Quantity |
 |---|---|---|
 | **NIAS Report** | Migration testing: substances in mg/kg against their limits. | mg/kg |
 | **Fingerprint Report** | A qualitative picture of the sample. | Area % |
 | **Total Extraction Report** | Total extraction. | µg/L |
-| **HS-Screening Report** | Headspace screening (mode **HS-Screening**). | µg/HS, µg/dm² or µg/g |
+| **HS-Screening Report** | Headspace screening (mode **HS-Screening**). | Conc. 1 and Conc. 2, by default µg/dm² and mg/m² |
+| **Quantification Report** | An extraction quantified with a quant method (mode **Extraction (quant method)**). | Conc. 1 and Conc. 2 of the quant method |
 
 Each report is written as an Excel workbook and a Word document.
+
+The Quantification and the HS-Screening reports have the same table: **RT**, **Name**, **CAS**, **Qual** (the
+library match; of a double determination the lower one), **Conc. 1** and **Conc. 2** - the same result in two
+units. A single determination gives its own values. A double determination gives the mean of A and B in each
+unit, with your changes from the double determination (an edited value, a dismissed outlier); A and B are each
+converted with their own sample amount. The sheet **Determinations** lists A and B in both units; the other
+sheets show the calculation (sample amounts, standards, factor, every peak). The preview button of the
+**Peaks** panel reports the active run alone; the **Replicates / results** panel and the Report menu report the
+group. The report that fits the quantification mode is the one the **Report preview** buttons show.
 
 ## Make a report
 

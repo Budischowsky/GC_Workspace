@@ -119,7 +119,8 @@ Columns marked * are shown unless you change it.
 | **Blank ratio** | Sample area ÷ blank area of the matching blank peak. |
 | **Area − blank** | Area minus the matching blank peak's area. |
 | **mg/dm²** | |
-| **µg/HS**, **µg/dm²**, **µg/g** | The HS-Screening quantities. |
+| **µg/HS**, **µg/dm²**, **µg/g**, **mg/m²** | The HS-Screening quantities. |
+| **mg/g**, **mg/kg**, **µg/kg** | Extraction (quant method) of a solid: the substance per sample mass. |
 | **Conc.** * | Concentration in the unit of the quantification mode. |
 | **SML** | The specific migration limit of the substance. |
 | **Status** * | Status of the quantification. |
@@ -221,7 +222,13 @@ In the mode **HS-Screening** the panel shows instead: **Calibration** (**Interna
 **Sample area (dm²)**, **Sample mass (g)**, the table of HS standards (with entered areas also **TIC area**), the
 standards of the active run (with calibration runs, on a sample: the area in each calibration run and the
 **Mean area**), and **Bind selected TIC peak**, **Unbind**, **Automatic**, **Detect...**, **Learn spectrum**.
-See [External calibration](wf-quantify.md#external-calibration).
+See [External calibration](wf-quantify.md#external-calibration). **Report Conc. 1** and **Report Conc. 2** choose
+the units of the HS report (by default µg/dm² and mg/m²).
+
+In the mode **Extraction (quant method)** the group **Quant method** replaces the NIAS parameters: the saved
+methods with **Save**, **Save as...** and **Delete**, **Sample**, **Sample amount**, **Extract volume**,
+**Spiked standard**, **Conc. 1**, **Conc. 2**, **Reporting limit**, **Active run amount** and **NIAS standards**.
+See [Quant method](wf-quantify.md#quant-method).
 
 ## Replicates / results
 
@@ -256,7 +263,8 @@ A right-click on a row offers **Delete row**, **Reset row** and the other row ac
 The line under the chips sums up the comparison in one line (the whole text is its tooltip); beside it,
 how many substances go into the report and how many you changed. **Columns...** beside it (or **Choose
 columns...** on a right-click on a column header) chooses and orders the columns - also A, B and the mean in
-mg/dm², µg/dm², µg/L, mg/L and mg/mL; a right-click on a column header shows or hides one column. **Diff. %**
+mg/dm², µg/dm², µg/L, mg/L and mg/mL (with a quant method also mg/g, mg/kg, µg/g and µg/kg, each determination
+converted with its own sample amount); a right-click on a column header shows or hides one column. **Diff. %**
 is a bar against the limit.
 
 Below the list: the two chromatograms of the selected substance, A upwards and B downwards, with its
