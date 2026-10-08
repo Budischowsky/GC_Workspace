@@ -66,6 +66,9 @@ class QuantDock(QScrollArea):
         f.addRow("Result unit", self.result_unit)
         f.addRow(self.mode_note)
         lay.addWidget(mode_box)
+        from gcws.ui.docks.quant_method import QuantMethodPanel
+        self.method_panel = QuantMethodPanel(ws, self)
+        lay.addWidget(self.method_panel)
         # typed values are committed after a short pause (and on Enter / leaving the field)
         from PySide6.QtCore import QTimer
         self._commit = QTimer(self)
@@ -172,6 +175,7 @@ class QuantDock(QScrollArea):
         rl.addWidget(self.factor)
         lay.addWidget(run)
         self.legacy_groups = (par, istd, run)
+        self.nias_params = par
         from gcws.ui.docks.hs_quant import HSQuantPanel
         self.hs_panel = HSQuantPanel(ws, self)
         lay.addWidget(self.hs_panel)
@@ -208,6 +212,14 @@ class QuantDock(QScrollArea):
         hs = mode == "hs_screening"
         for group in self.legacy_groups:
             group.setVisible(not hs)
+        extraction = mode == "extraction"
+        self.nias_params.setVisible(not hs and not extraction)
+        self.method_panel.setVisible(extraction)
+        self.defs_note.setText(
+            "Changes apply at once (Undo reverts them). Conc. = stock concentration of the standard in mg/mL; "
+            "amount = Conc. × spiked volume of the quant method." if extraction else
+            "Changes apply at once (Undo reverts them). Conc. = ISTD concentration in mg/mL for the NIAS factor; "
+            "once this table is set, the FC17/BBP/DNNP concentrations of the NIAS parameters no longer apply.")
         self.hs_panel.setVisible(hs)
         self.mode_form.setRowVisible(self.detector, not hs)
         det = quant_detector(q)
@@ -244,6 +256,11 @@ class QuantDock(QScrollArea):
                          "from the ISTD amount and the extract volume of the NIAS parameters.",
             "area_pct": f"<b>What it computes:</b> the area % of every {det} peak among all integrated "
                         "peaks (solvent excluded). No ISTD needed.",
+            "extraction": "<b>What it computes:</b> an extraction of a solid (g) or a foil (dm²) into a volume "
+                          "(mL) spiked with the internal standards below.<br>substance mass = corrected "
+                          f"{det} area × standard amount ÷ standard area; Conc. 1 and Conc. 2 = mass ÷ sample "
+                          "mass, area or extract volume. No response factors: every substance is assumed to "
+                          "respond like the standards.",
         }[mode] + ("" if hs or det != "TIC" else
                    "<br><b>TIC:</b> areas, ISTDs, blanks and names come from the TIC peaks; RTs in the "
                    "ISTD table, the bindings and the solvent end stay in FID time (TIC + FID-MS offset)."))
@@ -251,6 +268,8 @@ class QuantDock(QScrollArea):
             self.hs_panel.refresh()
             self._loading = False
             return
+        if extraction:
+            self.method_panel.refresh()
         s = self._settings()
         from PySide6.QtWidgets import QAbstractItemView
         editing = QAbstractItemView.EditingState

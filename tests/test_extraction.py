@@ -125,3 +125,40 @@ def test_processing_methods_carry_the_quant_method():
     q = PM.plan_quant({"mode": "nias_mgkg", "method_samples": {"r": {"amount": 1}}}, method, ["quant"])
     assert q["method"] == {"amount": 3.0} and q["mode"] == "extraction"
     assert q["method_samples"] == {"r": {"amount": 1}}
+
+
+def test_quant_method_editor_in_the_panel(qtbot, tmp_path, monkeypatch):
+    """Extraction mode shows the method editor instead of the NIAS parameters; edits are undoable;
+    the units follow the sample type; a method is saved, changed and chosen again by name."""
+    from gcws import paths
+    from gcws.ui.docks.quant import QuantDock
+    from gcws.ui.workspace import Workspace
+    monkeypatch.setattr(paths, "DATA", tmp_path)
+    ws = Workspace()
+    dock = QuantDock(ws)
+    qtbot.addWidget(dock)
+    dock.mode.setCurrentIndex(dock.mode.findData("extraction"))
+    dock._mode_changed()
+    panel = dock.method_panel
+    assert ws.quant["mode"] == "extraction"
+    assert not panel.isHidden() and dock.nias_params.isHidden()
+    assert [panel.unit1.itemText(i) for i in range(panel.unit1.count())] == U.allowed("solid")
+    panel.sample_type.setCurrentIndex(panel.sample_type.findData("foil"))
+    panel.apply()
+    m = ws.quant["method"]
+    assert m["sample_type"] == "foil" and m["units"] == ["mg/dm²", "µg/L"]      # mg/kg became mg/dm²
+    assert [panel.unit1.itemText(i) for i in range(panel.unit1.count())] == U.allowed("foil")
+    panel.volume.setValue(20.0)
+    panel.apply()
+    assert ws.quant["method"]["extract_volume_ml"] == 20.0
+    ws.project_undo.undo()
+    assert ws.quant["method"]["extract_volume_ml"] == 10.0
+    assert panel.save_as("Foil") == "Foil"
+    assert ws.quant["method"]["name"] == "Foil" and not panel.is_modified()
+    panel.refresh()
+    panel.spike.setValue(25.0)
+    panel.apply()
+    assert panel.is_modified() and "Changed" in panel.modified.text()
+    panel._chosen(panel.methods.findData("Foil"))
+    assert ws.quant["method"]["spike_ul"] == 10.0
+    assert panel.delete(confirm=False) and ws.quant["method"]["name"] == ""
