@@ -1226,3 +1226,47 @@ def test_deleted_folders_outside_and_runs_are_marked_gone(env, qapp):
     core.scan_now()
     core.tick()
     assert not jr.runs(bl["id"])[stem].get("gone")
+
+
+def test_a_deleted_run_leaves_a_processed_sample_as_it_is(env, qapp):
+    """A run of an accepted sample deleted (or moved away) and put back unchanged: the report and the
+    decision stay - before, the sample was reset to "waiting" for the missing run."""
+    import shutil
+    from gcws.automation import journal as J
+    from gcws.automation.watcher import WatcherCore
+    jr, launcher = env["journal"], FakeLauncher()
+    now = [time.time()]
+    core = WatcherCore(jr, launcher, clock=lambda: now[0])
+    core.reload()
+    core.tick()
+    batch = env["watch"] / "26016605_TEST"
+    batch.mkdir()
+    _log(batch, BATCH, completed=True)
+    for n in BATCH:
+        _acquire(batch, n)
+    now[0] += 61
+    core.tick()
+    while launcher.started and jr.job(launcher.started[-1][0]).state == J.PROCESSING:
+        launcher.complete(_result(launcher.started[-1][1], "accepted_auto", findings=0))
+    x = next(j for j in jr.jobs() if j.group_name == "26016606_x")
+    assert x.state == J.ACCEPTED_AUTO and x.revision == 1
+    away = env["tmp"] / "away.D"
+    shutil.move(str(batch / "11_26016606_x_B.D"), str(away))
+    now[0] += 61
+    core.tick()
+    gone = jr.job(x.id)
+    assert gone.state == J.ACCEPTED_AUTO and gone.revision == 1
+    shutil.move(str(away), str(batch / "11_26016606_x_B.D"))
+    now[0] += 61
+    core.tick()
+    back = jr.job(x.id)
+    assert back.state == J.ACCEPTED_AUTO and back.revision == 1
+    assert [s[0] for s in launcher.started].count(x.id) == 1          # never processed again
+    # a blank of it, too
+    shutil.move(str(batch / "13_EtOH.D"), str(away))
+    now[0] += 61
+    core.tick()
+    shutil.move(str(away), str(batch / "13_EtOH.D"))
+    now[0] += 61
+    core.tick()
+    assert jr.job(x.id).state == J.ACCEPTED_AUTO and jr.job(x.id).revision == 1

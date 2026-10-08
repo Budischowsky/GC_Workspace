@@ -92,14 +92,23 @@ class ProcessLauncher(QObject):
     def _done(self, p, code, status):
         if p is not self.proc:
             return
-        tail = bytes(p.readAll()).decode("utf-8", "replace")[-2000:]
+        try:
+            tail = bytes(p.readAll()).decode("utf-8", "replace")[-2000:]
+        except RuntimeError:                       # being deleted: the program quits
+            tail = ""
         self.proc = None
+        try:
+            p.deleteLater()                        # a watcher runs for days: finished processes are not kept
+        except RuntimeError:
+            pass
         self.finished.emit(self.job_id, int(code) if status == QProcess.NormalExit else -1, tail)
 
     def _failed(self, p, err):
         if err == QProcess.FailedToStart and p is self.proc:
             self.proc = None
-            self.finished.emit(self.job_id, -2, f"the job process did not start ({p.errorString()})")
+            why = p.errorString()
+            p.deleteLater()
+            self.finished.emit(self.job_id, -2, f"the job process did not start ({why})")
 
     def kill(self) -> None:
         if self.running():
@@ -244,13 +253,16 @@ class WatcherCore(QObject):
         return PM.names()
 
     def method(self, name: str) -> dict:
-        if name not in self._methods:
+        # also called from the looking thread while reload() may clear the cache: never read it back
+        method = self._methods.get(name)
+        if method is None:
             from gcws.core import proc_method as PM
             try:
-                self._methods[name] = PM.load(name)
+                method = PM.load(name)
             except KeyError:
-                self._methods[name] = {}
-        return self._methods[name]
+                method = {}
+            self._methods[name] = method
+        return method
 
     # -- the loop -------------------------------------------------------------------------------------
 
@@ -497,6 +509,8 @@ class WatcherCore(QObject):
         needed = set()                                 # runs a sample processed from the copy needs
         force = self.journal.forced(b)                 # run stems (or "*") the analyst added to the queue
         pending = set()
+        # runs deleted from the folder (kept in the journal): a processed sample of theirs keeps its report
+        gone = {Path(r.get("path") or s).name.casefold() for s, r in runs.items() if r.get("gone")}
         for m in wf.methods():
             method = self.method(m.p("method"))
             via, edges = wf.feed(m.id)
@@ -518,6 +532,14 @@ class WatcherCore(QObject):
                     continue
                 if not all(W.passes(e.filter, {"name": g.name, "batch": folder.name}) for e in edges):
                     continue
+                if gone and g.key not in forced:
+                    cur = self.journal.find_job(wf.id, m.id, b["id"], g.key)
+                    used = list(cur.members or []) + [x for v in (cur.blanks or {}).values() for x in v] \
+                        if cur is not None else []
+                    if cur is not None and cur.state in J.DONE and {str(x).casefold() for x in used} & gone:
+                        # a run or blank of it was deleted (or moved away): its report and decision stay;
+                        # put back unchanged nothing happens, copied in anew it is processed again
+                        continue
                 if via is not None:
                     needed.update(g.members, *g.blanks.values())
                 blanks = {k: [names.get(s) or s for s in v if s in names] for k, v in g.blanks.items()}

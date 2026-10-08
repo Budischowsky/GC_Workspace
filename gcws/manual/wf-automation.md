@@ -165,7 +165,8 @@ copied or moved in and their files were written longer ago than that.
 back, or deleted and copied in again, is processed again: each of its samples gets a new revision in Report²,
 and reports you had deleted there are shown again. The same holds for a single finished run deleted and copied
 in again (a run folder of an Agilent `.D`). Otherwise a report deleted in Report² stays hidden, even when its
-data change.
+data change. A run or blank of an already processed sample that is only deleted (or moved away) changes
+nothing: the report and your decision stay, and putting the run back unchanged does not process it again.
 
 A sample **without the required blank** in its batch folder is not processed at all. Report² lists it under
 **Not processed**; right-click it > **Process again > Process without a blank...** overrides that, and the report then carries a finding.

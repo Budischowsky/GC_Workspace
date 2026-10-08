@@ -109,15 +109,16 @@ def _workflow(journal: J.Journal, wf, jobs: list, now: float) -> Item:
     local_seen = set()
     for key in keys:
         f, b = entries.get(key, {}), batches.get(key, {})
-        # a folder the last look did not list and that is gone from this PC: deleted (the watcher may be off)
-        gone = not f and bool(b.get("folder")) and not store.is_network(b["folder"]) and \
-            not os.path.isdir(b["folder"])
+        # a folder on this PC that is gone: deleted, also before the watcher's next look (or with it off);
+        # a network folder is left to the watcher's look (GC Workspace never waits for a slow drive)
+        here = f.get("path") or b.get("folder") or ""
+        gone = bool(here) and not store.is_network(here) and not os.path.isdir(here)
         # every report of it deleted in Report² (one by one): as deleted as the batch itself
         reports = [j for j in by_batch.get(b.get("id"), []) if not j.is_batch]
         emptied = bool(reports) and all(j.deleted for j in reports)
         if b.get("deleted") or (b.get("missing") and not f) or gone or emptied:
             # deleted (from the disk, or in Report²): not listed, nor is its local copy
-            lp = b.get("local_folder") or (str(LC.local_batch(local_root, root, b["folder"])) if local_root else "")
+            lp = b.get("local_folder") or (str(LC.local_batch(local_root, root, here)) if local_root and here else "")
             if lp:
                 local_seen.add(SC.folder_key(lp))
             continue

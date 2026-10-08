@@ -1078,15 +1078,19 @@ class Report2Dock(QWidget):
             self.pdf_view.setPageMode(QPdfView.PageMode.MultiPage)
             self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
             self.preview.addWidget(self.pdf_view)
-        self._pdf_doc.close()
-        buf = QBuffer(self._pdf_doc)
         try:
-            buf.setData(Path(path).read_bytes())
+            data = Path(path).read_bytes()
         except OSError as exc:
             self._note(f"The PDF could not be read: {exc}")
             return
-        buf.open(QIODevice.ReadOnly)
-        self._pdf_doc.load(buf)
+        self._pdf_doc.close()
+        old, self._pdf_buf = getattr(self, "_pdf_buf", None), QBuffer(self._pdf_doc)
+        if old is not None:                            # the previous report's bytes are freed, not kept
+            old.close()
+            old.deleteLater()
+        self._pdf_buf.setData(data)
+        self._pdf_buf.open(QIODevice.ReadOnly)
+        self._pdf_doc.load(self._pdf_buf)
         if self._pdf_doc.status() == QPdfDocument.Status.Error or self._pdf_doc.pageCount() == 0:
             self._note("The PDF could not be opened.")
             return

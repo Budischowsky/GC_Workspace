@@ -212,6 +212,7 @@ def _overview_setup(data):
     for n in ("06_EtOH_ISTD", "07_26016606_x_A", "08_EtOH", "11_26016606_x_B"):
         (batch / f"{n}.D").mkdir()
     (batch / "S Sequence Log .TSV").write_text("x")
+    (watch / "Archive").mkdir()                            # an old folder the watcher does not look into
     wf = templates.make("nias", "Lab", source=str(watch), method="NIAS", folder_a=str(data / "A"))
     wf.insert_copy(folder=str(local))
     wf.enabled = True
@@ -424,6 +425,18 @@ def test_gone_folders_runs_and_deleted_reports_are_not_listed(qtbot, data):
     jr.delete([job.id])                                    # its runs go with the report (and so the batch)
     [top] = OV.overview(jr, [wf])
     assert batch.name not in {c.name for c in top.children}
+
+
+def test_a_deleted_folder_leaves_before_the_watchers_next_look(qtbot, data):
+    """The watcher's last listing still names it, but it is gone from this PC: not listed (nor its runs)."""
+    import shutil
+    from gcws.automation import overview as OV
+    wf, jr, job, batch, local = _overview_setup(data)
+    [top] = OV.overview(jr, [wf])
+    assert batch.name in {c.name for c in top.children}
+    shutil.rmtree(batch)
+    [top] = OV.overview(jr, [wf])
+    assert batch.name not in {c.name for c in top.children} and "Archive" in {c.name for c in top.children}
 
 
 def test_send_to_automation_from_the_folder_panel(qtbot, data, monkeypatch):

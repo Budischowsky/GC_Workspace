@@ -592,6 +592,16 @@ def test_pdf_preview(qtbot, data, tmp_path, monkeypatch, settings):
     qtbot.waitUntil(lambda: "no Word in the tests" in dock.preview_note.text())
     dock.select(ids["S-control"])
     assert dock.preview.currentWidget() is dock.pdf_view and dock._pdf_doc.pageCount() == 1
+    other = jr.job(ids["S-failed"])
+    files2 = dict(other.files)
+    files2[node] = dict(files2[node], pdf=str(_pdf(tmp_path / "S-failed_NIAS_Report.pdf")))
+    jr.update_job(other.id, files=files2)
+    from PySide6.QtCore import QBuffer, QCoreApplication, QEvent
+    for _ in range(5):                                          # browsing: the earlier PDFs are not kept
+        dock.select(ids["S-failed"])
+        dock.select(ids["S-control"])
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    assert len(dock._pdf_doc.findChildren(QBuffer)) == 1 and dock._pdf_doc.pageCount() == 1
     pdf.unlink()                                                # read into memory: the file is not held open
     dock.b_preview.setChecked(False)
     assert not dock.preview.isVisibleTo(dock) and QSettings().value("report2/preview", type=bool) is False
