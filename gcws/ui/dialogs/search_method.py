@@ -251,13 +251,21 @@ class SearchMethodDialog(QDialog):
         self._refresh_libs()
 
     def _refresh_libs(self):
-        from gcws.identify.service import adapt_library_names
+        """Read the libraries in the background (a running search holds the engine meanwhile)."""
         from gcws.libsearch import service as LS
-        try:
-            status = LS.status()
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.warning(self, "Libraries", str(exc))
-            return
+        from gcws.ui.workers import submit
+        submit(LS.status, on_done=self._libs_read, on_error=self._libs_failed)
+
+    def _libs_failed(self, text):
+        import shiboken6
+        if shiboken6.isValid(self):
+            QMessageBox.warning(self, "Libraries", text.split("\n\n")[0])
+
+    def _libs_read(self, status):
+        import shiboken6
+        from gcws.identify.service import adapt_library_names
+        if not shiboken6.isValid(self):
+            return                              # closed meanwhile
         m = self._collect()
         adapt_library_names(m, [x["name"] for x in self.SM.available_libraries(status)])
         self.SM.reconcile(m, status)

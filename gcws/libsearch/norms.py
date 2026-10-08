@@ -74,9 +74,17 @@ class DiskNorms:
         path = self._folder(fingerprint) / f'{minimum}_{maximum}.npy'
         try:
             out = np.load(path, allow_pickle=False)
-        except (OSError, ValueError):
+        except OSError:
             return None
-        if out.dtype != np.float64 or out.shape != (count,):
+        except ValueError:
+            out = None
+        if out is None or out.dtype != np.float64 or out.shape != (count,):
+            # unreadable, or of an index rebuilt in place for another count: removed, so that
+            # ``save`` stores the sums computed now instead of keeping the useless file
+            try:
+                path.unlink()
+            except OSError:
+                pass
             return None
         try:
             os.utime(path)                       # recently used: pruned last

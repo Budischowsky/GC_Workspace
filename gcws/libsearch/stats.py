@@ -6,7 +6,8 @@ The statistics are sums of whole-number counts per shard: ``occurrences[m]`` (pe
 ``MIN_ABUNDANCE`` at m/z m) and ``abundance[a]`` (such peaks whose value floors to a). Here each
 shard's counts are computed once and kept beside the shard's index
 (``gcws_pbm_counts.npz`` in its cache folder, which is named by the library files' fingerprint),
-so later processes read them. Whole numbers below 2^53 add exactly in float64 in any order, so
+so later processes read them (with the shard's spectrum count: an index rebuilt in the same folder
+for a changed count gets new ones). Whole numbers below 2^53 add exactly in float64 in any order, so
 :class:`PeakStatistics` gets the same arrays as the vendored loop.
 """
 from __future__ import annotations
@@ -50,8 +51,9 @@ def counts(shard: dict) -> tuple[np.ndarray, np.ndarray]:
     if path is not None:
         try:
             with np.load(path, allow_pickle=False) as saved:
-                occ, abd = saved["occurrences"], saved["abundance"]
-            if occ.shape == (len(shard["pointers"]) - 1,) and abd.shape == (101,):
+                occ, abd, n = saved["occurrences"], saved["abundance"], saved["count"]
+            if n.shape == () and int(n) == int(shard["count"]) and \
+                    occ.shape == (len(shard["pointers"]) - 1,) and abd.shape == (101,):
                 return occ, abd
         except (OSError, ValueError, KeyError):
             pass
@@ -60,7 +62,7 @@ def counts(shard: dict) -> tuple[np.ndarray, np.ndarray]:
         tmp = path.with_name(f"{FILE}.{os.getpid()}.tmp")
         try:
             with open(tmp, "wb") as fh:
-                np.savez(fh, occurrences=occ, abundance=abd)
+                np.savez(fh, occurrences=occ, abundance=abd, count=np.int64(shard["count"]))
             os.replace(tmp, path)                  # another process may write the same file
         except OSError:
             try:

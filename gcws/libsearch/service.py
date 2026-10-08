@@ -156,6 +156,8 @@ class LocalEngine(_atlas_engine.Engine):
 _lock = threading.RLock()
 _engine: Optional[LocalEngine] = None
 _signature = None
+#: ``reset`` came while a search held the engine: the next ``get_engine`` reads the libraries again
+_stale = False
 
 
 def _key(specs):
@@ -174,11 +176,12 @@ def _key(specs):
 
 def get_engine(progress: Callable[[str], None] = lambda t: None, specs=None) -> LocalEngine:
     """The engine over the current library list (built or rebuilt when that list or a file changed)."""
-    global _engine, _signature
+    global _engine, _signature, _stale
     specs = store.load() if specs is None else specs
     with _lock:
         key = _key(specs)
-        if _engine is None or key != _signature:
+        if _engine is None or key != _signature or _stale:
+            _stale = False                      # a reset from now on is for the engine built here
             if _engine is not None:
                 _engine.close()
             _engine = LocalEngine(specs, store.cache_root(), progress)
@@ -194,12 +197,20 @@ def library_signature() -> str:
 
 
 def reset() -> None:
-    """Forget the engine (after a library was edited; the next search reloads)."""
-    global _engine, _signature
-    with _lock:
+    """Forget the engine (after a library was edited; the next search reloads).
+
+    Called on the GUI thread (Libraries..., library edits): while a search holds the engine it
+    only marks the engine stale instead of waiting for the search to finish."""
+    global _engine, _signature, _stale
+    if not _lock.acquire(blocking=False):
+        _stale = True
+        return
+    try:
         if _engine is not None:
             _engine.close()
-        _engine, _signature = None, None
+        _engine, _signature, _stale = None, None, False
+    finally:
+        _lock.release()
 
 
 def status(progress: Callable[[str], None] = lambda t: None) -> dict:
