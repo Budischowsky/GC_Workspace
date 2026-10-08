@@ -246,6 +246,34 @@ files, **Open in Word** opens the document. Warnings of the report are listed at
 **Show →** and **← Hide** move a column, **↑ Up**, **↓ Down**, **⤒ First**, **⤓ Last** order the shown ones,
 **Reset to defaults** restores the standard set. Double-click and drag and drop work too.
 
+## Report template
+
+**Method > Report template...** or **Report > Edit report template...**: designs the Template Report (see
+[Report templates](wf-report-templates.md)).
+
+- Top: the saved templates (**Template**), **New from** (**NIAS layout**, **HS-Screening layout**,
+  **Quantification layout**, **Empty template**, **The method's template**), **Save**, **Save as...**,
+  **Delete**; the chips **changed** and **In method**.
+- **Columns**: **Available** (filter, grouped, grey = not in this quantification), **Add →**; **Report columns
+  (report order)** with **Header**, **Decimals** and **Double determination** (Mean, Each determination,
+  Each + Mean, Merged (A / B)); **▲ Up**, **▼ Down**, **Remove**.
+- **Header**: **Title (red band)**, **Subtitle**, the fields (**Line**, **Label**, **Value**), **Add field**,
+  **Add line**, **Remove field**, **Insert placeholder**.
+- **Rows**: **Only rows ticked Report in the double determination**, **Leave out the internal standards**,
+  **Leave out rows without name and CAS**, **Leave out library sum rows ('Sum of ...')**, **Unidentified
+  substances**, **Minimum score**, **Reporting limit** (**Off**, **The method's reporting limit**, **This
+  value**, on a concentration), **Sort by**, **NIAS category sums (styrene oligomers, hydrocarbons, siloxanes,
+  cyclic polyester oligomers)**, **Sums of substances found more than once**, **Text when nothing is
+  reported**.
+- **Extras**: **Page**, **Word document (.docx) next to the workbook**, **Bold above the SML**, **Footnote
+  markers from CASINFO.xlsx**, **Notes**, **Further sheets of the workbook** (**Determinations**,
+  **Calculation**, **Audit**), **Audit Trail page in the Word document**, **Hide columns without any value**,
+  **Count the reported substances in the unknown register**, **Create the report when the method runs (Run
+  Method, automation)**, **Report buttons preview this report**, **File name ending**.
+- **Preview**: **Active run** or **Active replicate group**, the warnings, the report as it will look;
+  **Word preview...** shows the Word pages.
+- **Use in method** (one undo step), **Save to method** (also writes the processing method file), **Close**.
+
 ## Workflow chart
 
 **Edit chart...** in the **Automation** panel, or **Automation > New workflow**. See

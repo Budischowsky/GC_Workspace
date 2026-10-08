@@ -456,6 +456,7 @@ class MainWindow(QMainWindow):
         m = mb.addMenu("&Method")                  # processing methods: all settings under one name
         m.addAction("Save current settings as Method...", self.save_method)
         m.addAction("Load Method...", self.load_method)
+        m.addAction("Report template...", self.edit_report_template)
         m.addSeparator()
         m.addAction(self.a_run_method)
         self.method_menu = m
@@ -540,6 +541,8 @@ class MainWindow(QMainWindow):
             self.report_menu.addAction(label + "...", lambda k=kind: self.report(k))
             self.report_menu.addAction(label + " - preview", lambda k=kind: self.report(k, preview=True))
             self.report_menu.addSeparator()
+        self.report_menu.addAction("Edit report template...", self.edit_report_template)
+        self.report_menu.addSeparator()
         self.report_menu.addAction("Batch report of this folder...", self.batch_report)
         self.report_menu.addSeparator()
         a = self.report_menu.addAction("Keep intermediate workbook")
@@ -1221,6 +1224,19 @@ class MainWindow(QMainWindow):
             QApplication.restoreOverrideCursor()
         self._method_run["steps"].append(f"{len(ids)} run(s) integrated")
         self._method_after_integration()
+
+    def edit_report_template(self):
+        """Method > Report template...: the window that designs the Template Report (one, kept open)."""
+        from gcws.ui.dialogs.report_template import ReportTemplateDialog
+        dlg = getattr(self, "_template_dialog", None)
+        if dlg is None:
+            dlg = ReportTemplateDialog(self.ws, self, group_for_preview=lambda: self.replicates.current_group(),
+                                       method_name=lambda: QSettings().value("method/current", "") or "")
+            self._template_dialog = dlg
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+        return dlg
 
     def _current_method(self):
         from gcws.core import proc_method as PM

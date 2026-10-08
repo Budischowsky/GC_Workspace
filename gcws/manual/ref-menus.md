@@ -33,6 +33,7 @@ Every item of the menu bar, in the order of the menus. Items ending in "..." ope
 |---|---|
 | **Save current settings as Method...** | Stores all processing settings under a name. |
 | **Load Method...** | Applies a stored method, wholly or in parts; also imports, exports and deletes methods. |
+| **Report template...** | Designs the Template Report the method makes: columns, header, rows, extras, with a live preview (see [Report templates](wf-report-templates.md)). |
 | **Run Method** (`Ctrl+R`) | Processes the loaded runs with the loaded method: integration, blank subtraction, library search, internal standards, quantification. Loading runs does none of this. |
 
 See [Methods and projects](wf-methods.md#processing-methods).
@@ -134,6 +135,7 @@ See [Blanks, internal standards and quantification](wf-quantify.md).
 | **HS-Screening Report...** / **HS-Screening Report - preview** | The HS-Screening report. |
 | **Quantification Report...** / **Quantification Report - preview** | The report of the quant method (mode **Extraction (quant method)**). |
 | **Template Report...** / **Template Report - preview** | The report the method's report template designs, in every quantification mode (see [Report templates](wf-report-templates.md)). |
+| **Edit report template...** | Opens the window **Report template** (the same as **Method > Report template...**). |
 | **Batch report of this folder...** | Reports every sample of the active chromatogram's batch folder. |
 | **Keep intermediate workbook** | Also keeps the workbook with the intermediate calculations. |
 
