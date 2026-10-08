@@ -180,6 +180,16 @@ def test_rules_accept_clean_report_and_flag_problems():
     assert res.findings[0].substance == "Bisphenol A"
 
 
+def test_a_zero_difference_limit_flags_every_deviating_duplicate():
+    """0 % is a limit (every difference is checked), as in the workbook; only a missing limit is 30 %."""
+    from gcws.automation import rules as RU
+    rules = RU.default_rules()
+    row = dict(_evidence()["rows"][0], reldiff=5.0)
+    res = RU.evaluate(rules, _evidence(rows=[row], settings={"reporting_limit": 0.01, "duplicate_max_reldiff": 0}))
+    assert res.status == RU.CONTROL and "5 % > 0 %" in res.findings[0].text
+    res = RU.evaluate(rules, _evidence(rows=[dict(row, reldiff=45.0)], settings={"reporting_limit": 0.01}))
+    assert "45 % > 30 %" in res.findings[0].text
+
 def test_optional_rules_off_by_default_and_json(data):
     from gcws.automation import rules as RU
     ev = _evidence(rows=[dict(_evidence()["rows"][0], sml=None, mean=0.2),

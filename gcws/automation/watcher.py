@@ -168,6 +168,7 @@ class WatcherCore(QObject):
         self._last_scan: dict[str, float] = {}
         self._scan_now = False
         self._methods: dict[str, dict] = {}
+        self._methods_sig: Optional[tuple] = None    # the processing method files the cache was read from
         self.current: Optional[dict] = None          # {"job": id, "started": t, "timeout": s}
         self.started = clock()
         self.timer = QTimer(self)
@@ -224,6 +225,13 @@ class WatcherCore(QObject):
 
     def reload(self) -> None:
         """Read the workflow files again (only the changed ones)."""
+        sig = self._methods_signature()
+        if sig != self._methods_sig:
+            # a processing method saved, added or deleted: the next jobs take it, and the workflows
+            # are checked again (one refused for a missing method starts once it is there)
+            self._methods_sig = sig
+            self._methods.clear()
+            self._stamp.clear()
         folder = store.workflows_dir()
         seen = set()
         for f in sorted(folder.glob("*.json")) if folder.is_dir() else []:
@@ -260,6 +268,16 @@ class WatcherCore(QObject):
         for wid in list(self.workflows):
             if wid not in seen:
                 self.workflows.pop(wid, None)
+
+    @staticmethod
+    def _methods_signature() -> tuple:
+        from gcws.core import proc_method as PM
+        try:
+            with os.scandir(PM.folder()) as it:
+                return tuple(sorted((e.name, st.st_size, st.st_mtime_ns) for e in it if e.name.endswith(".json")
+                                    for st in (e.stat(),)))
+        except OSError:
+            return ()
 
     def _method_names(self) -> list[str]:
         from gcws.core import proc_method as PM
@@ -716,8 +734,9 @@ class WatcherCore(QObject):
         reports = [r for r, _ in wf.report_nodes(m.id) if set(r.p("formats") or []) & set(W.BATCH_FORMATS)]
         if not reports:
             return
+        # a report deleted in Report² (hidden) can no longer be decided: it does not hold the batch up
         jobs = [j for j in self.journal.jobs(workflow_id=wf.id, batch_id=b["id"], include_batch=False)
-                if j.method_node == m.id and j.state != J.REMOVED]
+                if j.method_node == m.id and j.state != J.REMOVED and not j.deleted]
         if not jobs:
             return
         states = {j.state for j in jobs}

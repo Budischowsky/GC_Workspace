@@ -733,7 +733,8 @@ class Journal:
         if not b or b.get("deleted"):
             return False
         self.delete([j.id for j in self.jobs(batch_id=batch_id)], user, mark=self.DELETED_WITH_BATCH)
-        self.update_batch(batch_id, deleted=1)
+        # 2: its reports were marked (a batch deleted before that version: 1)
+        self.update_batch(batch_id, deleted=self.DELETED_WITH_BATCH)
         self.event("info", f"Batch {b['name']}: deleted in Report² by {user}", workflow_id=b["workflow_id"],
                    batch_id=batch_id, user=user)
         return True
@@ -745,9 +746,11 @@ class Journal:
             return False
         self.update_batch(batch_id, deleted=0)
         jobs = self.jobs(batch_id=batch_id)
-        # the reports deleted one by one before the batch stay deleted (a journal from before: all come back)
+        # the reports deleted one by one before the batch stay deleted, also when that was every one of
+        # them (a batch deleted by a version before: all come back)
         with_batch = [j.id for j in jobs if j.deleted == self.DELETED_WITH_BATCH]
-        self.restore(with_batch or [j.id for j in jobs], user)
+        legacy = b.get("deleted") != self.DELETED_WITH_BATCH and not with_batch
+        self.restore([j.id for j in jobs] if legacy else with_batch, user)
         self.event("info", f"Batch {b['name']}: restored in Report² by {user}", workflow_id=b["workflow_id"],
                    batch_id=batch_id, user=user)
         return True

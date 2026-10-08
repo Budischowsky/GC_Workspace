@@ -186,7 +186,8 @@ def _manual_check(rule: Rule, ev: dict) -> list[Finding]:
     out = []
     s = ev.get("settings") or {}
     limit = _num(s.get("reporting_limit")) or 0.01
-    max_rd = _num(s.get("duplicate_max_reldiff")) or 30.0
+    max_rd = _num(s.get("duplicate_max_reldiff"))
+    max_rd = 30.0 if max_rd is None else max_rd             # 0 % is a limit (as DV.reldiff_limit)
     for row in ev.get("rows") or []:
         status = str(row.get("status") or "")
         artefact = status.casefold().startswith("artefact")

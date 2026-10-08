@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Optional
@@ -675,7 +676,8 @@ class AutomationDock(QWidget):
         except (OSError, ValueError, TypeError) as exc:
             QMessageBox.warning(self, "Import workflow", str(exc))
             return None
-        if W.find(wf.id) is not None:
+        # the id is the file name in the workflows folder: one with a path (or a drive) in it gets a new one
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", wf.id) or W.find(wf.id) is not None:
             wf.id = W.new_id("wf")
         wf.enabled = False
         wf.save()

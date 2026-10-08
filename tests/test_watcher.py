@@ -291,6 +291,52 @@ def test_changed_sample_revision_refreshes_batch_report(env):
     assert after.revision == 2 and after.state == J.QUEUED
 
 
+def test_a_report_deleted_in_report2_does_not_hold_up_the_batch_report(env):
+    """A sample's report deleted (hidden) in Report² while it still needs control can no longer be
+    decided: the batch report of the others is made without it, as Report² archives the batch."""
+    from gcws.automation import journal as J
+    from gcws.automation.watcher import WatcherCore
+    jr, core = env["journal"], WatcherCore(env["journal"], FakeLauncher())
+    batch_dir = env["watch"] / "batch"
+    batch_dir.mkdir()
+    batch = jr.batch(env["wf"].id, batch_dir)
+    method = env["wf"].methods()[0]
+    done = {}
+    for name, state in (("A", J.ACCEPTED_AUTO), ("B", J.CONTROL)):
+        j = jr.ensure_job(env["wf"].id, method.id, batch["id"], name, name, [name + ".D"], {}, "fp", state=J.QUEUED)
+        jr.transition(j.id, J.QUEUED, J.PROCESSING)
+        jr.transition(j.id, J.PROCESSING, state)
+        done[name] = j.id
+    core._batch_report(env["wf"], method, batch, batch_dir)
+    assert not any(j.is_batch for j in jr.jobs(batch_id=batch["id"]))      # B needs the analyst
+    assert jr.delete([done["B"]]) == [done["B"]]
+    core._batch_report(env["wf"], method, batch, batch_dir)
+    report = next(j for j in jr.jobs(batch_id=batch["id"]) if j.is_batch)
+    assert report.state == J.QUEUED and report.members == [done["A"]]
+
+def test_a_changed_processing_method_is_used_by_the_next_job(env):
+    """The watcher runs for days: a processing method saved meanwhile is taken for the jobs that start
+    afterwards (it kept the one read first until a workflow changed or the watcher was restarted); a
+    workflow refused for a method that was missing starts once the method is there."""
+    from gcws.automation.watcher import WatcherCore
+    from gcws.core import proc_method as PM
+    core = WatcherCore(env["journal"], FakeLauncher())
+    core.reload()
+    assert core.method("NIAS")["sections"]["migration"]["simulant"] == "x"
+    m = PM.load("NIAS")
+    m["sections"]["migration"]["simulant"] = "ethanol 95 %"
+    PM.save(m)
+    core.reload()
+    assert core.method("NIAS")["sections"]["migration"]["simulant"] == "ethanol 95 %"
+    wf = env["wf"]
+    wf.methods()[0].params["method"] = "Later"
+    wf.save()
+    core.reload()
+    assert wf.id not in core.workflows
+    PM.save(dict(m, name="Later"))
+    core.reload()
+    assert wf.id in core.workflows
+
 def test_watching_a_batch_being_acquired(env, qapp):
     from gcws.automation import journal as J
     from gcws.automation.watcher import WatcherCore

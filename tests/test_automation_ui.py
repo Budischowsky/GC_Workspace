@@ -142,6 +142,25 @@ def test_panel_new_duplicate_delete(qtbot, data, monkeypatch):
     assert imported is not None and len(W.list_workflows()) == 2 and not imported.enabled
 
 
+def test_imported_workflow_id_cannot_leave_the_workflows_folder(qtbot, data, tmp_path):
+    """An id in an imported file is a file name: one with a path in it gets a new id."""
+    import json
+    from gcws.automation import store
+    from gcws.automation import workflow as W
+    from gcws.automation import templates
+    from gcws.ui.docks.automation import AutomationDock
+    dock = AutomationDock(control=NoWatcher())
+    qtbot.addWidget(dock)
+    for bad in ("..\\..\\escaped", "../escaped", "sub/escaped", "C:escaped", ""):
+        wf = templates.make("simple", "Imported")
+        path = tmp_path / "in.gcwsflow.json"
+        path.write_text(json.dumps(dict(wf.to_dict(), id=bad)), encoding="utf-8")
+        imported = dock.import_(str(path))
+        assert imported is not None and imported.id != bad
+        assert imported.path.parent == store.workflows_dir() and imported.path.is_file()
+    assert not list(tmp_path.rglob("escaped*"))
+
+
 def test_queue_remove_and_process_again(qtbot, data, monkeypatch):
     """P72: a sample that cannot be processed is removed from the queue in the panel (and in
     Report²); "Process again" brings it back."""

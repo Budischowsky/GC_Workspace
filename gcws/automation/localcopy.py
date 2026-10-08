@@ -170,17 +170,20 @@ def run_copy(spec: dict) -> dict:
 
 
 def ensure_runs(src, dst, names, progress=log.info) -> list[str]:
-    """Copies the runs ``names`` that are missing in ``dst`` from ``src`` (a job that finds its local
-    copy deleted); returns the names copied. A run already there is used as it is."""
+    """Copies the runs ``names`` that are missing in ``dst``, or only partly there (a copy stopped
+    halfway), from ``src`` (a job that finds its local copy deleted); returns the names copied. A run
+    copied completely, or one the watched folder cannot be reached for, is used as it is."""
     src, dst = Path(src), Path(dst)
     done = []
     for name in names:
-        if (dst / name).exists():
-            continue
-        progress(f"copying {name} from the watched folder")
+        there = (dst / name).exists()
+        if there and not (src / name).exists():
+            continue                                   # e.g. the network drive without the VPN
+        if not there:
+            progress(f"copying {name} from the watched folder")
         try:
-            copy_tree(src / name, dst / name)
-            done.append(name)
+            if copy_tree(src / name, dst / name)[0] or not there:
+                done.append(name)
         except OSError as exc:
             log.warning("could not copy %s: %s", name, exc)
     if done:

@@ -66,7 +66,19 @@ def test_restoring_a_batch_keeps_reports_deleted_before_hidden(tmp_path):
     # a batch deleted before reports remembered how they were hidden: all of it comes back
     jr.delete_batch(b["id"])
     jr.con.execute("UPDATE jobs SET deleted=1")
+    jr.update_batch(b["id"], deleted=1)
     assert jr.restore_batch(b["id"]) and not any(j.deleted for j in jr.jobs())
+
+
+def test_restoring_a_batch_whose_reports_were_all_deleted_before(tmp_path):
+    """Every report deleted on its own, then the batch: restoring the batch shows the batch only (the
+    reports were not hidden with it); before, all of them came back."""
+    J, jr, b = _journal(tmp_path)
+    a, c = (_done(J, jr, b, n, J.CONTROL) for n in ("A", "C"))
+    assert sorted(jr.delete([a.id, c.id])) == sorted([a.id, c.id])
+    assert jr.delete_batch(b["id"]) and jr.restore_batch(b["id"])
+    assert not jr.batch_by_id(b["id"])["deleted"]
+    assert jr.job(a.id).deleted and jr.job(c.id).deleted
 
 
 def test_deleted_batch_is_not_scanned_and_comes_back_when_restored(env, qapp):

@@ -133,6 +133,21 @@ def test_run_copy_and_files_beside_the_runs(tmp_path):
     assert (tmp_path / "c" / "B1" / a.name / "data.ms").is_file()
 
 
+def test_a_job_completes_a_partly_copied_run(tmp_path):
+    """A copy stopped halfway (timeout, PC shut down) leaves the run folder with files missing: the job
+    copies what is missing instead of reading the incomplete run; a complete copy is left as it is, and
+    one the watched folder cannot be reached for is used as it is."""
+    from gcws.automation import localcopy as LC
+    batch, local = tmp_path / "x" / "B1", tmp_path / "c" / "B1"
+    a = _run(batch, "07_S_A")
+    LC.copy_tree(a, local / a.name)
+    (local / a.name / "AcqData" / "MSScan.bin").unlink()
+    assert LC.ensure_runs(batch, local, [a.name]) == [a.name]
+    assert (local / a.name / "AcqData" / "MSScan.bin").is_file()
+    assert LC.ensure_runs(batch, local, [a.name]) == []
+    assert LC.ensure_runs(tmp_path / "offline" / "B1", local, [a.name]) == []
+
+
 def test_old_journal_gains_the_copy_columns(tmp_path):
     from gcws.automation import journal as J
     path = tmp_path / "old.sqlite"
