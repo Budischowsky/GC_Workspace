@@ -169,3 +169,19 @@ def test_deleted_row_leaves_the_report():
     keep, _ = DV.rows_for_report(rows, edits, 30.0, 0.01, 0.035)
     assert keep == []
     assert [r["deleted"] for r in DV.apply_edits(rows, verdicts, {}, 0.035)] == [False, False]
+
+
+def test_dismissed_determination_gives_the_other_ones_concentration():
+    """An outlier dismissed: the result is the remaining determination's concentration, no mean."""
+    from gcws.quant import duplicate_view as DV
+    rows = [_pair(10.0, 0.10, 0.40), _pair(12.0, 0.20, 0.22)]
+    verdicts = [DV.plain_verdict(r, 30.0, 0.01) for r in rows]
+    edits = {"10.000": {"rt": 10.0, "dismiss": 2}, "12.000": {"rt": 12.0, "dismiss": 1, "mean": 0.3}}
+    out = DV.apply_edits(rows, verdicts, edits, 0.035)
+    assert out[0]["dismissed"] == 2 and out[0]["mean"] == 0.10 and out[0]["reldiff"] is None
+    assert out[0]["c2"] == 0.40 and out[0]["edited"]["mean"] == pytest.approx(0.25)
+    assert out[1]["dismissed"] == 1 and out[1]["mean"] == 0.3            # a mean the analyst set wins
+    keep, over = DV.rows_for_report(rows, edits, 30.0, 0.01, 0.035)
+    assert over[0]["mean"] == 0.10 and over[0]["reldiff"] is None
+    assert "B dismissed as an outlier: result = A" in keep[0]["review"]
+    assert [r["dismissed"] for r in DV.apply_edits(rows, verdicts, {}, 0.035)] == [0, 0]

@@ -1590,6 +1590,16 @@ def test_double_determination_row_menu_always_has_actions(qtbot, win, samples, m
     assert row()["comment"] == "checked by hand"
     dict(page.row_actions(row()))["Copy row"]()
     assert "checked by hand" in QGuiApplication.clipboard().text()
+    # an outlier dismissed: the result is the other determination, shown struck out; the same menu takes it back
+    from PySide6.QtCore import Qt
+    from gcws.ui.docks.duplicate import C_C2, C_MEAN
+    c1 = row()["c1"]
+    dict(page.row_actions(row()))[f"Dismiss {labels[1]} (outlier): result = {labels[0]}"]()
+    assert row()["dismissed"] == 2 and row()["mean"] == c1 and row()["reldiff"] is None
+    r = next(i for i in range(page.table.rowCount()) if page.table.item(i, C_MEAN).data(Qt.UserRole) == page.rows.index(row()))
+    assert page.table.item(r, C_C2).font().strikeOut() and not page.table.item(r, C_MEAN).font().strikeOut()
+    dict(page.row_actions(row()))[f"Use {labels[1]} again (mean of both)"]()
+    assert not row()["dismissed"] and row()["mean"] != c1
     dict(page.row_actions(row()))[f"Show in {labels[1]}"]()
     assert ws.active_id == b
 

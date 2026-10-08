@@ -1091,6 +1091,10 @@ class DuplicatePage(QWidget):
             deleted = bool(row.get("deleted"))
             if deleted:
                 tip = "Deleted by the analyst: not in the counts or the report. Right-click: Restore row."
+            gone = row.get("dismissed") or 0
+            # the dismissed determination's cells: area, concentration and its further units
+            dismissed = ({C_A1 + gone - 1, C_C1 + gone - 1}
+                         | set(range(C_UNIT0 + gone - 1, len(COLUMN_KEYS), len(UNIT_SIDES)))) if gone else set()
             for c, val in enumerate(vals):
                 it = _SeverityItem() if c in (C_ICON, C_REPORT) else QTableWidgetItem()
                 if c == C_REPORT and deleted:
@@ -1136,11 +1140,16 @@ class DuplicatePage(QWidget):
                     it.setToolTip(f"Changed by the analyst" + (f" (was {was:.4g})" if isinstance(was, float) else
                                                                (f" (was {'on' if was else 'off'})" if field == "report"
                                                                 else "")))
-                if deleted:
+                if deleted or c in dismissed:
                     font = it.font()
                     font.setStrikeOut(True)
                     it.setFont(font)
                     it.setForeground(QBrush(QColor(theme.FAINT)))
+                if c in dismissed and not deleted:
+                    it.setToolTip(f"{labels[gone - 1]} dismissed as an outlier: the result is {labels[2 - gone]}'s "
+                                  f"concentration. Right-click: Use {labels[gone - 1]} again.")
+                elif c == C_MEAN and gone and not deleted:
+                    it.setToolTip(f"{labels[2 - gone]} only ({labels[gone - 1]} dismissed as an outlier)")
                 self.table.setItem(r, c, it)
             if not row.get("report") and not deleted:
                 for c in (C_RT, C_NAME, C_MEAN):
@@ -1437,6 +1446,15 @@ class DuplicatePage(QWidget):
             if row.get("edit_key") in self.edits():
                 out.append(("Reset row", lambda: self.reset_row(row)))
             out.append(("Comment…", lambda: self.edit_comment(row)))
+            if len(self.members) == 2 and row.get("c1") is not None and row.get("c2") is not None:
+                n = row.get("dismissed")
+                if n:
+                    out.append((f"Use {labels[n - 1]} again (mean of both)",
+                                lambda: self.set_edit(row, "dismiss", None)))
+                else:
+                    for i in (0, 1):
+                        out.append((f"Dismiss {labels[i]} (outlier): result = {labels[1 - i]}",
+                                    lambda n=i + 1: self.set_edit(row, "dismiss", n)))
         for key, i in (("source1", 0), ("source2", 1)):
             if row.get(key) is not None and i < len(self.members):
                 out.append((f"Show in {labels[i]}", lambda b=bool(i): self._navigate(row, prefer_b=b)))

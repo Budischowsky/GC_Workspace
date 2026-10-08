@@ -301,14 +301,15 @@ def default_limit(ws) -> float:
 # -- analyst edits (double determination -> report) ----------------------------------------------
 #
 # The analyst can change the areas and concentrations of a pair, its mean, add a comment, decide
-# whether the substance goes into the report and delete the row (it leaves the list, the counts and
-# the report; it can be restored). The edits are kept in the replicate group (``group["edits"]``)
+# whether the substance goes into the report, dismiss one determination as an outlier (the result is
+# then the other determination's concentration, no mean) and delete the row (it leaves the list, the
+# counts and the report; it can be restored). The edits are kept in the replicate group (``group["edits"]``)
 # under the pair's mean RT and found again by RT after a re-integration. Names and CAS are not kept
 # here: they become the identification of both peaks.
 
 NUMERIC_EDITS = ("a1", "a2", "c1", "c2", "mean")
 #: the other fields of an edit; any of them (or a number) decides a red row
-ROW_FLAGS = ("report", "comment", "deleted")
+ROW_FLAGS = ("report", "comment", "deleted", "dismiss")
 
 
 def default_report(row: dict, verdict: Verdict | None = None) -> bool:
@@ -350,12 +351,14 @@ def _mean(values):
 
 def apply_edits(rows: list[dict], verdicts: list, edits: dict, tol: float) -> list[dict]:
     """``rows`` with the analyst's changes applied. Every returned row carries ``a1``/``a2`` (areas),
-    ``report`` (bool), ``comment``, ``deleted``, ``edited`` = {field: value before the change} and
-    ``decided`` (a red row the analyst has answered). A deleted row is never reported.
+    ``report`` (bool), ``comment``, ``deleted``, ``dismissed`` (0, or 1 / 2: the determination the
+    analyst dismissed as an outlier), ``edited`` = {field: value before the change} and ``decided`` (a
+    red row the analyst has answered). A deleted row is never reported.
 
     An edited area changes that determination's concentration in proportion (same factor and
     O/V); an edited concentration and the mean are taken as entered; the mean and the difference
-    follow edited concentrations unless the mean itself was set."""
+    follow edited concentrations unless the mean itself was set. With one determination dismissed the
+    result is the other one's concentration (no mean, no difference), unless the mean itself was set."""
     out, used = [], set()
     # a feature row finds its edit by the feature id; everything else (and edits of old projects) by RT
     by_id = {row.get("feature_id") for row in rows if row.get("feature_id") in (edits or {})}
@@ -370,6 +373,7 @@ def apply_edits(rows: list[dict], verdicts: list, edits: dict, tol: float) -> li
         r["edited"] = {}
         r["decided"] = False
         r["deleted"] = False
+        r["dismissed"] = 0
         if row.get("feature_id") in by_id:
             k = row["feature_id"]
         else:
@@ -403,6 +407,12 @@ def apply_edits(rows: list[dict], verdicts: list, edits: dict, tol: float) -> li
                 c1, c2 = r.get("c1"), r.get("c2")
                 m = _mean([c1, c2])
                 r["reldiff"] = abs(c1 - c2) / m * 100.0 if (c1 is not None and c2 is not None and m) else None
+            if e.get("dismiss") in (1, 2):
+                r["dismissed"] = int(e["dismiss"])
+                kept = r.get("c2" if r["dismissed"] == 1 else "c1")
+                if e.get("mean") is None and kept is not None:
+                    r["edited"].setdefault("mean", r.get("mean"))
+                    r["mean"], r["reldiff"] = kept, None
             if e.get("report") is not None:
                 r["edited"]["report"] = r["report"]
                 r["report"] = bool(e["report"])
@@ -436,7 +446,11 @@ def rows_for_report(rows: list[dict], edits: dict, limit: float, reporting_limit
         if any(f in r["edited"] for f in NUMERIC_EDITS) or (r["report"] and not default_report(base)):
             overrides[len(keep)] = {f: r.get(f) for f in NUMERIC_EDITS + ("reldiff", "comment")}
         row = dict(base)
-        if r.get("comment"):
-            row["review"] = "; ".join(x for x in (base.get("review", ""), r["comment"]) if x)
+        notes = [r.get("comment") or ""]
+        if r.get("dismissed"):
+            out, kept = labels[r["dismissed"] - 1], labels[2 - r["dismissed"]]
+            notes.insert(0, f"{out} dismissed as an outlier: result = {kept}")
+        if any(notes):
+            row["review"] = "; ".join(x for x in (base.get("review", ""), *notes) if x)
         keep.append(row)
     return keep, overrides

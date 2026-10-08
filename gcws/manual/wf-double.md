@@ -71,6 +71,8 @@ Right-click a row:
 | **Restore row** | under the chip **Deleted** | Brings the deleted substance (or all marked rows) back. |
 | **Reset row** | the row has your changes (not offered otherwise) | Takes back your changes of this substance. |
 | **Comment…** | always | A comment for the report. |
+| **Dismiss A (outlier): result = B** / **Dismiss B (outlier): result = A** | both determinations have a concentration | Removes an outlier: no mean is calculated, the result is the concentration of the other determination. The dismissed cells are struck out; the report notes it in the Review column. |
+| **Use A again (mean of both)** | a determination is dismissed | Takes the dismissal back. |
 | **Show in A** / **Show in B** | the substance is in that determination | Opens that determination with the peak selected. |
 | **Copy row** | always | Copies the visible cells of the row as text. |
 | **Name: ...** | two candidate names, or differing spectra | Gives both determinations that name. |
