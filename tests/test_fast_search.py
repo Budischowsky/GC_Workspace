@@ -262,3 +262,27 @@ def test_processing_method_keeps_the_switch(data, monkeypatch):
     assert is_fast("From method")
     PM._apply_search({"method": m.as_dict(), "fast": False})
     assert not is_fast("From method")
+
+
+@pytest.mark.parametrize("extra", SETTINGS[:4])
+@pytest.mark.parametrize("block", [16384, 257])
+def test_spectra_of_different_ranges_share_one_screen(libraries, monkeypatch, extra, block):
+    """Per-spectrum m/z ranges (the consensus spectra): one screen, still each range's standard hits."""
+    from gcws.libsearch import fast, service
+    monkeypatch.setattr(fast, "BLOCK", block)
+    settings = {**dict(libraries=["A", "B"], min_mz=35, max_mz=400, threshold=0, lite=True), **extra}
+    choices = [(35, 400), (39, 250), (41, 300), (41, 120), (60, 380), (None, None)]
+    ranges = [choices[n % len(choices)] for n in range(len(libraries))]
+    standard = []
+    for (name, points), (lo, hi) in zip(libraries, ranges):
+        try:
+            standard.append(service.analyze(points, name, {**settings, "min_mz": lo, "max_mz": hi}))
+        except ValueError as exc:
+            standard.append(exc)
+    screens = []
+    real = fast.FastSearch._screen
+    monkeypatch.setattr(fast.FastSearch, "_screen",
+                        lambda self, group, jobs, *a: screens.append(len(jobs)) or real(self, group, jobs, *a))
+    results = service.analyze_many(libraries, settings, ranges=ranges)
+    assert [_clean(r) for r in results] == [_clean(r) for r in standard]
+    assert screens and max(screens) > len(libraries) // 2           # the ranges were screened together

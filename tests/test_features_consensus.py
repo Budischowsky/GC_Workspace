@@ -292,20 +292,25 @@ def test_search_consensus_equals_per_spectrum(libraries, monkeypatch, fast):
     assert bool(calls) == fast
 
 
-def test_search_consensus_runs_ranges_in_ascending_order(libraries, monkeypatch):
+def test_search_consensus_searches_all_ranges_at_once(libraries, monkeypatch):
+    """One Fast search for all consensus spectra, each with its own range (ascending, so the
+    library norms resume), with the hits of the search spectrum by spectrum."""
     from gcws.identify import service as IS
     from gcws.libsearch import service as LS
     method = _search_method()
     feats = _consensus_features(libraries)
     monkeypatch.setattr(IS, "fast_search_methods", lambda: {"T"})
-    ranges = []
+    calls = []
     real = LS.analyze_many
-    monkeypatch.setattr(LS, "analyze_many", lambda spectra, settings, *a, **k: ranges.append(
-        (settings["min_mz"], settings["max_mz"])) or real(spectra, settings, *a, **k))
+    monkeypatch.setattr(LS, "analyze_many", lambda spectra, settings, *a, **k: calls.append(
+        (len(spectra), k.get("ranges"))) or real(spectra, settings, *a, **k))
     C.search_consensus(None, method, feats)
-    distinct = {C.search_range(_points(f), method) for f in feats}
-    assert len(distinct) == 3
-    assert ranges == sorted(ranges) and len(ranges) == len(distinct)
+    wanted = sorted(C.search_range(_points(f), method) for f in feats)
+    assert len(set(wanted)) == 3
+    assert calls == [(len(feats), wanted)]
+    for f in feats:
+        one = IS.search_spectrum(_points(f), f.id or "consensus", method)
+        assert [h["name"] for h in f.consensus_hits] == [h["name"] for h in one]
 
 
 def test_failed_fast_result_is_a_reason(libraries, monkeypatch):

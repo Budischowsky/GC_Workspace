@@ -95,6 +95,7 @@ class _Job:
     maybe: set = field(default_factory=set)        # rows the standard search might not score
     standard: bool = False               # search this spectrum the standard way
     active: bool = True
+    settings: Optional[dict] = None      # the search settings of this spectrum (its own m/z range)
 
 
 class _View:
@@ -139,11 +140,13 @@ class FastSearch:
 
     # -- public ---------------------------------------------------------------------------
 
-    def analyze(self, spectra: list, done: Optional[Callable[[int, object], None]] = None) -> list:
+    def analyze(self, spectra: list, done: Optional[Callable[[int, object], None]] = None,
+                ranges: Optional[list] = None) -> list:
         """One result per spectrum (the dict of ``Engine.analyze``), or the exception it raised.
 
         ``done(index, result)`` is called as each spectrum is finished; after a cancel the
-        unfinished ones stay None."""
+        unfinished ones stay None. ``ranges``: per spectrum ``(min_mz, max_mz)`` replacing the
+        settings' range (None: the settings'); spectra of different ranges share the screen."""
         started = time.perf_counter()
         results: list = [None] * len(spectra)
         try:
@@ -153,6 +156,9 @@ class FastSearch:
         jobs = []
         for n, spectrum in enumerate(spectra):
             job = _Job(n, spectrum)
+            rng = ranges[n] if ranges is not None else None
+            job.settings = self.settings if rng is None else \
+                {**self.settings, "min_mz": rng[0], "max_mz": rng[1]}
             if shared is None:
                 job.standard = True
             else:
@@ -218,7 +224,7 @@ class FastSearch:
         return options, groups, presearch, stats
 
     def _prepare(self, job: _Job, shared) -> None:
-        settings = self.settings
+        settings = self._settings(job)
         options, _groups, _presearch, stats = shared
         raw = nominal_peaks(job.spectrum.peaks)
         minimum = int(settings.get('min_mz') or min(raw))
@@ -253,12 +259,7 @@ class FastSearch:
             (screened if longest > presearch else alone).append(job)
         if len(screened) < MIN_BATCH:
             alone, screened = alone + screened, []
-        found = {}
-        by_range = {}
-        for job in screened:
-            by_range.setdefault((job.minimum, job.maximum), []).append(job)
-        for (minimum, maximum), batch in by_range.items():
-            found.update(self._screen(group, batch, minimum, maximum, presearch, number, groups))
+        found = self._screen(group, screened, presearch, number, groups) if screened else {}
         total = len(jobs)
         for count, job in enumerate(jobs, 1):
             if self.cancelled():
@@ -289,7 +290,7 @@ class FastSearch:
         if not job.standard:
             try:
                 result = _atlas_engine.Engine.analyze(_View(eng, job, self._fallback_score), job.spectrum,
-                                                      dict(self.settings), regional=False)
+                                                      dict(self._settings(job)), regional=False)
             except Exception as exc:  # noqa: BLE001
                 return exc
             if not job.maybe or not any(hit['row'] in job.maybe for hit in result['hits']):
@@ -301,10 +302,13 @@ class FastSearch:
         job.prepared, job.maybe = {}, set()
         try:
             return _atlas_engine.Engine.analyze(_View(eng, job, self._fallback_score), job.spectrum,
-                                                dict(self.settings), regional=False) \
-                if job.query else eng.analyze(job.spectrum, dict(self.settings), regional=False)
+                                                dict(self._settings(job)), regional=False) \
+                if job.query else eng.analyze(job.spectrum, dict(self._settings(job)), regional=False)
         except Exception as exc:  # noqa: BLE001
             return exc
+
+    def _settings(self, job: _Job) -> dict:
+        return job.settings if job.settings is not None else self.settings
 
     def _fallback_score(self, group, job, options, stats, presearch):
         return self._score(job, self._full(group, job, presearch), options, stats)[0]
@@ -334,7 +338,7 @@ class FastSearch:
 
     # -- stage 1: block screening of many peaks ----------------------------------------------------
 
-    def _screen(self, group, jobs, minimum, maximum, k, number, groups) -> dict:
+    def _screen(self, group, jobs, k, number, groups) -> dict:
         """``{job index: (candidates, maybe rows)}`` for ``jobs`` over the shards of ``group``."""
         eng = self.engine
         screen = _Screen(jobs, k)
@@ -347,7 +351,7 @@ class FastSearch:
         free: queue.Queue = queue.Queue()
         for _ in range(2):          # double buffering: one block is expanded while the other is screened
             free.put((np.zeros((screen.C, BLOCK), np.float32), np.zeros((screen.C, BLOCK), np.float32)))
-        producer = threading.Thread(target=self._expand, args=(group, screen.masses, minimum, maximum, free,
+        producer = threading.Thread(target=self._expand, args=(group, screen.masses, screen.ranges, free,
                                                                  ready, stop, turn), daemon=True)
         producer.start()
         done = 0
@@ -358,7 +362,7 @@ class FastSearch:
                     break
                 if isinstance(item, BaseException):
                     raise item
-                (dense, indicator), nr, isr, refnorm, n, first = item
+                (dense, indicator), nr, isrs, refnorms, n, first = item
                 if self.cancelled():
                     return {}
                 done += 1
@@ -366,7 +370,7 @@ class FastSearch:
                     self.progress(f"Fast search: screening {len(jobs)} peaks against the libraries, "
                                   f"{100 * done // blocks} %"
                                   + (f" (library {number + 1} / {groups})" if groups > 1 else ""))
-                screen.block(dense[:, :nr], indicator[:, :nr], isr, refnorm, n, first, turn.release)
+                screen.block(dense[:, :nr], indicator[:, :nr], isrs, refnorms, n, first, turn.release)
                 free.put((dense, indicator))
         finally:
             stop.set()
@@ -380,9 +384,10 @@ class FastSearch:
             self.counts["tie_boundaries"] += bool(selected and selected[1])
         return out
 
-    def _expand(self, group, masses, minimum, maximum, free, ready, stop, turn) -> None:
+    def _expand(self, group, masses, ranges, free, ready, stop, turn) -> None:
         """Producer thread: each block of references as dense float32 sqrt(I) and 0/1 matrices over
-        the batch's ions (rows) and the block's references (columns).
+        the batch's ions (rows) and the block's references (columns), with the references' norms
+        (and their float32 inverse square roots) for each of the batch's m/z ``ranges``.
 
         The result does not depend on the order. Libraries are often sorted (by molecular weight),
         so a peak's best matches cluster; visiting the largest library first and its blocks in a
@@ -395,9 +400,13 @@ class FastSearch:
                 if not count:
                     continue
                 pointers, rows, intensities = shard['pointers'], shard['rows'], shard['intensities']
-                refnorm = eng.shard_norms(n, minimum, maximum)
-                isr = np.zeros(count, np.float32)
-                np.divide(1.0, np.sqrt(refnorm), out=isr, where=refnorm > 0, casting="unsafe")
+                refnorms, isrs = [], []
+                for minimum, maximum in ranges:          # ascending: the norms resume
+                    refnorm = eng.shard_norms(n, minimum, maximum)
+                    isr = np.zeros(count, np.float32)
+                    np.divide(1.0, np.sqrt(refnorm), out=isr, where=refnorm > 0, casting="unsafe")
+                    refnorms.append(refnorm)
+                    isrs.append(isr)
                 starts = np.r_[np.arange(0, count, BLOCK), count]
                 # the postings of the peaks' ions, in memory, split at the block starts
                 spans = []
@@ -423,7 +432,8 @@ class FastSearch:
                         if b > a:
                             view[c, refs[a:b] - r0] = values[a:b]
                     np.greater(view, 0, out=indicator[:, :nr], casting="unsafe")      # 0.0 or 1.0
-                    ready.put((buffers, nr, isr[r0:r1], refnorm[r0:r1], n, shard['start'] + r0))
+                    ready.put((buffers, nr, [isr[r0:r1] for isr in isrs], [rn[r0:r1] for rn in refnorms], n,
+                               shard['start'] + r0))
             ready.put(None)
         except BaseException as exc:  # noqa: BLE001 - handed to the screening thread
             ready.put(exc)
@@ -559,6 +569,10 @@ class _Screen:
     def __init__(self, jobs, k: int):
         self.k = k
         self.nq = nq = len(jobs)
+        # the batch's m/z ranges (ascending) and each peak's
+        self.ranges = sorted({(job.minimum, job.maximum) for job in jobs})
+        number = {r: g for g, r in enumerate(self.ranges)}
+        self.range_of = np.array([number[(job.minimum, job.maximum)] for job in jobs], np.intp)
         self.masses = sorted({m for job in jobs for m in job.query})
         column = {m: c for c, m in enumerate(self.masses)}
         self.C = C = len(self.masses)
@@ -588,8 +602,11 @@ class _Screen:
         for s in range(0, nq, CHUNK):
             qs = order[s:s + CHUNK]
             c0, c1 = int(low[qs].min()), int(high[qs].max())
+            g = self.range_of[qs]
+            # one range: its scale broadcasts over the rows; several: each row takes its own
+            g = int(g[0]) if (g == g[0]).all() else g
             self.chunks.append((qs, c0, c1, np.ascontiguousarray(qf[qs, c0:c1]),
-                                np.ascontiguousarray(qr[qs, c0:c1]), sq[qs]))
+                                np.ascontiguousarray(qr[qs, c0:c1]), sq[qs], g))
         rows = min(CHUNK, nq)
         self.buffers = [np.empty((rows, BLOCK), np.float32) for _ in range(4)] + \
             [np.empty((rows, BLOCK), bool) for _ in range(2)]
@@ -605,13 +622,15 @@ class _Screen:
         self.sizes = np.zeros(nq, np.int64)
         self.pruned = np.zeros(nq, np.int64)
 
-    def block(self, dense, indicator, isr, refnorm, shard: int, first_row: int,
+    def block(self, dense, indicator, isrs, refnorms, shard: int, first_row: int,
               multiplied: Callable[[], None] = lambda: None) -> None:
-        """Screen one block of references (dense rows = the batch's ions, columns = references).
-        ``multiplied`` is called once the first matrix products are done."""
+        """Screen one block of references (dense rows = the batch's ions, columns = references);
+        ``isrs`` / ``refnorms``: the block's inverse root norms and norms, one per range of
+        ``ranges``. ``multiplied`` is called once the first matrix products are done."""
         nr = dense.shape[1]
         two = 2 * self.delta
-        for number, (qs, c0, c1, qf_c, qr_c, sq_c) in enumerate(self.chunks):
+        stacked = None
+        for number, (qs, c0, c1, qf_c, qr_c, sq_c, g) in enumerate(self.chunks):
             nc = len(qs)
             full = nr == BLOCK
             dots, rnorm, product, bound = (b[:nc, :nr] for b in self.buffers[:4])
@@ -626,7 +645,14 @@ class _Screen:
                 multiplied()
             parts = [(a, min(a + self.rows, nc)) for a in range(0, nc, self.rows)]
             # = forward cosine * sqrt(qnorm); memory-bound passes run on row slices in parallel
-            list(self.pool.map(lambda ab: np.multiply(dots[ab[0]:ab[1]], isr, out=dots[ab[0]:ab[1]]), parts))
+            if isinstance(g, int):
+                isr = isrs[g]
+                list(self.pool.map(lambda ab: np.multiply(dots[ab[0]:ab[1]], isr, out=dots[ab[0]:ab[1]]), parts))
+            else:
+                if stacked is None:
+                    stacked = np.stack(isrs)
+                list(self.pool.map(lambda ab: np.multiply(dots[ab[0]:ab[1]], stacked[g[ab[0]:ab[1]]],
+                                                          out=dots[ab[0]:ab[1]]), parts))
             cold = ~np.isfinite(self.floor_f[qs]) | ~np.isfinite(self.floor_r[qs])
             if nr > self.k and cold.any():
                 self._warm(qs[cold], dots[cold], rnorm[cold], sq_c[cold])
@@ -663,7 +689,7 @@ class _Screen:
                     continue
                 q = int(qs[a])
                 r = pr[s0:s1]
-                self.pools[q].append((first_row + r, af[s0:s1], ar[s0:s1], refnorm[r],
+                self.pools[q].append((first_row + r, af[s0:s1], ar[s0:s1], refnorms[self.range_of[q]][r],
                                       np.full(s1 - s0, shard, np.int32), dense[np.ix_(self.cols[q], r)]))
                 self.sizes[q] += s1 - s0
                 if self.sizes[q] > max(8 * self.k, 2 * self.pruned[q]):

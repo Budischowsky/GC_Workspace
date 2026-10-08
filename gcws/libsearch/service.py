@@ -20,7 +20,7 @@ import numpy as np
 
 import gcws.libsearch  # noqa: F401  (vendor on sys.path)
 from gcws.libsearch import store
-from gcws.libsearch.norms import NormFolds
+from gcws.libsearch.norms import DiskNorms, NormFolds
 
 import engine as _atlas_engine        # vendored SpectrAtlas modules
 import msp as _msp
@@ -86,8 +86,8 @@ class LocalEngine(_atlas_engine.Engine):
     """``Engine`` over ``specs`` (native libraries first, then MSP files, as SpectrAtlas orders them)."""
 
     def __init__(self, specs: list, cache: Path, progress: Callable[[str], None] = lambda t: None):
-        self._folds = NormFolds()
         self.root = Path(cache)
+        self._folds = NormFolds(disk=DiskNorms(self.root / ".norms"))
         self.root.mkdir(parents=True, exist_ok=True)
         self.library_dirs = []
         self.native, self.custom, self.shards = [], [], []
@@ -230,11 +230,14 @@ FAST_BATCH = 400
 def analyze_many(spectra: list, settings: Optional[dict] = None,
                  progress: Callable[[str], None] = lambda t: None,
                  cancelled: Callable[[], bool] = lambda: False,
-                 done: Optional[Callable[[int, object], None]] = None) -> list:
+                 done: Optional[Callable[[int, object], None]] = None,
+                 ranges: Optional[list] = None) -> list:
     """Fast search: ``analyze`` of many spectra ``[(name, [(m/z, abundance), ...]), ...]`` at once.
 
     Each result is exactly what ``analyze`` returns for that spectrum (see ``gcws.libsearch.fast``),
-    or the exception it raises; ``done(index, result)`` reports each one as it is finished."""
+    or the exception it raises; ``done(index, result)`` reports each one as it is finished.
+    ``ranges``: per spectrum ``(min_mz, max_mz)`` in place of the settings' (the same as ``analyze``
+    with those two settings changed); the spectra still share one pass over the libraries."""
     from gcws.libsearch.fast import FastSearch
     results: list = [None] * len(spectra)
 
@@ -263,5 +266,6 @@ def analyze_many(spectra: list, settings: Optional[dict] = None,
                 break
             search = FastSearch(eng, dict(settings or {}), progress, cancelled)
             search.analyze([spectrum for _n, spectrum in batch],
-                           lambda i, result, batch=batch: finished(batch[i][0], result))
+                           lambda i, result, batch=batch: finished(batch[i][0], result),
+                           [ranges[n] for n, _spectrum in batch] if ranges is not None else None)
     return results
