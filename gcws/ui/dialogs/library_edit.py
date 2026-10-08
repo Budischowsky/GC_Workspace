@@ -472,10 +472,7 @@ class EditLibraryDialog(QDialog):
         new_lib = not lb.path.exists()
         editing = self.editing
         if editing is not None:
-            old = self.records[editing]
-            for k, v in old.fields:                       # keep the entry's ID and extra fields
-                if k.lower() in ("id", "db#", "nist#") and not rec.get(k):
-                    rec.fields.append([k, v])
+            LE.keep_extra_fields(self.records[editing], rec)   # its ID, further synonyms, extra fields
 
         def work():
             res = ed.replace(editing, rec) if editing is not None else ed.add(rec)

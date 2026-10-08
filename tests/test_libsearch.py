@@ -97,6 +97,29 @@ def test_batch_search_needs_no_ei_atlas(data, monkeypatch):
     assert method.enabled_libraries() == ["Own"]
 
 
+def test_library_list_is_never_seen_half_written(data):
+    """The automation's job processes read the library list while the GUI may save it: a reader
+    sees the old or the new list, never none (an empty engine: "No library loaded")."""
+    import subprocess
+    import sys
+    import time
+    from gcws.libsearch import store
+    libs = [store.LibrarySpec(f"Library {n}", "msp", f"C:/libraries/library {n}.msp") for n in range(8)]
+    store.save(libs)
+    code = ("import sys, time; from pathlib import Path; from gcws import paths; from gcws.libsearch import store; "
+            f"paths.DATA = Path(sys.argv[1]); libs = store.load(); end = time.time() + 2\n"
+            "while time.time() < end: store.save(libs)")
+    writer = subprocess.Popen([sys.executable, "-c", code, str(data)], cwd=str(paths.ROOT))
+    try:
+        torn, end = 0, time.time() + 2.5
+        while time.time() < end and writer.poll() is None:
+            torn += len(store.load()) != len(libs)
+    finally:
+        writer.wait(10)
+    assert writer.returncode == 0 and torn == 0
+    assert [p.name for p in data.iterdir() if p.name.startswith("libraries")] == ["libraries.json"]
+
+
 def test_no_library_gives_a_clear_message(data):
     import gc_search_method as SM
     from gcws.identify.service import prepare_local

@@ -114,12 +114,35 @@ def _num(v: float) -> str:
     return str(int(round(v))) if abs(v - round(v)) < 1e-9 else f"{v:.4f}".rstrip("0").rstrip(".")
 
 
+#: the header fields the entry form shows and writes (``new_record``); RI goes into the comment
+FORM_FIELDS = {"name", "synon", "formula", "mw", "comment", "comments", "ri"} | set(CAS_KEYS)
+
+
+def keep_extra_fields(old: MspRecord, new: MspRecord) -> MspRecord:
+    """``new`` (an edited entry, from the form) with what the form does not show of ``old``: its
+    further synonyms (the form shows the first; all go when it is cleared) and its other fields
+    (library IDs, InChIKey, ...)."""
+    old_syn = [v for k, v in old.fields if k.lower() == "synon"]
+    new_syn = [v for k, v in new.fields if k.lower() == "synon"]
+    if new_syn:
+        at = max(i for i, (k, _v) in enumerate(new.fields) if k.lower() == "synon") + 1
+        new.fields[at:at] = [["Synon", v] for v in old_syn[1:] if v not in new_syn]
+    for k, v in old.fields:
+        if k.lower() not in FORM_FIELDS and not new.get(k):
+            new.fields.append([k, v])
+    return new
+
+
 def format_cas(value: str) -> str:
     """``117817`` / ``117-81-7`` -> ``117-81-7`` ("" for none or 0)."""
     digits = re.sub(r"\D", "", str(value or ""))
     if not digits or int(digits) == 0 or len(digits) < 5:
         return ""
     return f"{digits[:-3]}-{digits[-3:-1]}-{digits[-1]}"
+
+
+#: a number of an MSP peak line (as the search's reader takes it: decimals, exponents)
+_NUMBER = r"(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
 
 
 def parse_msp(text: str) -> list[MspRecord]:
@@ -131,11 +154,14 @@ def parse_msp(text: str) -> list[MspRecord]:
                 records.append(cur)
             cur, in_peaks = None, False
             continue
+        if in_peaks and re.match(r"(?i)name\s*:", s):
+            records.append(cur)                   # a record without a blank line before it
+            cur, in_peaks = None, False
         if cur is None:
             cur = MspRecord(raw_peaks=[])
         if in_peaks:
             cur.raw_peaks.append(line)
-            for m, a in re.findall(r"(\d+(?:\.\d+)?)[ \t:,]+(\d+(?:\.\d+)?)", s):
+            for m, a in re.findall(rf"({_NUMBER})[ \t:,]+({_NUMBER})", s):
                 cur.peaks.append((float(m), float(a)))
             continue
         key, sep, value = s.partition(":")
@@ -148,6 +174,25 @@ def parse_msp(text: str) -> list[MspRecord]:
     if cur is not None:
         records.append(cur)
     return records
+
+
+def msp_encoding(data: bytes) -> str:
+    """The encoding of an MSP file as the search reads it (``msp.decode``): UTF-16 or UTF-8 when the
+    bytes are that, else ANSI (cp1252). A pure ASCII file stays ANSI."""
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return "utf-16"
+    if data.startswith(b"\xef\xbb\xbf"):
+        return "utf-8-sig"
+    try:
+        data.decode("ascii")
+        return ENCODING
+    except UnicodeDecodeError:
+        pass
+    try:
+        data.decode("utf-8")
+        return "utf-8"
+    except UnicodeDecodeError:
+        return ENCODING
 
 
 def write_msp(records) -> str:
@@ -419,7 +464,8 @@ class LibraryEditor:
         if not self.info.writable and self.info.kind != "nist":
             raise LibraryError(self.info.note or "This library cannot be read here.")
         if self.info.kind == "msp":
-            return parse_msp(self.info.path.read_text(encoding=ENCODING, errors="replace"))
+            data = self.info.path.read_bytes()
+            return parse_msp(data.decode(msp_encoding(data), errors="replace"))
         tmp = Path(tempfile.mkdtemp(prefix="gcws_lib_"))
         try:
             return self._need_lib2nist().export(self.info.path, tmp / "export.msp")
@@ -432,17 +478,20 @@ class LibraryEditor:
             raise LibraryError(self.info.note or "This library is read-only.")
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         self.backup_dir.mkdir(parents=True, exist_ok=True)
-        backup = self.backup_dir / f"{self.info.name}-{stamp}"
+        # one file / folder name (library names can hold dots or a SpectrAtlas path: "libraries\Own.msp")
+        backup = self.backup_dir / (re.sub(r'[<>:"/\\|?*]+', "_", self.info.name) + f"-{stamp}")
         text = write_msp(records)
         if self.info.kind == "msp":
             path = self.info.path
+            encoding = ENCODING
+            msp_backup = backup.with_name(backup.name + ".msp")
             if path.exists():
-                shutil.copy2(path, backup.with_suffix(".msp"))
+                encoding = msp_encoding(path.read_bytes())       # written back as it was read
+                shutil.copy2(path, msp_backup)
             tmp = path.with_suffix(".msp.tmp")
-            tmp.write_text(text, encoding=ENCODING, errors="replace", newline="")
+            tmp.write_text(text, encoding=encoding, errors="replace", newline="")
             os.replace(tmp, path)
-            return SaveResult(len(records), backup.with_suffix(".msp") if backup.with_suffix(".msp").exists()
-                              else None)
+            return SaveResult(len(records), msp_backup if msp_backup.exists() else None)
         l2n = self._need_lib2nist()
         tmp = Path(tempfile.mkdtemp(prefix="gcws_lib_"))
         try:

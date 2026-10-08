@@ -14,6 +14,9 @@ folder (or a SpectrAtlas ``Library`` folder) adds all of them at once.
 from __future__ import annotations
 
 import json
+import os
+import threading
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -51,9 +54,16 @@ def cache_root() -> Path:
 
 
 def load() -> list[LibrarySpec]:
-    try:
-        data = json.loads(store_path().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    data = None
+    for attempt in range(50):
+        try:
+            data = json.loads(store_path().read_text(encoding="utf-8"))
+            break
+        except PermissionError:                   # being replaced by ``save`` just now (Windows)
+            time.sleep(0.01)
+        except (OSError, ValueError):
+            return []
+    if not isinstance(data, dict):
         return []
     out = []
     for d in data.get("libraries") or []:
@@ -64,9 +74,22 @@ def load() -> list[LibrarySpec]:
 
 
 def save(libs: list[LibrarySpec]) -> None:
-    store_path().parent.mkdir(parents=True, exist_ok=True)
-    store_path().write_text(json.dumps({"libraries": [asdict(x) for x in libs]}, indent=2, ensure_ascii=False),
-                            encoding="utf-8")
+    """Written whole (temporary file, then replaced): another process (the automation watcher's
+    jobs) reading the list at that moment sees the old or the new list, never an empty one."""
+    path = store_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps({"libraries": [asdict(x) for x in libs]}, indent=2, ensure_ascii=False),
+                   encoding="utf-8")
+    for attempt in range(50):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:                   # a reader has the file open just now (Windows)
+            if attempt == 49:
+                tmp.unlink(missing_ok=True)
+                raise
+            time.sleep(0.02)
 
 
 def kind_of(path: Path) -> str | None:

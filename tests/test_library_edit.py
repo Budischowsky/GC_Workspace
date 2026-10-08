@@ -110,3 +110,63 @@ def test_failed_check_leaves_the_library_untouched(tmp_path, monkeypatch):
     with pytest.raises(LE.LibraryError, match="not changed"):
         ed.save(records + [LE.new_record("x", [(57, 999)])])
     assert {p.name: p.stat().st_mtime_ns for p in lib.iterdir()} == stamp
+
+
+def test_msp_records_without_blank_lines_stay_apart(tmp_path):
+    """An MSP library whose records follow each other without a blank line (the search reads it):
+    editing it must not merge the records into one with a wrong Num Peaks."""
+    import gcws.libsearch  # noqa: F401  (vendor on sys.path)
+    import msp
+    text = "Name: A\nNum Peaks: 2\n57 100; 71 50\nName: B\nNum Peaks: 2\n43 100; 58 1.2e1\n"
+    recs = LE.parse_msp(text)
+    assert [(r.name, r.peaks) for r in recs] == [("A", [(57.0, 100.0), (71.0, 50.0)]),
+                                                 ("B", [(43.0, 100.0), (58.0, 12.0)])]
+    path = tmp_path / "own.msp"
+    path.write_text(text, encoding="cp1252")
+    ed = LE.LibraryEditor(LE.LibraryInfo("own", path, "msp", True), None, tmp_path / "backups")
+    ed.add(LE.new_record("C", [(91, 999)]))
+    assert [s.name for s in msp.parse_msp(path.read_bytes())] == ["A", "B", "C"]   # the search still reads it
+
+
+def test_utf8_msp_library_keeps_its_names(tmp_path):
+    """A UTF-8 MSP library is read and written back as UTF-8 (cp1252 turned its names into mojibake)."""
+    import gcws.libsearch  # noqa: F401
+    import msp
+    path = tmp_path / "u.msp"
+    path.write_bytes("Name: 2‐Ethylhexyl café\r\nNum Peaks: 2\r\n57 100; 71 50\r\n\r\n".encode("utf-8"))
+    ed = LE.LibraryEditor(LE.LibraryInfo("u", path, "msp", True), None, tmp_path / "backups")
+    assert [r.name for r in ed.read()] == ["2‐Ethylhexyl café"]
+    ed.add(LE.new_record("Crème", [(57, 100), (71, 40)]))
+    assert [s.name for s in msp.parse_msp(path.read_bytes())] == ["2‐Ethylhexyl café", "Crème"]
+    ansi = tmp_path / "a.msp"
+    ansi.write_bytes("Name: café\r\nNum Peaks: 1\r\n57 100\r\n\r\n".encode("cp1252"))
+    ed = LE.LibraryEditor(LE.LibraryInfo("a", ansi, "msp", True), None, tmp_path / "backups")
+    ed.add(LE.new_record("x", [(57, 100)]))
+    assert ansi.read_bytes().startswith("Name: café".encode("cp1252"))      # ANSI stays ANSI
+
+
+def test_editing_an_entry_keeps_what_the_form_does_not_show():
+    """The entry form shows one synonym and no IDs: an edit must not drop the others."""
+    old = LE.parse_msp("Name: Toluene\r\nSynon: Methylbenzene\r\nSynon: Toluol\r\nSynon: Phenylmethane\r\n"
+                       "Formula: C7H8\r\nMW: 92\r\nCAS#: 108-88-3\r\nNIST#: 12345\r\nDB#: 7\r\nInChIKey: YXFVVABEGXRONW\r\n"
+                       "RI: 760\r\nComments: old note\r\nNum Peaks: 2\r\n91 999; 92 600\r\n\r\n")[0]
+    new = LE.new_record("Toluene", [(91, 999), (92, 610)], cas="108-88-3", formula="C7H8", mw=92, ri=765,
+                        synonyms=["Methylbenzene"], comment="old note")
+    LE.keep_extra_fields(old, new)
+    assert [v for k, v in new.fields if k == "Synon"] == ["Methylbenzene", "Toluol", "Phenylmethane"]
+    assert new.get("NIST#") == "12345" and new.get("DB#") == "7" and new.get("InChIKey") == "YXFVVABEGXRONW"
+    assert new.ri == 765 and not new.get("Comments")          # the form's RI and comment, not the old ones
+    assert [k for k, _v in new.fields].count("CAS#") == 1
+    cleared = LE.keep_extra_fields(old, LE.new_record("Toluene", [(91, 999)]))
+    assert not cleared.get("Synon")                           # a cleared synonym removes them all
+
+
+@pytest.mark.parametrize("name", ["own.v2", "libraries\\gcws\\Own.msp"])
+def test_msp_backup_of_a_dotted_or_atlas_name(tmp_path, name):
+    """Each save keeps its own backup, also for names with dots or a SpectrAtlas path."""
+    path = tmp_path / "own.msp"
+    path.write_text(LE.write_msp([LE.new_record("A", [(57, 999)])]), encoding="cp1252", newline="")
+    ed = LE.LibraryEditor(LE.LibraryInfo(name, path, "msp", True), None, tmp_path / "backups")
+    res = ed.add(LE.new_record("B", [(71, 999)]))
+    assert res.backup is not None and res.backup.is_file() and res.backup.parent == tmp_path / "backups"
+    assert res.backup.name.endswith(".msp") and "-20" in res.backup.name
