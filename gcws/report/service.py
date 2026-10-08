@@ -146,7 +146,7 @@ def combined_rows(job: ReportJob):
     rows = combine(lists, tol, job.policy)
     if len(job.samples) == 2 and job.policy == "all":
         from gcws.quant import duplicate_view as DV
-        limit = float(getattr(job.settings, "duplicate_max_reldiff", 30.0) or 30.0)
+        limit = DV.reldiff_limit(job.settings)
         rl = 0.0
         if job.kind == "nias":
             import gc_duplicate as GD
@@ -161,7 +161,7 @@ def feature_rows(job: ReportJob, lists: list, tol: float):
     determinations the analyst's report choices and numbers as in :func:`combined_rows`."""
     from gcws.features import combine as FC
     from gcws.quant import duplicate_view as DV
-    limit = float(getattr(job.settings, "duplicate_max_reldiff", 30.0) or 30.0)
+    limit = DV.reldiff_limit(job.settings)
     rl = 0.0
     if job.kind == "nias":
         import gc_duplicate as GD

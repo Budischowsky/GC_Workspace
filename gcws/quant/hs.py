@@ -24,7 +24,7 @@ def per_ug(unit, inputs):
 
 def report_units(cfg) -> list:
     """Conc. 1 and Conc. 2 of the HS report (two different HS units)."""
-    units = [u for u in (cfg or {}).get("report_units") or REPORT_UNITS if u in UNITS][:2]
+    units = list(dict.fromkeys(u for u in (cfg or {}).get("report_units") or REPORT_UNITS if u in UNITS))[:2]
     for u in REPORT_UNITS + UNITS:
         if len(units) >= 2:
             break

@@ -49,7 +49,8 @@ def normalise(method: Optional[dict]) -> dict:
         except (TypeError, ValueError):
             out[k] = default_method()[k]
     allowed = U.allowed(out["sample_type"])
-    units = [u for u in (out["units"] if isinstance(out["units"], (list, tuple)) else []) if u in allowed]
+    units = list(dict.fromkeys(u for u in (out["units"] if isinstance(out["units"], (list, tuple)) else [])
+                               if u in allowed))
     while len(units) < 2:
         units.append(next(u for u in allowed if u not in units))
     out["units"] = units[:2]

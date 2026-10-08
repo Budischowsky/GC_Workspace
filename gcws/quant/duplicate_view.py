@@ -281,13 +281,23 @@ def limits(ws) -> tuple[float, float]:
     if ws.quant.get("mode") == "hs_screening":
         return float(ws.quant.get("hs", {}).get("duplicate_max_reldiff", 30)), 0.0
     s = make_settings(ws.quant.get("settings"))
-    limit = float(getattr(s, "duplicate_max_reldiff", 30.0) or 30.0)
+    limit = reldiff_limit(s)
     rl = getattr(s, "reporting_limit", None)
     if rl is None:
         import gc_duplicate as GD
         rl = GD.DEFAULT_REPORTING_LIMIT
     rl = float(rl) if ws.quant.get("mode", "nias_mgkg") == "nias_mgkg" else 0.0
     return limit, rl
+
+
+def reldiff_limit(settings) -> float:
+    """The difference limit (%) of ``settings``; 0 % is a limit (every difference is flagged), only a
+    missing value falls back to the default, as in the workbook (``gc_export.duplicate_limit``)."""
+    value = getattr(settings, "duplicate_max_reldiff", None)
+    try:
+        return float(value) if value is not None else 30.0
+    except (TypeError, ValueError):
+        return 30.0
 
 
 def default_limit(ws) -> float:
@@ -423,8 +433,8 @@ def apply_edits(rows: list[dict], verdicts: list, edits: dict, tol: float) -> li
             # a red row the analyst has answered (report box, comment, a value or deleted) is decided
             r["decided"] = v.level == "bad" and any(e.get(f) is not None and e.get(f) != ""
                                                     for f in NUMERIC_EDITS + ROW_FLAGS)
-        if r["report"] and r.get("mean") is None:
-            r["mean"] = _mean([r.get("c1"), r.get("c2")])      # a single determination the analyst keeps
+        if r["report"] and r.get("mean") is None:              # a single determination the analyst keeps
+            r["mean"] = _mean([c for n, c in ((1, r.get("c1")), (2, r.get("c2"))) if n != r["dismissed"]])
         out.append(r)
     return out
 

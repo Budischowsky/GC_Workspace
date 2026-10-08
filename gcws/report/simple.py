@@ -60,7 +60,9 @@ def report_rows(job, combined, units, ratio, limit: float = 0.0):
                 r = ratio(k, u)
                 det.append(c * r if (c is not None and r is not None) else None)
             det.append("dismissed" if dismissed == k + 1 else "")
-        det += [row.get("reldiff"), row.get("status", ""), row.get("review", "")]
+        # the difference with the analyst's values (none with a dismissed determination)
+        reldiff = ov["reldiff"] if "reldiff" in ov else row.get("reldiff")
+        det += [reldiff, row.get("status", ""), row.get("review", "")]
         dets.append(det)
     return rows, dets
 
