@@ -75,10 +75,12 @@ def keep_marker(peak, comment: str = "") -> ManualEvent:
 
 
 def kept_spans(events) -> list[tuple[float, float, float]]:
-    """``(t0, t1, apex)`` of the enabled *Keep unsplit* markers."""
+    """``(t0, t1, apex)`` of the enabled *Keep unsplit* markers (not those a later *Reset range*
+    discards)."""
+    from gcws.integration.manual import effective_events
     return [(float(e.t0), float(e.t1 if e.t1 is not None else e.t0),
              float(e.ref_rt if e.ref_rt is not None else e.t0))
-            for e in events if e.enabled and e.kind == K.SPLIT and e.option == KEEP_OPTION]
+            for e in effective_events(events) if e.kind == K.SPLIT and e.option == KEEP_OPTION]
 
 
 def limits_of(method):

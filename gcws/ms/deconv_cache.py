@@ -17,6 +17,14 @@ def settings_of(ws) -> D.DeconvSettings:
     return D.DeconvSettings.from_dict((ws.quant or {}).get("deconv"))
 
 
+def settings_for(ws, st, key: str) -> D.DeconvSettings:
+    """The settings of the components shown for ``key`` of ``st``: those of the method's detection
+    level when it splits automatically (the whole-run result is kept under them), else the base."""
+    from gcws.integration import auto_deconv as AD
+    method = ws._method_of(st, key) if st is not None else None
+    return AD.settings_for_method(ws, method) if method is not None and AD.enabled(method) else settings_of(ws)
+
+
 def _skey(settings: D.DeconvSettings) -> str:
     return json.dumps(settings.to_dict(), sort_keys=True)
 

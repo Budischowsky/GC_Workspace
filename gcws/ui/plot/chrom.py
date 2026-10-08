@@ -572,7 +572,8 @@ class ChromPanel(QWidget):
         if is_fid(self.key) and not (self.index == 0 and is_fid(other)):
             return
         from gcws.ms import deconv_cache as DC
-        comps = DC.hidden_components(self.ws, st, self.ws.signal_key, DC.settings_of(self.ws))
+        comps = DC.hidden_components(self.ws, st, self.ws.signal_key,
+                                     DC.settings_for(self.ws, st, self.ws.signal_key))
         curve = self.curves.get(st.id)
         if not comps or curve is None:
             return

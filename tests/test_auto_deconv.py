@@ -511,3 +511,74 @@ def test_merge_tool_merges_split_peaks_back(win):
     assert not fragments(ws, st)
     st.undo.undo()
     assert len(fragments(ws, st)) == 2
+
+
+def test_report2_rule_with_an_empty_reporting_limit():
+    """A method without a reporting limit (None in the evidence) takes the default 0.01, as the other
+    rules do, instead of failing on the comparison."""
+    from gcws.automation import rules as RU
+    ev = {"settings": {"reporting_limit": None}, "members": [{"name": "S_A", "deconvolution": {
+        "fragments": 2, "splits": [{"rt": 11.5, "basis": "ms", "note": "", "names": "x / y", "max_conc": 0.001}]}}]}
+    rule = next(r for r in RU.default_rules() if r.id == "deconvolution")
+    found = RU.CHECKS["deconvolution"](rule, ev)
+    assert not any("MS component proportions" in f.text for f in found)       # below the default limit
+
+
+def test_spectra_of_unsplit_peaks_use_the_whole_run_at_the_method_level(app, monkeypatch):
+    """With the automatic split at another detection level than 3, the whole-run components are kept
+    under that level's settings: the deconvoluted spectrum of a peak and the hidden-component markers
+    take them from there (no second window deconvolution at level 3, which found other components)."""
+    from gcws.identify.service import build_items
+    from gcws.ms import deconv_cache as DC
+    ws = workspace(deconv_level=5)
+    st = load(ws, make_run("S_A"))
+    settings = DC.settings_for(ws, st, FID)
+    assert DC.whole_run(st, settings) is not None and settings != DC.settings_of(ws)
+
+    def no_window(*_a, **_k):
+        raise AssertionError("window deconvolution although the whole run is there")
+    monkeypatch.setattr(DC, "window", no_window)
+    single = [p for p in ws.result(st.id, FID).peaks if not p.extra.get("deconv_component") and p.area > 0]
+    assert single and DC.for_peak(st, single[-1], FID, settings) is not None
+    items, _protected = build_items(ws, [st.id], FID, "deconvoluted")
+    assert items
+
+
+def test_reset_range_discards_the_keep_unsplit_marker(app):
+    """*Reset range* discards the analyst's manual events in its range, the *Keep unsplit* marker too:
+    the automatic split applies again (the marker kept blocking it although it was reset)."""
+    from gcws.core.events import ManualEvent, ManualKind as K
+    from gcws.integration import auto_deconv as AD
+    ws = workspace()
+    st = load(ws, make_run("S_A"))
+    parent = st.presplit[FID].peaks[-1]
+    st.events(FID).append(AD.keep_marker(parent))
+    ws.integrate(st.id, FID)
+    assert not fragments(ws, st)
+    st.events(FID).append(ManualEvent(K.RESET_RANGE, parent.start - .01, parent.end + .01))
+    ws.integrate(st.id, FID)
+    assert len(fragments(ws, st)) == 2
+
+
+def test_keep_unsplit_again_after_a_reset_range(win):
+    """A *Keep unsplit* marker discarded by *Reset range* does not count as a mark: the analyst can keep
+    the peak unsplit again (it said "already kept unsplit" and did nothing)."""
+    from gcws.core.events import ManualEvent, ManualKind as K
+    from gcws.integration import auto_deconv as AD
+    ws = win.ws
+    ws.deconv_background = False
+    st = load(ws, make_run("S_A"))
+    ws.set_active(st.id)
+    win.events.load()
+    win.events.deconv_mode.setCurrentText("Automatic")
+    win.events._apply(False)
+    parent = st.presplit[FID].peaks[-1]
+    st.events(FID).extend([AD.keep_marker(parent), ManualEvent(K.RESET_RANGE, parent.start - .01, parent.end + .01)])
+    ws.integrate(st.id, FID)
+    parts = fragments(ws, st)
+    assert len(parts) == 2
+    ws.select_peak(ws.result(st.id, FID).peaks.index(parts[0]))
+    win.keep_unsplit(True)
+    assert not fragments(ws, st)
+    st.undo.undo()
+    assert len(fragments(ws, st)) == 2

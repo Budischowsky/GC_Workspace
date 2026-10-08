@@ -103,7 +103,7 @@ def build_items(ws, run_ids: list[str], key: str, spectrum_mode: str,
                     and ident.score >= rescan_below:
                 continue
             from gcws.ms import deconv_cache as DC
-            dsettings = DC.settings_of(ws)
+            dsettings = DC.settings_for(ws, st, key)
             spec = extract(st.run, p, key, st.delay_value, spectrum_mode,
                            override=override_for(st, key, p),
                            component=lambda st=st, p=p: DC.for_peak(st, p, key, dsettings))

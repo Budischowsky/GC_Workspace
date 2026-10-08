@@ -377,7 +377,7 @@ def _double_determination(rule: Rule, ev: dict) -> list[Finding]:
 
 
 def _deconvolution(rule: Rule, ev: dict) -> list[Finding]:
-    limit = (ev.get("settings") or {}).get("reporting_limit", 0.01)
+    limit = _num((ev.get("settings") or {}).get("reporting_limit")) or 0.01
     out = []
     for m in ev.get("members") or []:
         d = m.get("deconvolution") or {}

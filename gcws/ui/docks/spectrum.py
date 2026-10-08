@@ -789,7 +789,7 @@ class SpectrumDock(QWidget):
         key = self.ws.signal_key
         override = override_for(st, key, peak)
         from gcws.ms import deconv_cache as DC
-        dsettings = DC.settings_of(self.ws)
+        dsettings = DC.settings_for(self.ws, st, key)
         self.spec = self._minus_blank(st, extract(st.run, peak, key, st.delay_value, self.current_mode(),
                                                   override=override,
                                                   component=lambda: DC.for_peak(st, peak, key, dsettings)))

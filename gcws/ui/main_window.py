@@ -1691,7 +1691,7 @@ class MainWindow(QMainWindow):
         marks = [e for e in events if e.kind.name == "SPLIT" and e.option == AD.KEEP_OPTION and e.enabled
                  and e.t0 - 1e-6 <= peak.apex_rt <= (e.t1 if e.t1 is not None else e.t0) + 1e-6]
         if keep:
-            if marks:
+            if any(t0 - 1e-6 <= peak.apex_rt <= t1 + 1e-6 for t0, t1, _a in AD.kept_spans(events)):
                 self.statusBar().showMessage("The peak is already kept unsplit.", 6000)
                 return
             if dc and not auto:
