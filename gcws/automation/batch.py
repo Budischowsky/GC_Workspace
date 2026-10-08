@@ -22,8 +22,16 @@ def batch_stem(name: str) -> str:
 
 
 def combined_word(xlsx: list[Path], target: Path) -> Path:
-    from gcws.report.legacy_api import main_script
+    """One Word document of the reports ``xlsx``: Template reports from their own table, every other
+    report through the NIAS main script (the two cannot be mixed in one document)."""
+    from gcws.report import template_report as TR
     target.parent.mkdir(parents=True, exist_ok=True)
+    templates = [TR.is_template_workbook(p) for p in xlsx]
+    if any(templates):
+        if not all(templates):
+            raise ValueError("Template reports and other reports cannot be combined in one Word document")
+        return TR.combined_word([Path(p) for p in xlsx], target)
+    from gcws.report.legacy_api import main_script
     return Path(main_script().create_combined_word([Path(p) for p in xlsx], target))
 
 

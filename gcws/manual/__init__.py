@@ -23,7 +23,7 @@ DIR = Path(__file__).resolve().parent
 PARTS: list[tuple[str, list[str]]] = [
     ("Getting started", ["welcome", "window"]),
     ("Workflows", ["wf-overview", "wf-load", "wf-integrate", "wf-identify", "wf-quantify", "wf-double",
-                   "wf-report", "wf-automation", "wf-methods"]),
+                   "wf-report", "wf-report-templates", "wf-automation", "wf-methods"]),
     ("How it works", ["library-search", "double-determination"]),
     ("Reference", ["ref-menus", "ref-tools", "ref-panels", "ref-dialogs", "ref-settings"]),
 ]

@@ -278,7 +278,7 @@ class DuplicatePage(QWidget):
         from gcws.ui.widgets.report_button import report_button
         buttons = QHBoxLayout()
         self.b_report = report_button(
-            self, lambda: self._report(RS.default_kind(self.ws.quant), preview=True),
+            self, lambda: self._report(RS.preview_kind(self.ws.quant), preview=True),
             lambda kind: self._report(kind), lambda: self.export())
         buttons.addWidget(self.b_report)
         buttons.addStretch(1)

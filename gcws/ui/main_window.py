@@ -2082,31 +2082,35 @@ class MainWindow(QMainWindow):
             return g
         return self._single_for_report()
 
-    def report(self, kind, group_id=None, preview=False, single=False):
-        """Write (or preview) a ``kind`` report of a replicate group; ``single``: of the active run alone."""
+    def report(self, kind, group_id=None, preview=False, single=False, template=None):
+        """Write (or preview) a ``kind`` report of a replicate group; ``single``: of the active run alone.
+        ``template``: the Template report of this template instead of the method's."""
         from gcws.report import assemble as AS
         from gcws.report import service as RS
         if single and self._single_for_report() is None:
             QMessageBox.information(self, "Report", "Activate a sample (role Sample) to report it on its own.")
             return
         g = self._single_for_report() if single else self._group_for_report(group_id)
+        extra = {"template": template} if template is not None else {}
         try:
             try:
-                members, samples = AS.prepare(self.ws, kind, g)
+                members, samples = AS.prepare(self.ws, kind, g, **extra)
             except AS.ReportNotPossible as exc:
                 if exc.code != "no_migration":
                     raise
                 self.quant.edit_migration()
                 if not self.ws.quant.get("migration"):
                     return
-                members, samples = AS.prepare(self.ws, kind, g)
+                members, samples = AS.prepare(self.ws, kind, g, **extra)
         except AS.ReportNotPossible as exc:
             title = "HS-Screening report" if exc.code == "hs_errors" else "Report"
             (QMessageBox.information if exc.level == "information" else QMessageBox.warning)(self, title, exc.message)
             if exc.code == "no_group":
                 self._show_dock("replicates")
+            if exc.code in ("no_template", "empty_template") and hasattr(self, "edit_report_template"):
+                self.edit_report_template()
             return
-        default = AS.default_target(self.ws, kind, members)
+        default = AS.default_target(self.ws, kind, members, template)
         if preview:
             import tempfile
             target = Path(tempfile.mkdtemp(prefix="gcws_preview_")) / default.name
@@ -2116,7 +2120,8 @@ class MainWindow(QMainWindow):
                 return
             target = Path(fn)
         job = AS.build_job(self.ws, kind, g, target, members=members, samples=samples, preview=preview,
-                           keep_middle=QSettings().value("report/keep_middle", False, type=bool))
+                           keep_middle=QSettings().value("report/keep_middle", False, type=bool),
+                           template=template, method_name=QSettings().value("method/current", "") or "")
         self.progress.setRange(0, 0)
         self.progress.setFormat(RS.KINDS[kind])
         self.progress.show()
@@ -2190,8 +2195,9 @@ class MainWindow(QMainWindow):
                 from gcws.automation.store import safe_name
                 stem = safe_name(g["name"])
             used.add(stem)
-            job = AS.build_job(self.ws, kind, g, out_dir / f"{stem}{RS.SUFFIXES[kind]}.xlsx", members=members,
-                               samples=samples)
+            job = AS.build_job(self.ws, kind, g, out_dir / f"{stem}{RS.suffix(kind, self.ws.quant)}.xlsx",
+                               members=members, samples=samples,
+                               method_name=QSettings().value("method/current", "") or "")
             jobs.append((g, job, PL.evidence_for(self.ws, members, kind=kind)))
         if not jobs:
             QMessageBox.warning(self, "Batch report", "No sample can be reported:\n" + "\n".join(skipped))

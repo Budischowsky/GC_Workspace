@@ -250,7 +250,8 @@ def _istd_qc(rule: Rule, ev: dict) -> list[Finding]:
                     out.append(Finding(rule.id, rule.level, f"ISTD area {c.verdict}: {c.area:,.0f} "
                                        f"(window {float(rule.p('area_low')):,.0f} - {float(rule.p('area_high')):,.0f})",
                                        member=name, substance=c.name, value=c.area))
-        if ev.get("kind") in ("nias", None, "total_extraction") and m.get("mean_factor") in (None, 0)                 and m.get("quantified", True):
+        istd_report = ev.get("kind") in ("nias", None, "total_extraction") or             (ev.get("kind") == "template" and ev.get("mode") in ("nias_mgkg", "istd_conc", "total_ugl"))
+        if istd_report and m.get("mean_factor") in (None, 0)                 and m.get("quantified", True):
             out.append(Finding(rule.id, rule.level, "No ISTD factor", member=name))
         if rule.p("detection"):
             for code, d in (m.get("istd_detection") or {}).items():

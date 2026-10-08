@@ -237,12 +237,13 @@ def run_job(spec: dict, *, progress: Callable[[str], None] = log.info,
         kind = rep["kind"]
         t1 = time.time()
         g = ws.replicate_groups[0]
-        target = out_dir / store.safe_name(rep["node"]) / f"{stem}{RS.SUFFIXES[kind]}.xlsx"
+        target = out_dir / store.safe_name(rep["node"]) / f"{stem}{RS.suffix(kind, ws.quant)}.xlsx"
         try:
             mem, samples = AS.prepare(ws, kind, g)
             job = AS.build_job(ws, kind, g, target, members=mem, samples=samples, record_seen=False,
                                keep_middle=bool(rep.get("keep_middle")),
-                               batch_workbook="dd" in (rep.get("formats") or []))
+                               batch_workbook="dd" in (rep.get("formats") or []),
+                               method_name=(spec.get("method") or {}).get("name", ""))
             res = RS.generate(job, progress)
         except AS.ReportNotPossible as exc:
             errors_ev.append(f"{RS.KINDS[kind]} not made: {exc.message}")
@@ -374,8 +375,8 @@ def evidence_for(ws, members: list, *, kind: str = "nias", require: str = "auto"
         features = feature_evidence(ws, members)
     except Exception:  # noqa: BLE001 - the other rules still work
         features = []
-    return {"kind": kind, "members": out, "rows": [], "summary": {}, "warnings": [], "errors": [],
-            "features": features,
+    return {"kind": kind, "mode": (ws.quant or {}).get("mode", "nias_mgkg"), "members": out, "rows": [],
+            "summary": {}, "warnings": [], "errors": [], "features": features,
             "settings": {"reporting_limit": getattr(s, "reporting_limit", 0.01),
                          "duplicate_max_reldiff": getattr(s, "duplicate_max_reldiff", 30.0)}}
 

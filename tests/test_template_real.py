@@ -134,3 +134,34 @@ def test_extraction_matches_the_quantification_report(ws, tmp_path):
     finally:
         ws.quant = saved
         ws.recompute_quant()
+
+
+def test_the_template_report_through_the_report_job(ws, tmp_path):
+    from gcws.report import assemble as AS
+    from gcws.report import service as RS
+    from gcws.report import template as TP
+    g = _group(ws)
+    saved = dict(ws.quant)
+    try:
+        ws.quant.pop(TP.QUANT_KEY, None)
+        with pytest.raises(AS.ReportNotPossible) as exc:
+            AS.prepare(ws, "template", g)
+        assert exc.value.code == "no_template"
+        with pytest.raises(AS.ReportNotPossible) as exc:
+            AS.prepare(ws, "template", g, template=TP.preset("Empty"))
+        assert exc.value.code == "empty_template"
+        tpl = TP.stamped(TP.preset("NIAS"), "Customer A")
+        ws.quant[TP.QUANT_KEY] = tpl
+        assert RS.kind_fits("template", {"mode": "hs_screening"}) and RS.preview_kind(ws.quant) == "template"
+        assert AS.default_target(ws, "template", g["members"]).name == "26016606_Customer_A_Report.xlsx"
+        assert RS.suffix("template", None, TP.stamped(tpl, "NIAS")) == "_NIAS_Template_Report"
+        members, samples = AS.prepare(ws, "template", g, recompute=False)
+        job = AS.build_job(ws, "template", g, tmp_path / "t.xlsx", members=members, samples=samples, preview=True,
+                           method_name="NIAS EtOH")
+        assert job.template["name"] == "Customer A" and job.table.rows and job.features is None
+        res = RS.generate(job)
+        assert res.target.exists() and res.word.exists() and res.rows == len(job.table.reported)
+        assert res.combined and "name" in res.combined[0]
+    finally:
+        ws.quant.clear()
+        ws.quant.update(saved)

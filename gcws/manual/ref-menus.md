@@ -133,6 +133,7 @@ See [Blanks, internal standards and quantification](wf-quantify.md).
 | **Total Extraction Report...** / **Total Extraction Report - preview** | The Total Extraction report. |
 | **HS-Screening Report...** / **HS-Screening Report - preview** | The HS-Screening report. |
 | **Quantification Report...** / **Quantification Report - preview** | The report of the quant method (mode **Extraction (quant method)**). |
+| **Template Report...** / **Template Report - preview** | The report the method's report template designs, in every quantification mode (see [Report templates](wf-report-templates.md)). |
 | **Batch report of this folder...** | Reports every sample of the active chromatogram's batch folder. |
 | **Keep intermediate workbook** | Also keeps the workbook with the intermediate calculations. |
 

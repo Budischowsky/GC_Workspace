@@ -1,6 +1,6 @@
 # Reports
 
-## The five reports
+## The reports
 
 | Report | For | Quantity |
 |---|---|---|
@@ -9,6 +9,7 @@
 | **Total Extraction Report** | Total extraction. | µg/L |
 | **HS-Screening Report** | Headspace screening (mode **HS-Screening**). | Conc. 1 and Conc. 2, by default µg/dm² and mg/m² |
 | **Quantification Report** | An extraction quantified with a quant method (mode **Extraction (quant method)**). | Conc. 1 and Conc. 2 of the quant method |
+| **Template Report** | Your own report: the columns, header and rows of the method's report template, in every quantification mode (see [Report templates](wf-report-templates.md)). | Any value of the Peaks panel and of the double determination |
 
 Each report is written as an Excel workbook and a Word document.
 
@@ -19,7 +20,8 @@ unit, with your changes from the double determination (an edited value, a dismis
 converted with their own sample amount. The sheet **Determinations** lists A and B in both units; the other
 sheets show the calculation (sample amounts, standards, factor, every peak). The preview button of the
 **Peaks** panel reports the active run alone; the **Replicates / results** panel and the Report menu report the
-group. The report that fits the quantification mode is the one the **Report preview** buttons show.
+group. The report that fits the quantification mode is the one the **Report preview** buttons show - or the
+Template Report, when the method's report template asks for it.
 
 ## Make a report
 

@@ -21,12 +21,12 @@ from typing import Callable, Optional
 
 KINDS = {"nias": "NIAS Report", "fingerprint": "Fingerprint Report",
          "total_extraction": "Total Extraction Report", "hs_screening": "HS-Screening Report",
-         "quant": "Quantification Report"}
+         "quant": "Quantification Report", "template": "Template Report"}
 SUFFIXES = {"nias": "_NIAS_Report", "fingerprint": "_Fingerprint_Report",
             "total_extraction": "_Total_Extraction_Report", "hs_screening": "_HS_Screening_Report",
-            "quant": "_Quantification_Report"}
+            "quant": "_Quantification_Report", "template": "_Template_Report"}
 SEEN_TYPES = {"nias": "NIAS", "fingerprint": "Fingerprint", "total_extraction": "Total extraction",
-              "hs_screening": "HS-Screening", "quant": "Quantification"}
+              "hs_screening": "HS-Screening", "quant": "Quantification", "template": "Template"}
 #: quantification modes with their own report (every other mode: the NIAS, Fingerprint and Total extraction reports)
 MODE_KINDS = {"hs_screening": "hs_screening", "extraction": "quant"}
 
@@ -37,9 +37,39 @@ def default_kind(quant: dict) -> str:
 
 
 def kind_fits(kind: str, quant: dict) -> bool:
-    """Whether a ``kind`` report can be made in the quantification mode of ``quant``."""
+    """Whether a ``kind`` report can be made in the quantification mode of ``quant`` (the Template report:
+    in every mode)."""
+    if kind == "template":
+        return True
     own = MODE_KINDS.get((quant or {}).get("mode"))
     return kind == own if own else kind not in MODE_KINDS.values()
+
+
+def preview_kind(quant: dict) -> str:
+    """The report the panels' Report preview buttons show: the method's template when it asks for it,
+    else the report of the quantification mode."""
+    from gcws.report import template as TP
+    tpl = TP.of(quant)
+    return "template" if tpl is not None and tpl["extras"]["default_report"] else default_kind(quant)
+
+
+def suffix(kind: str, quant: Optional[dict] = None, template: Optional[dict] = None) -> str:
+    """The end of the report's file name: the template's own ending, else ``_<template name>_Report``
+    (``_<name>_Template_Report`` where that would be a fixed report's), else the kind's."""
+    if kind != "template":
+        return SUFFIXES[kind]
+    from gcws.report import template as TP
+    tpl = TP.normalise(template) if template is not None else TP.of(quant)
+    if tpl is None:
+        return SUFFIXES[kind]
+    if tpl["extras"]["file_suffix"]:
+        own = tpl["extras"]["file_suffix"]
+        return own if own.startswith(("_", "-", " ")) else "_" + own
+    name = re.sub(r"[^\w.-]+", "_", tpl["name"]).strip("_.")
+    if not name:
+        return SUFFIXES[kind]
+    out = f"_{name}_Report"
+    return out.replace("_Report", "_Template_Report") if out in SUFFIXES.values() else out
 
 
 @dataclass
@@ -64,6 +94,8 @@ class ReportJob:
     notes: list = field(default_factory=list)       # warnings known before the report is made (e.g. no blank)
     overrides: dict = field(default_factory=dict)   # filled by combined_rows: row position -> values
     features: object = None                         # FeatureTable: pair by features (None: AutoLib's pairing)
+    template: Optional[dict] = None                 # Template report: the template ...
+    table: object = None                            # ... and its table (gcws.report.table), built with the job
 
 
 @dataclass
@@ -184,6 +216,10 @@ def apply_overrides(middle: Path, overrides: dict) -> int:
 
 
 def generate(job: ReportJob, progress: Callable[[str], None] = lambda s: None) -> ReportResult:
+    if job.kind == "template":
+        # the table was built with the job: writing it never touches the workspace's samples
+        from gcws.report.template_report import generate as generate_template
+        return generate_template(job, progress)
     clean_samples(job.samples)
     if job.kind == "hs_screening":
         from gcws.report.hs import generate as generate_hs

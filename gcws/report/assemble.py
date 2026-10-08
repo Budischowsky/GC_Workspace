@@ -29,11 +29,13 @@ def cas_path() -> Optional[Path]:
     return next((b / raw for b in (paths.RESOURCES, paths.ROOT, paths.DATA) if (b / raw).exists()), None)
 
 
-def prepare(ws, kind: str, group: Optional[dict]) -> tuple[list[str], list]:
+def prepare(ws, kind: str, group: Optional[dict], *, recompute: bool = True,
+            template: Optional[dict] = None) -> tuple[list[str], list]:
     """``(members, samples)`` of ``group`` for a ``kind`` report, or :class:`ReportNotPossible`.
 
-    Recomputes the quantification first."""
-    hs = ws.quant.get("mode") == "hs_screening"
+    Recomputes the quantification first (``recompute``: unless the caller just did). A Template report
+    needs the method's template (or ``template``); what it cannot fill it leaves out with a warning."""
+    hs = ws.quant.get("mode") == "hs_screening" and kind != "template"
     if not RS.kind_fits(kind, ws.quant):
         raise ReportNotPossible("mode", "Select HS-Screening mode and its report together, and Extraction (quant "
                                 "method) with the Quantification report. For other reports, select the "
@@ -41,7 +43,17 @@ def prepare(ws, kind: str, group: Optional[dict]) -> tuple[list[str], list]:
     if group is None or not group.get("members"):
         raise ReportNotPossible("no_group", "Choose a replicate group (Replicates panel) or activate a "
                                 "sample chromatogram.", "information")
-    ws.recompute_quant()
+    if kind == "template":
+        from gcws.report import template as TP
+        tpl = template if template is not None else TP.of(ws.quant)
+        if tpl is None:
+            raise ReportNotPossible("no_template", "The method has no report template: design one under "
+                                    "Method > Report template... and choose Use in method.", "information")
+        if not TP.normalise(tpl)["columns"]:
+            raise ReportNotPossible("empty_template", "The report template has no column: add columns under "
+                                    "Method > Report template....", "information")
+    if recompute:
+        ws.recompute_quant()
     members = [m for m in group["members"] if m in ws.runs]
     samples = [ws.nias_sample(m) for m in members]
     if hs:
@@ -97,10 +109,15 @@ def blank_warnings(ws, members: list[str]) -> list[str]:
     return out
 
 
-def default_target(ws, kind: str, members: list[str]) -> Path:
-    """``<batch folder>/<stem>_<Kind>_Report.xlsx``."""
+def default_target(ws, kind: str, members: list[str], template: Optional[dict] = None) -> Path:
+    """``<batch folder>/<stem>_<Kind>_Report.xlsx`` (a Template report: the template's ending)."""
     names = [ws.runs[m].name for m in members]
-    return ws.runs[members[0]].run.path.parent / f"{RS.report_stem(names)}{RS.SUFFIXES[kind]}.xlsx"
+    return ws.runs[members[0]].run.path.parent / f"{RS.report_stem(names)}{RS.suffix(kind, ws.quant, template)}.xlsx"
+
+
+def template_fields(tpl: dict) -> set:
+    """The fields a template's report reads (its columns, limit and SML bold)."""
+    return ({c["field"] for c in tpl["columns"]} | {tpl["rows"]["limit"]["field"], tpl["extras"]["sml_bold_field"]})         - {""}
 
 
 def feature_table(ws, members: list[str], group: dict):
@@ -116,8 +133,10 @@ def feature_table(ws, members: list[str], group: dict):
 
 def build_job(ws, kind: str, group: dict, target: Path, *, members: Optional[list] = None,
               samples: Optional[list] = None, preview: bool = False, keep_middle: bool = False,
-              record_seen: Optional[bool] = None, batch_workbook: bool = True) -> RS.ReportJob:
-    """The ``ReportJob`` of ``group`` (after :func:`prepare`) writing ``target``."""
+              record_seen: Optional[bool] = None, batch_workbook: bool = True, template: Optional[dict] = None,
+              method_name: str = "") -> RS.ReportJob:
+    """The ``ReportJob`` of ``group`` (after :func:`prepare`) writing ``target``. A Template report's table
+    is built here (``template``: else the method's), so writing it never touches the workspace."""
     from gcws.quant import duplicate_view as DV
     from gcws.quant import migration as MG
     from gcws.quant.nias_bridge import make_settings
@@ -131,7 +150,7 @@ def build_job(ws, kind: str, group: dict, target: Path, *, members: Optional[lis
     blank_istd_ids = [b for m in members for b in ws.runs[m].blanks_istd]
     # every blank used by any determination of the group (display only in the report)
     bname = lambda ids: "; ".join(dict.fromkeys(str(ws.runs[i].run.path) for i in ids if i in ws.runs))
-    return RS.ReportJob(
+    job = RS.ReportJob(
         kind=kind, samples=samples, names=names,
         settings=make_settings(ws.quant.get("hs" if hs else "settings")),
         target=target, word=target.with_suffix(".docx"), cas_path=cas_path() if kind == "nias" else None,
@@ -145,4 +164,17 @@ def build_job(ws, kind: str, group: dict, target: Path, *, members: Optional[lis
         ri_options={k: bool((ws.quant.get("ri") or {}).get(k)) for k in ("report_ri", "replace_rt")},
         edits=dict(group.get(DV.edits_key(ws.quant, ws.quant_unit())) or {}),
         notes=[] if hs and not ws.quant.get("hs", {}).get("blank_correction", True) else blank_warnings(ws, members),
-        features=None if hs else feature_table(ws, members, group))
+        features=None if hs or kind == "template" else feature_table(ws, members, group))
+    if kind == "template":
+        from gcws.report import table as TB
+        from gcws.report import template as TP
+        from gcws.report import template_data as TD
+        tpl = TP.normalise(template if template is not None else TP.of(ws.quant))
+        data = TD.collect(ws, members, group, fields=template_fields(tpl), method_name=method_name,
+                          template_name=tpl["name"])
+        errors = [ws.quant_result.errors[m] for m in members
+                  if ws.quant_result is not None and m in ws.quant_result.errors]
+        data.warnings = list(dict.fromkeys(errors + data.warnings))
+        job.template, job.table = tpl, TB.build(data, tpl)
+        job.record_seen = job.record_seen and tpl["extras"]["record_seen"]
+    return job

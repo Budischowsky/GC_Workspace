@@ -91,3 +91,16 @@ def test_the_preview_html():
     assert "NIAS-Screening" in html and "<b>0.200</b>" in html and "<sup>(a)</sup>" in html
     assert "Sum of hydrocarbons" in html
     assert "more rows" in to_html(_table(), max_rows=0)
+
+
+def test_batch_word_takes_template_reports_and_refuses_a_mix(tmp_path):
+    from openpyxl import Workbook
+    from gcws.automation import batch as BA
+    job = _job(tmp_path, _table())
+    TR.generate(job)
+    out = BA.combined_word([job.target], tmp_path / "b" / "batch.docx")
+    assert out.exists()
+    other = tmp_path / "nias.xlsx"
+    Workbook().save(other)
+    with pytest.raises(ValueError, match="cannot be combined"):
+        BA.combined_word([job.target, other], tmp_path / "mixed.docx")

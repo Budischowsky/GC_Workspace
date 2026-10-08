@@ -729,7 +729,7 @@ class ReplicatesDock(QWidget):
 
     def _preview(self):
         """The report that fits the quantification mode (HS-Screening, Quantification or NIAS), as a preview."""
-        from gcws.report.service import default_kind
+        from gcws.report.service import preview_kind
         g = self.current_group()
         if g is not None:
-            self.previewRequested.emit(default_kind(self.ws.quant), g["id"])
+            self.previewRequested.emit(preview_kind(self.ws.quant), g["id"])

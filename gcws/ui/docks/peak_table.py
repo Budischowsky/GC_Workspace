@@ -188,8 +188,8 @@ class PeakTable(QWidget):
 
     def _preview(self):
         """The report that fits the quantification mode (HS-Screening, Quantification or NIAS), as a preview."""
-        from gcws.report.service import default_kind
-        self.reportRequested.emit(default_kind(self.ws.quant), True)
+        from gcws.report.service import preview_kind
+        self.reportRequested.emit(preview_kind(self.ws.quant), True)
 
     # -- data ----------------------------------------------------------------
 
