@@ -64,7 +64,8 @@ FEATURE_COLUMNS = {C_FEATURE, C_SIM, C_HIT_A, C_HIT_B}
 #: the concentrations in the further units of the NIAS modes: A, B and the mean of each unit
 UNIT_SIDES = (("a", "c1"), ("b", "c2"), ("mean", "mean"))
 C_UNIT0 = 18
-UNIT_DECIMALS = {"mg_dm2": 4, "ug_dm2": 3, "ug_l": 2, "mg_l": 4, "mg_ml": 6}
+UNIT_DECIMALS = {"mg_dm2": 4, "ug_dm2": 3, "ug_l": 2, "mg_l": 4, "mg_ml": 6, "mg_g": 6, "mg_kg": 4, "ug_g": 4,
+                 "ug_kg": 2}
 #: every column's name by index: the column choice is remembered by name
 COLUMN_KEYS = ["icon", "report", "rt", "name", "cas", "area_a", "area_b", "conc_a", "conc_b", "mean", "diff",
                "verdict", "notes", "comment", "feature", "similarity", "hit_a", "hit_b"] + \
@@ -443,7 +444,7 @@ class DuplicatePage(QWidget):
         return tuple(out) if len(out) == 2 else ("A", "B")
 
     def edits_key(self):
-        return "hs_edits:" + self.ws.quant_unit() if self.ws.quant.get("mode") == "hs_screening" else "edits"
+        return DV.edits_key(self.ws.quant, self.ws.quant_unit())
 
     def quant_signal(self):
         from gcws.quant.service import quant_detector
@@ -1032,10 +1033,38 @@ class DuplicatePage(QWidget):
         """``(value, calculation)`` of the further-unit columns of ``row``: its A, B and mean
         (the analyst's edits included) converted from the mode's unit."""
         mode = self.ws.quant.get("mode", "nias_mgkg")
+        if mode == "extraction":
+            return self._extraction_cells(row, units)
         conv = {side: QS.from_mode_unit(mode, settings, row.get(field)) if units else None
                 for side, field in UNIT_SIDES}
         return [(conv[side][unit], conv[side]["calc"].get(unit)) if unit in units else (None, None)
                 for unit in QS.CONC_UNITS for side, _field in UNIT_SIDES]
+
+    def _extraction_cells(self, row: dict, units: list[str]) -> list[tuple]:
+        """Extraction: A and B converted with their own run's sample amount, the mean from both
+        (without a dismissed outlier)."""
+        from gcws.quant import extraction as EX
+        from gcws.quant import units as U
+        q, ids = self.ws.quant, list(self.members[:2])
+        ids += [""] * (2 - len(ids))
+        u1 = EX.unit(q)
+        out = []
+        for key in QS.CONC_UNITS:
+            u = U.label_of(key)
+            for (side, field), rid in zip(UNIT_SIDES, ids + [None]):
+                if key not in units:
+                    out.append((None, None))
+                elif side == "mean":
+                    v = EX.mean_in(q, ids, [row.get("c1"), row.get("c2")], row.get("mean"), u,
+                                   int(row.get("dismissed") or 0))
+                    out.append((v, f"Mean of {self.labels()[0]} and {self.labels()[1]} in {u}, each with its own "
+                                   "sample amount" if v is not None else ""))
+                else:
+                    v = EX.convert_value(q, rid, row.get(field), u)
+                    r = U.ratio(u1, u, EX.basis(q, rid))
+                    out.append((v, U.missing(u, EX.basis(q, rid)) or
+                                (f"{u} = {row.get(field):.6g} {u1} × {r:.6g}" if v is not None else "")))
+        return out
 
     def _fill_table(self):
         from PySide6.QtGui import QFont
@@ -1044,7 +1073,7 @@ class DuplicatePage(QWidget):
         names = [self.ws.runs[m].name for m in self.members if m in self.ws.runs]
         headers = self.headers()
         feature_rows = bool(self.rows) and bool(self.rows[0].get("feature_id"))
-        units = QS.unit_keys(self.ws.quant.get("mode", "nias_mgkg"))
+        units = QS.unit_keys(self.ws.quant.get("mode", "nias_mgkg"), self.ws.quant)
         settings = make_settings(self.ws.quant.get("settings"))
         cur = self.table.currentItem()
         keep_cur = (cur.data(Qt.UserRole), cur.column()) if cur is not None else None
@@ -1222,7 +1251,7 @@ class DuplicatePage(QWidget):
         """Columns without content in this comparison: the feature columns of the classic pairing,
         the units the quantification mode does not compute."""
         feature_rows = bool(self.rows) and bool(self.rows[0].get("feature_id"))
-        units = QS.unit_keys(self.ws.quant.get("mode", "nias_mgkg"))
+        units = QS.unit_keys(self.ws.quant.get("mode", "nias_mgkg"), self.ws.quant)
         return (set() if feature_rows else set(FEATURE_COLUMNS)) | {c for c, u in UNIT_OF.items() if u not in units}
 
     def _apply_layout(self) -> None:
@@ -1820,7 +1849,7 @@ class DuplicatePage(QWidget):
         unit = self.ws.quant_unit()
         extra = [c for c in self.table.shown_columns() if c in UNIT_OF]
         headers = self.headers()
-        units = QS.unit_keys(self.ws.quant.get("mode", "nias_mgkg"))
+        units = QS.unit_keys(self.ws.quant.get("mode", "nias_mgkg"), self.ws.quant)
         settings = make_settings(self.ws.quant.get("settings"))
         out = [["RT [min]", "Substance", "CAS", f"{labels[0]} [{unit}]", f"{labels[1]} [{unit}]",
                 f"Mean [{unit}]", "Diff. %", "Verdict", "Explanation", "Report", "Changed by analyst", "Comment"]

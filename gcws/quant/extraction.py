@@ -149,3 +149,24 @@ def convert_value(quant: dict, run_id: str, value: Optional[float], to: str) -> 
         return None
     r = U.ratio(unit(quant), to, basis(quant, run_id))
     return value * r if r is not None else None
+
+
+def mean_in(quant: dict, run_ids: list, cs: list, mean: Optional[float], to: str, dismissed: int = 0,
+            ratio=None) -> Optional[float]:
+    """The combined result ``mean`` (Conc. 1's unit; the analyst's value included) in the unit ``to``.
+
+    Each determination k has its own ratio rₖ (its sample amount); the value is mean × Σ cₖ·rₖ ÷ Σ cₖ
+    over the determinations used (not ``dismissed``, 1-based), which is the mean of the converted cₖ
+    when ``mean`` is the mean of the cₖ. ``ratio(run id, to)`` defaults to the extraction method's."""
+    if mean is None:
+        return None
+    u1 = unit(quant) if ratio is None else None
+    ratio = ratio or (lambda rid, to_unit: U.ratio(u1, to_unit, basis(quant, rid)))
+    used = [(c, ratio(rid, to)) for k, (rid, c) in enumerate(zip(run_ids, cs))
+            if c is not None and dismissed != k + 1]
+    if not used or any(r is None for _c, r in used):
+        return None
+    total = sum(c for c, _r in used)
+    if total:
+        return mean * sum(c * r for c, r in used) / total
+    return mean * sum(r for _c, r in used) / len(used)

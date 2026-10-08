@@ -162,3 +162,20 @@ def test_quant_method_editor_in_the_panel(qtbot, tmp_path, monkeypatch):
     panel._chosen(panel.methods.findData("Foil"))
     assert ws.quant["method"]["spike_ul"] == 10.0
     assert panel.delete(confirm=False) and ws.quant["method"]["name"] == ""
+
+
+def test_mean_in_another_unit_uses_each_runs_amount():
+    q = _quant(sample_type="solid", amount=1.0, units=["mg/kg", "µg/L"])
+    q["method_samples"] = {"b": {"amount": 2.0}}
+    # A: 10 mg/kg of 1 g = 0.01 mg -> 1000 µg/L in 10 mL; B: 6 mg/kg of 2 g = 0.012 mg -> 1200 µg/L
+    assert EX.mean_in(q, ["a", "b"], [10.0, 6.0], 8.0, "µg/L") == pytest.approx(1100.0)
+    assert EX.mean_in(q, ["a", "b"], [10.0, 6.0], 6.0, "µg/L", dismissed=1) == pytest.approx(1200.0)
+    assert EX.mean_in(q, ["a"], [10.0], 10.0, "mg/g") == pytest.approx(0.01)
+    assert EX.mean_in(q, ["a", "b"], [10.0, 6.0], None, "µg/L") is None
+
+
+def test_edits_are_kept_per_unit_for_the_extraction_method():
+    from gcws.quant import duplicate_view as DV
+    assert DV.edits_key({"mode": "extraction"}, "mg/kg") == "extraction_edits:mg/kg"
+    assert DV.edits_key({"mode": "hs_screening"}, "µg/HS") == "hs_edits:µg/HS"
+    assert DV.edits_key({"mode": "nias_mgkg"}, "mg/kg") == "edits"

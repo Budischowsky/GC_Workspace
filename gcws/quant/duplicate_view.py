@@ -434,6 +434,17 @@ def is_open(row: dict, verdict: Verdict) -> bool:
     return verdict.level == "bad" and not row.get("decided")
 
 
+def edits_key(quant: dict, unit: str) -> str:
+    """Where a replicate group keeps the analyst's edits: per unit for HS and the extraction method (an
+    edited value belongs to its unit), ``edits`` for the NIAS modes."""
+    mode = (quant or {}).get("mode")
+    if mode == "hs_screening":
+        return "hs_edits:" + unit
+    if mode == "extraction":
+        return "extraction_edits:" + unit
+    return "edits"
+
+
 def rows_for_report(rows: list[dict], edits: dict, limit: float, reporting_limit: float, tol: float,
                     labels=("A", "B")):
     """``(combined rows to report, numeric overrides by row position)`` for a double determination."""
@@ -444,7 +455,7 @@ def rows_for_report(rows: list[dict], edits: dict, limit: float, reporting_limit
         if not r["report"]:
             continue
         if any(f in r["edited"] for f in NUMERIC_EDITS) or (r["report"] and not default_report(base)):
-            overrides[len(keep)] = {f: r.get(f) for f in NUMERIC_EDITS + ("reldiff", "comment")}
+            overrides[len(keep)] = {f: r.get(f) for f in NUMERIC_EDITS + ("reldiff", "comment", "dismissed")}
         row = dict(base)
         notes = [r.get("comment") or ""]
         if r.get("dismissed"):

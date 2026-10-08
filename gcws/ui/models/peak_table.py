@@ -112,11 +112,21 @@ COLUMNS: list[Column] = [
     Column("area_minus_blank", "Area − blank", _area_minus_blank, ",.0f", default=False,
            tip="Peak area minus the matching blank peak's area (peak-level blank check)"),
     Column("mg_dm2", "mg/dm²", lambda r, ws: r.quant.get("mg_dm2"), ".4f", default=False,
-           tip="NIAS: corrected area × mean ISTD factor (hover a value for its calculation)"),
+           tip="NIAS: corrected area × mean ISTD factor. Extraction (foil): substance mass ÷ sample area "
+               "(hover a value for its calculation)"),
     Column("ug_dm2", "µg/dm²", lambda r, ws: r.quant.get("ug_dm2"), ".4f", default=False,
-           tip="NIAS: mg/dm² × 1000. HS: HS amount divided by sample area; requires a positive area in dm²"),
+           tip="NIAS: mg/dm² × 1000. HS: HS amount divided by sample area; requires a positive area in dm². "
+               "Extraction (foil): µg substance ÷ sample area"),
+    Column("mg_m2", "mg/m²", lambda r, ws: r.quant.get("mg_m2"), ".4f", default=False,
+           tip="HS: µg/dm² ÷ 10 (mg per m² of sample area)"),
+    Column("mg_g", "mg/g", lambda r, ws: r.quant.get("mg_g"), ".6f", default=False,
+           tip="Extraction (solid): substance mass ÷ sample mass"),
+    Column("mg_kg", "mg/kg", lambda r, ws: r.quant.get("mg_kg"), ".4f", default=False,
+           tip="NIAS: the mg/kg of the mode. Extraction (solid): mg substance per kg sample"),
+    Column("ug_kg", "µg/kg", lambda r, ws: r.quant.get("ug_kg"), ".2f", default=False,
+           tip="Extraction (solid): µg substance per kg sample"),
     Column("ug_l", "µg/L", lambda r, ws: r.quant.get("ug_l"), ".2f", default=False,
-           tip="NIAS: substance mass per litre of extract (extract volume of the NIAS parameters); "
+           tip="NIAS and extraction: substance mass per litre of extract (the extract volume); "
                "hover a value for its calculation"),
     Column("mg_l", "mg/L", lambda r, ws: r.quant.get("mg_l"), ".4f", default=False, tip="NIAS: µg/L ÷ 1000"),
     Column("mg_ml", "mg/mL", lambda r, ws: r.quant.get("mg_ml"), ".6f", default=False,
@@ -124,7 +134,7 @@ COLUMNS: list[Column] = [
     Column("ug_hs", "µg/HS", lambda r, ws: r.quant.get("ug_hs"), ".4f", default=False,
            tip="HS amount per vial relative to the activated internal standards"),
     Column("ug_g", "µg/g", lambda r, ws: r.quant.get("ug_g"), ".4f", default=False,
-           tip="HS amount divided by sample mass; requires a positive mass in g"),
+           tip="HS and extraction (solid): substance amount divided by sample mass; requires a positive mass in g"),
     Column("conc", "Conc.", lambda r, ws: r.quant.get("conc"), ".4f",
            tip="Concentration in the unit of the quantification mode"),
     Column("sml", "SML", lambda r, ws: r.quant.get("sml", ""), numeric=False, default=False),
@@ -135,7 +145,7 @@ COLUMNS: list[Column] = [
 ]
 COLUMN_KEYS = [c.key for c in COLUMNS]
 #: concentration columns whose cells show their calculation as the tooltip
-CALC_KEYS = ("conc", "mg_dm2", "ug_dm2", "ug_l", "mg_l", "mg_ml")
+CALC_KEYS = ("conc", "mg_dm2", "ug_dm2", "ug_l", "mg_l", "mg_ml", "mg_g", "mg_kg", "ug_g", "ug_kg")
 
 
 class PeakTableModel(QAbstractTableModel):

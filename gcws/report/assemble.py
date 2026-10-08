@@ -99,6 +99,7 @@ def build_job(ws, kind: str, group: dict, target: Path, *, members: Optional[lis
               samples: Optional[list] = None, preview: bool = False, keep_middle: bool = False,
               record_seen: Optional[bool] = None, batch_workbook: bool = True) -> RS.ReportJob:
     """The ``ReportJob`` of ``group`` (after :func:`prepare`) writing ``target``."""
+    from gcws.quant import duplicate_view as DV
     from gcws.quant import migration as MG
     from gcws.quant.nias_bridge import make_settings
     if members is None or samples is None:
@@ -123,6 +124,6 @@ def build_job(ws, kind: str, group: dict, target: Path, *, members: Optional[lis
         keep_middle=target.with_name(target.stem + "_intermediate.xlsx") if keep_middle and not preview else None,
         sample_key=stem, record_seen=(not preview) if record_seen is None else record_seen,
         ri_options={k: bool((ws.quant.get("ri") or {}).get(k)) for k in ("report_ri", "replace_rt")},
-        edits=dict(group.get("hs_edits:" + ws.quant_unit() if hs else "edits") or {}),
+        edits=dict(group.get(DV.edits_key(ws.quant, ws.quant_unit())) or {}),
         notes=[] if hs and not ws.quant.get("hs", {}).get("blank_correction", True) else blank_warnings(ws, members),
         features=None if hs else feature_table(ws, members, group))
