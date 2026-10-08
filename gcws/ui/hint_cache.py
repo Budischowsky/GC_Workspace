@@ -49,10 +49,17 @@ class HintCache(QObject):
         self._hints = {k: v for k, v in self._hints.items() if k[0] != run_id}
         self._queue = [k for k in self._queue if k[0] != run_id]
 
+    def known(self, st, signal_key, peak) -> tuple[str, str] | None:
+        """The hint when it is known already (never queues one)."""
+        return self._hints.get(self._key(st.id, signal_key, peak)) if st is not None else None
+
+    def store(self, st, signal_key, peak, hint: tuple[str, str]) -> None:
+        """A hint computed elsewhere (e.g. for a report)."""
+        if st is not None:
+            self._hints[self._key(st.id, signal_key, peak)] = hint
+
     def _work(self):
-        from gcws.ms.interpret import Context, interpret
-        from gcws.ms.spectra import extract
-        from gcws.ms.assignment import override_for
+        from gcws.quant.peak_values import compute_hint
         done = set()
         for _ in range(BATCH):
             if not self._queue:
@@ -64,23 +71,9 @@ class HintCache(QObject):
             peak = next((p for p in res.peaks if self._key(rid, skey, p) == k), None) if res is not None else None
             if peak is None or st.run.ms is None:
                 continue
-            try:
-                spec = extract(st.run, peak, skey, st.delay_value, "average_bg",
-                               override=override_for(st, skey, peak))
-                ms = st.run.ms
-                r = interpret(spec.mz, spec.ab, Context(mass_range=ms.mass_range(), min_abundance=ms.min_abundance()))
-            except Exception:  # noqa: BLE001 - a hint is optional
-                self._hints[k] = ("", "")
-                continue
-            if r.classes:
-                c = r.classes[0]
-                text = f"{c.label} ({c.level})"
-            elif r.compounds:
-                text = f"like {r.compounds[0].name}"
-            else:
-                text = "-"
-            self._hints[k] = (text, r.summary)
-            done.add(rid)
+            self._hints[k] = compute_hint(st, skey, peak)
+            if self._hints[k] != ("", ""):
+                done.add(rid)
         if not self._queue:
             self._timer.stop()
         for rid in done:

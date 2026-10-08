@@ -7,16 +7,9 @@ from typing import Any, Callable, Optional
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QBrush, QColor, QFont
 
-from gcws.core.keys import is_fid
+from gcws.quant import peak_values as PV
+from gcws.quant.peak_values import Row  # noqa: F401 (re-export)
 from gcws.ui import theme
-
-
-@dataclass
-class Row:
-    index: int
-    peak: Any
-    ident: Any
-    quant: dict
 
 
 def _f(v, fmt):
@@ -44,26 +37,10 @@ class Column:
         return _f(v, self.fmt) if self.fmt else ("" if v is None else str(v))
 
 
-def _ms_rt(r: Row, ws):
-    st = ws.active
-    if st is None or not is_fid(ws.signal_key):
-        return None
-    component = r.peak.extra.get("deconv_component")
-    return component["rt"] if component else r.peak.apex_rt - st.delay_value
-
-
-def _bm(r: Row, ws):
-    f = getattr(ws, "blank_matches", None)
-    if f is None or ws.active is None:
-        return None
-    return f(ws.active_id).get(r.index)
-
-
-def _area_minus_blank(r: Row, ws):
-    m = _bm(r, ws)
-    if m is None:
-        return None
-    return max(0.0, r.peak.area - ws.blank_options().scale * m.blank_area)
+def _v(key: str):
+    """The column's getter for the active run (``peak_values`` has them for any run)."""
+    get = PV.VALUES[key]
+    return lambda r, ws: get(r, ws, getattr(ws, "active_id", None), getattr(ws, "signal_key", None))
 
 
 def _hint(r: Row, ws):
@@ -75,71 +52,71 @@ def _hint(r: Row, ws):
 
 
 COLUMNS: list[Column] = [
-    Column("num", "#", lambda r, ws: r.peak.number, "d"),
-    Column("rt", "RT [min]", lambda r, ws: r.peak.apex_rt, ".3f"),
-    Column("ms_rt", "RT MS [min]", _ms_rt, ".3f",
+    Column("num", "#", _v("num"), "d"),
+    Column("rt", "RT [min]", _v("rt"), ".3f"),
+    Column("ms_rt", "RT MS [min]", _v("ms_rt"), ".3f",
            tip="Assigned component MS time, otherwise delay-corrected peak apex", default=False),
-    Column("type", "Type", lambda r, ws: r.peak.type_code, numeric=False,
+    Column("type", "Type", _v("type"), numeric=False,
            tip="B baseline, V valley, P penetration, H hold; S solvent, T tangent, X exp. skim, "
                "F/R shoulder, N negative, M manual, + area sum"),
-    Column("start", "Start", lambda r, ws: r.peak.start, ".3f", default=False),
-    Column("end", "End", lambda r, ws: r.peak.end, ".3f", default=False),
-    Column("area", "Area", lambda r, ws: r.peak.area, ",.0f"),
-    Column("area_pct", "Area %", lambda r, ws: r.peak.area_pct, ".3f"),
-    Column("height", "Height", lambda r, ws: r.peak.height, ",.0f"),
-    Column("w50", "W½ [s]", lambda r, ws: r.peak.width50 * 60 if r.peak.width50 else None, ".2f", default=False),
-    Column("sym", "Symmetry", lambda r, ws: r.peak.symmetry, ".2f", default=False, tip="USP tailing factor"),
-    Column("sn", "S/N", lambda r, ws: r.peak.sn, ".0f", default=False),
-    Column("name", "Name", lambda r, ws: r.ident.name if r.ident else "", editable=True, numeric=False),
-    Column("cas", "CAS", lambda r, ws: r.ident.cas if r.ident else "", editable=True, numeric=False),
-    Column("score", "Score", lambda r, ws: r.ident.score if r.ident else None, ".0f",
+    Column("start", "Start", _v("start"), ".3f", default=False),
+    Column("end", "End", _v("end"), ".3f", default=False),
+    Column("area", "Area", _v("area"), ",.0f"),
+    Column("area_pct", "Area %", _v("area_pct"), ".3f"),
+    Column("height", "Height", _v("height"), ",.0f"),
+    Column("w50", "W½ [s]", _v("w50"), ".2f", default=False),
+    Column("sym", "Symmetry", _v("sym"), ".2f", default=False, tip="USP tailing factor"),
+    Column("sn", "S/N", _v("sn"), ".0f", default=False),
+    Column("name", "Name", _v("name"), editable=True, numeric=False),
+    Column("cas", "CAS", _v("cas"), editable=True, numeric=False),
+    Column("score", "Score", _v("score"), ".0f",
            tip="Library match score of the chosen hit"),
-    Column("status", "ID status", lambda r, ws: r.ident.status if r.ident else "", numeric=False),
-    Column("library", "Library", lambda r, ws: r.ident.library if r.ident else "", numeric=False, default=False),
-    Column("ri", "RI", lambda r, ws: r.quant.get("ri"), ".0f", default=False),
-    Column("rrt", "RRT", lambda r, ws: r.quant.get("rrt"), ".4f", default=False,
+    Column("status", "ID status", _v("status"), numeric=False),
+    Column("library", "Library", _v("library"), numeric=False, default=False),
+    Column("ri", "RI", _v("ri"), ".0f", default=False),
+    Column("rrt", "RRT", _v("rrt"), ".4f", default=False,
            tip="RT / measured RT of the selected NIAS reference ISTD, on this detector's time axis"),
-    Column("istd", "ISTD", lambda r, ws: r.quant.get("istd", ""), numeric=False),
-    Column("blank_area", "Blank area", lambda r, ws: r.quant.get("blank_area"), ",.0f", default=False,
+    Column("istd", "ISTD", _v("istd"), numeric=False),
+    Column("blank_area", "Blank area", _v("blank_area"), ",.0f", default=False,
            tip="NIAS quantification: blank area subtracted in the mg/kg calculation"),
-    Column("corr_area", "Corr. area", lambda r, ws: r.quant.get("corr_area"), ",.0f",
+    Column("corr_area", "Corr. area", _v("corr_area"), ",.0f",
            tip="NIAS quantification: area after its blank correction"),
-    Column("in_blank", "In blank", lambda r, ws: _bm(r, ws).text if _bm(r, ws) else "", numeric=False,
+    Column("in_blank", "In blank", _v("in_blank"), numeric=False,
            tip="Peak also found in the assigned blank (aligned RT, and similar spectrum with MS data): "
                "blank level = sample area below the ratio limit x blank area"),
-    Column("blank_ratio", "Blank ratio", lambda r, ws: _bm(r, ws).ratio if _bm(r, ws) else None, ".1f",
+    Column("blank_ratio", "Blank ratio", _v("blank_ratio"), ".1f",
            default=False, tip="Sample area / blank area of the matching blank peak"),
-    Column("area_minus_blank", "Area − blank", _area_minus_blank, ",.0f", default=False,
+    Column("area_minus_blank", "Area − blank", _v("area_minus_blank"), ",.0f", default=False,
            tip="Peak area minus the matching blank peak's area (peak-level blank check)"),
-    Column("mg_dm2", "mg/dm²", lambda r, ws: r.quant.get("mg_dm2"), ".4f", default=False,
+    Column("mg_dm2", "mg/dm²", _v("mg_dm2"), ".4f", default=False,
            tip="NIAS: corrected area × mean ISTD factor. Extraction (foil): substance mass ÷ sample area "
                "(hover a value for its calculation)"),
-    Column("ug_dm2", "µg/dm²", lambda r, ws: r.quant.get("ug_dm2"), ".4f", default=False,
+    Column("ug_dm2", "µg/dm²", _v("ug_dm2"), ".4f", default=False,
            tip="NIAS: mg/dm² × 1000. HS: HS amount divided by sample area; requires a positive area in dm². "
                "Extraction (foil): µg substance ÷ sample area"),
-    Column("mg_m2", "mg/m²", lambda r, ws: r.quant.get("mg_m2"), ".4f", default=False,
+    Column("mg_m2", "mg/m²", _v("mg_m2"), ".4f", default=False,
            tip="HS: µg/dm² ÷ 10 (mg per m² of sample area)"),
-    Column("mg_g", "mg/g", lambda r, ws: r.quant.get("mg_g"), ".6f", default=False,
+    Column("mg_g", "mg/g", _v("mg_g"), ".6f", default=False,
            tip="Extraction (solid): substance mass ÷ sample mass"),
-    Column("mg_kg", "mg/kg", lambda r, ws: r.quant.get("mg_kg"), ".4f", default=False,
+    Column("mg_kg", "mg/kg", _v("mg_kg"), ".4f", default=False,
            tip="NIAS: the mg/kg of the mode. Extraction (solid): mg substance per kg sample"),
-    Column("ug_kg", "µg/kg", lambda r, ws: r.quant.get("ug_kg"), ".2f", default=False,
+    Column("ug_kg", "µg/kg", _v("ug_kg"), ".2f", default=False,
            tip="Extraction (solid): µg substance per kg sample"),
-    Column("ug_l", "µg/L", lambda r, ws: r.quant.get("ug_l"), ".2f", default=False,
+    Column("ug_l", "µg/L", _v("ug_l"), ".2f", default=False,
            tip="NIAS and extraction: substance mass per litre of extract (the extract volume); "
                "hover a value for its calculation"),
-    Column("mg_l", "mg/L", lambda r, ws: r.quant.get("mg_l"), ".4f", default=False, tip="NIAS: µg/L ÷ 1000"),
-    Column("mg_ml", "mg/mL", lambda r, ws: r.quant.get("mg_ml"), ".6f", default=False,
+    Column("mg_l", "mg/L", _v("mg_l"), ".4f", default=False, tip="NIAS: µg/L ÷ 1000"),
+    Column("mg_ml", "mg/mL", _v("mg_ml"), ".6f", default=False,
            tip="NIAS: µg/L ÷ 1 000 000"),
-    Column("ug_hs", "µg/HS", lambda r, ws: r.quant.get("ug_hs"), ".4f", default=False,
+    Column("ug_hs", "µg/HS", _v("ug_hs"), ".4f", default=False,
            tip="HS amount per vial relative to the activated internal standards"),
-    Column("ug_g", "µg/g", lambda r, ws: r.quant.get("ug_g"), ".4f", default=False,
+    Column("ug_g", "µg/g", _v("ug_g"), ".4f", default=False,
            tip="HS and extraction (solid): substance amount divided by sample mass; requires a positive mass in g"),
-    Column("conc", "Conc.", lambda r, ws: r.quant.get("conc"), ".4f",
+    Column("conc", "Conc.", _v("conc"), ".4f",
            tip="Concentration in the unit of the quantification mode"),
-    Column("sml", "SML", lambda r, ws: r.quant.get("sml", ""), numeric=False, default=False),
-    Column("qstatus", "Status", lambda r, ws: r.quant.get("status", ""), numeric=False),
-    Column("origin", "Integration", lambda r, ws: r.peak.origin, numeric=False, default=False),
+    Column("sml", "SML", _v("sml"), numeric=False, default=False),
+    Column("qstatus", "Status", _v("qstatus"), numeric=False),
+    Column("origin", "Integration", _v("origin"), numeric=False, default=False),
     Column("class_hint", "Class hint", _hint, numeric=False, default=False,
            tip="Substance-class clue from the MS interpreter (spectrum of the peak); hover for details"),
 ]

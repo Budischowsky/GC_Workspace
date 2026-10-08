@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from gcws.core.keys import is_fid
+from gcws.quant.peak_values import rows_for  # noqa: F401 (re-export)
 from gcws.ui.models.peak_table import COLUMN_KEYS, COLUMNS, Row
 
 #: columns whose value is computed for the *active* run only; the text filter skips them elsewhere
@@ -70,17 +71,6 @@ def value_predicate(state: FilterState, ws) -> Optional[Callable[[Row], bool]]:
         except (TypeError, ValueError):
             return False
     return keep
-
-
-def rows_for(ws, run_id: str, key: str) -> list[Row]:
-    """The table rows of one run and signal, built like ``PeakTableModel.reload``."""
-    st = ws.runs.get(run_id)
-    res = ws.result(run_id, key) if st is not None else None
-    if res is None:
-        return []
-    idents, _ = st.ident_set(key).bind(res.peaks)
-    quant = ws.quant_rows(run_id, key) if hasattr(ws, "quant_rows") else {}
-    return [Row(i, p, idents.get(i), quant.get(i, {})) for i, p in enumerate(res.peaks)]
 
 
 def visible_indices(ws, run_id: str, key: str, state: FilterState) -> set[int]:
