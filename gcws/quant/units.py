@@ -20,6 +20,9 @@ UNITS = {
     "µg/dm²": ("ug_dm2", "area_dm2", 1e3),
     "mg/m²": ("mg_m2", "area_dm2", 100.0),
 }
+#: decimals of each unit in the reports and tables
+DECIMALS = {"mg/mL": 6, "µg/L": 2, "mg/g": 6, "mg/kg": 4, "µg/g": 4, "µg/kg": 2, "mg/dm²": 4, "µg/dm²": 3,
+            "mg/m²": 4, "µg/HS": 4}
 #: what each basis is called when it is missing
 BASIS_LABELS = {"volume_ml": "extract volume (mL)", "mass_g": "sample mass (g)", "area_dm2": "sample area (dm²)"}
 SAMPLE_TYPES = {"solid": "Solid (g)", "foil": "Foil (dm²)"}

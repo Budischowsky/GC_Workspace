@@ -187,9 +187,9 @@ class PeakTable(QWidget):
         self.reload()
 
     def _preview(self):
-        """The report that fits the quantification (HS-Screening on the TIC, else NIAS), as a preview."""
-        from gcws.quant.service import quant_detector
-        self.reportRequested.emit("hs_screening" if quant_detector(self.ws.quant) == "TIC" else "nias", True)
+        """The report that fits the quantification mode (HS-Screening, Quantification or NIAS), as a preview."""
+        from gcws.report.service import default_kind
+        self.reportRequested.emit(default_kind(self.ws.quant), True)
 
     # -- data ----------------------------------------------------------------
 

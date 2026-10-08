@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QFileDialog,
 from gcws.core.model import FID
 from gcws.quant import duplicate_view as DV
 from gcws.quant import service as QS
+from gcws.report import service as RS
 from gcws.ui import theme, workers
 from gcws.ui.icons import color_chip
 from gcws.ui.widgets.cell_marks import EDITED_ROLE, LEVEL_ROLE, CheckDelegate, DiffGaugeDelegate, EditedDelegate
@@ -277,7 +278,7 @@ class DuplicatePage(QWidget):
         from gcws.ui.widgets.report_button import report_button
         buttons = QHBoxLayout()
         self.b_report = report_button(
-            self, lambda: self._report("hs_screening" if self.quant_signal() == "TIC" else "nias", preview=True),
+            self, lambda: self._report(RS.default_kind(self.ws.quant), preview=True),
             lambda kind: self._report(kind), lambda: self.export())
         buttons.addWidget(self.b_report)
         buttons.addStretch(1)

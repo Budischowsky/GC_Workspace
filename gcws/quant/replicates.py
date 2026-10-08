@@ -20,6 +20,8 @@ def engine_peaks(sample, value: Optional[Callable] = None) -> list[dict]:
         from gcws.quant.hs import engine_peaks as hs_peaks
         return hs_peaks(sample, value)
     import gc_fid
+    if value is None and (getattr(sample, "meta", None) or {}).get("extraction") is not None:
+        value = lambda row: row.derived.get("extraction_conc")         # extraction: Conc. 1 of the method
     out = []
     for row in gc_fid.report_rows(sample):
         d = gc_fid._as_engine_peak(row)

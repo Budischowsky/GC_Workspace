@@ -20,11 +20,26 @@ from pathlib import Path
 from typing import Callable, Optional
 
 KINDS = {"nias": "NIAS Report", "fingerprint": "Fingerprint Report",
-         "total_extraction": "Total Extraction Report", "hs_screening": "HS-Screening Report"}
+         "total_extraction": "Total Extraction Report", "hs_screening": "HS-Screening Report",
+         "quant": "Quantification Report"}
 SUFFIXES = {"nias": "_NIAS_Report", "fingerprint": "_Fingerprint_Report",
-            "total_extraction": "_Total_Extraction_Report", "hs_screening": "_HS_Screening_Report"}
+            "total_extraction": "_Total_Extraction_Report", "hs_screening": "_HS_Screening_Report",
+            "quant": "_Quantification_Report"}
 SEEN_TYPES = {"nias": "NIAS", "fingerprint": "Fingerprint", "total_extraction": "Total extraction",
-              "hs_screening": "HS-Screening"}
+              "hs_screening": "HS-Screening", "quant": "Quantification"}
+#: quantification modes with their own report (every other mode: the NIAS, Fingerprint and Total extraction reports)
+MODE_KINDS = {"hs_screening": "hs_screening", "extraction": "quant"}
+
+
+def default_kind(quant: dict) -> str:
+    """The report that fits the quantification mode: HS-Screening, Quantification (extraction method) or NIAS."""
+    return MODE_KINDS.get((quant or {}).get("mode"), "nias")
+
+
+def kind_fits(kind: str, quant: dict) -> bool:
+    """Whether a ``kind`` report can be made in the quantification mode of ``quant``."""
+    own = MODE_KINDS.get((quant or {}).get("mode"))
+    return kind == own if own else kind not in MODE_KINDS.values()
 
 
 @dataclass
@@ -163,6 +178,9 @@ def generate(job: ReportJob, progress: Callable[[str], None] = lambda s: None) -
     if job.kind == "hs_screening":
         from gcws.report.hs import generate as generate_hs
         return generate_hs(job, progress)
+    if job.kind == "quant":
+        from gcws.report.quant import generate as generate_quant
+        return generate_quant(job, progress)
     if any(getattr(s, "mode", None) == "hs_screening" for s in job.samples):
         raise ValueError("HS samples require the HS-Screening report")
     import gc_export

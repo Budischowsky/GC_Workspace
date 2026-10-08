@@ -133,6 +133,8 @@ def rows(sample, quant: dict, run_id: str, conc_units: dict) -> tuple[dict, dict
                 calc[k] = U.calc_text(u, mg, b) if mg is not None else (problem or "No corrected area")
         d["amount_mg"] = mg
         d["conc"] = U.convert(mg, u1, b)
+        # the replicate merge and the report read the result off the sample's own rows
+        row.derived["extraction_mg"], row.derived["extraction_conc"] = mg, d["conc"]
         if mg is not None:
             calc["conc"] = f"mass = corrected area × factor = {corr:.6g} × {f:.6g} = {mg:.6g} mg; " + \
                 U.calc_text(u1, mg, b)

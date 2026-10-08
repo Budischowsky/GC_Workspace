@@ -9,7 +9,8 @@ from gcws.ui import theme
 
 #: report kind -> menu text
 REPORTS = {"nias": "NIAS report...", "fingerprint": "Fingerprint report...",
-           "total_extraction": "Total extraction report...", "hs_screening": "HS-Screening report..."}
+           "total_extraction": "Total extraction report...", "hs_screening": "HS-Screening report...",
+           "quant": "Quantification report..."}
 
 
 def report_button(parent, preview: Callable[[], None], report: Callable[[str], None],

@@ -34,9 +34,10 @@ def prepare(ws, kind: str, group: Optional[dict]) -> tuple[list[str], list]:
 
     Recomputes the quantification first."""
     hs = ws.quant.get("mode") == "hs_screening"
-    if hs != (kind == "hs_screening"):
-        raise ReportNotPossible("mode", "Select HS-Screening mode and its report together. For other reports, "
-                                "select the corresponding quantification mode.", "information")
+    if not RS.kind_fits(kind, ws.quant):
+        raise ReportNotPossible("mode", "Select HS-Screening mode and its report together, and Extraction (quant "
+                                "method) with the Quantification report. For other reports, select the "
+                                "corresponding quantification mode.", "information")
     if group is None or not group.get("members"):
         raise ReportNotPossible("no_group", "Choose a replicate group (Replicates panel) or activate a "
                                 "sample chromatogram.", "information")
@@ -52,6 +53,16 @@ def prepare(ws, kind: str, group: Optional[dict]) -> tuple[list[str], list]:
         errs = [ws.quant_result.errors.get(m, "") for m in members]
         raise ReportNotPossible("no_samples", "Every determination needs role Sample and an "
                                 + quant_detector(ws.quant) + " integration.\n" + "\n".join(e for e in errs if e))
+    if kind == "quant":
+        problems = []
+        for m, s in zip(members, samples):
+            info = (s.meta or {}).get("extraction") or {}
+            why = info.get("problem") or info.get("missing")
+            if why or not info.get("factor"):
+                problems.append(f"{ws.runs[m].name}: {why or 'no standard factor'}")
+        if problems:
+            raise ReportNotPossible("no_factor", "The Quantification report needs a standard factor and the "
+                                    "sample amount of every determination:\n" + "\n".join(problems))
     if kind == "nias" and not any(s.mean_factor for s in samples):
         raise ReportNotPossible("no_factor", "No ISTD factor: identify or bind the internal standards first.")
     if kind == "nias":

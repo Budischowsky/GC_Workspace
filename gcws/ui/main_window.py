@@ -1739,14 +1739,13 @@ class MainWindow(QMainWindow):
         from gcws.automation import pipeline as PL
         from gcws.automation import store
         from gcws.automation.workflow import new_id
-        from gcws.quant.service import quant_detector
         from gcws.report import assemble as AS
         from gcws.report import service as RS
         members = [m for m in g["members"] if m in self.ws.runs]
         if len(members) != 2:
             return False
         name, hide = g["name"], None
-        kind = "hs_screening" if quant_detector(self.ws.quant) == "TIC" else "nias"
+        kind = RS.default_kind(self.ws.quant)
         try:
             mem, samples = AS.prepare(self.ws, kind, g)
         except AS.ReportNotPossible as exc:
@@ -2156,9 +2155,8 @@ class MainWindow(QMainWindow):
         if st is None:
             QMessageBox.information(self, "Batch report", "Load the batch and select one of its chromatograms.")
             return
-        hs = self.ws.quant.get("mode") == "hs_screening"
         if kind is None:
-            kinds = [k for k in RS.KINDS if (k == "hs_screening") == hs]
+            kinds = [k for k in RS.KINDS if RS.kind_fits(k, self.ws.quant)]
             labels = [RS.KINDS[k] for k in kinds]
             label, ok = QInputDialog.getItem(self, "Batch report", "Report of every sample:", labels, 0, False)
             if not ok:
