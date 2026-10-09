@@ -1,7 +1,8 @@
 """python -m gcws.learn check <root> [--out DIR]
 python -m gcws.learn baseline <root> [--out DIR] [--method NIAS] [--limit N] [--force]
 python -m gcws.learn fit {detection,background,report,naming} <root> [--out DIR] [--method NIAS]
-python -m gcws.learn apply-families <proposal.json> --method NAME"""
+python -m gcws.learn apply-families <proposal.json> --method NAME
+python -m gcws.learn review <root> [--out DIR] [--method NIAS]"""
 from __future__ import annotations
 
 import argparse
@@ -40,6 +41,10 @@ def main(argv=None) -> int:
     app = sub.add_parser("apply-families", help="write a naming proposal's family table into one method")
     app.add_argument("proposal", type=Path)
     app.add_argument("--method", required=True, help="the processing method to change (only this one)")
+    rev = sub.add_parser("review", help="list every program/analyst disagreement with its evidence")
+    rev.add_argument("root", type=Path)
+    rev.add_argument("--out", type=Path, default=None, help="output folder (default: <data>/learn)")
+    rev.add_argument("--method", default="NIAS", help="processing method name (default: NIAS)")
     args = parser.parse_args(argv)
     from gcws import paths
     out = getattr(args, "out", None) or paths.DATA / "learn"
@@ -58,6 +63,12 @@ def main(argv=None) -> int:
         from gcws.learn.propose import apply_families_to_method
         path = apply_families_to_method(args.proposal, args.method)
         print(f"learned families written into method '{args.method}' -> {path}")
+    elif args.command == "review":
+        from gcws.learn import review
+        _ensure_app()
+        items = review.build_items(args.root, out, args.method)
+        md = review.write_review(items, out)
+        print(f"{len(items)} disagreements -> {md}")
     elif args.command == "fit":
         from gcws.learn import propose
         _ensure_app()

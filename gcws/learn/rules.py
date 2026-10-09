@@ -45,10 +45,15 @@ class CachedRun:
     pairs: list[Pair]
     footnotes: list[str] = field(default_factory=list)   # the analyst's 'Sum of …' wording
     client_report: bool = True                           # the workbook has a client report that is not a draft
+    run_dir: str = ""
+    analyst: str = ""
+    workbook: str = ""
+    verdicts: dict = field(default_factory=dict)         # the user's review verdicts for this run
 
 
 def worksheet_agreement(run: CachedRun, params: dict) -> Optional[float]:
-    return score_run(run.items, run.prog, run.pairs, blank_ratio_limit=params["ratio_limit"]).worksheet_agreement
+    return score_run(run.items, run.prog, run.pairs, blank_ratio_limit=params["ratio_limit"],
+                     verdicts=run.verdicts).worksheet_agreement
 
 
 def report_agreement(run: CachedRun, params: dict) -> Optional[float]:

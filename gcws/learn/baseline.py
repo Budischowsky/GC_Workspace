@@ -11,6 +11,7 @@ from typing import Callable, Optional
 
 from gcws.learn.corpus import scan
 from gcws.learn.match import human_items, match_run
+from gcws.learn.review import run_verdicts
 from gcws.learn.score import DISAGREEMENTS, score_run
 
 #: the NIAS reporting limit (report footnote: peaks >= 10 ppb), in mg/kg food
@@ -49,7 +50,8 @@ def run_baseline(root: Path, out_dir: Path, method_name: str = "NIAS", *, force:
         row.update(state=prog.state, reason=prog.reason)
         if prog.state != "failed":
             items = human_items(ev)
-            score = score_run(items, prog, match_run(ev, prog, items=items))
+            score = score_run(items, prog, match_run(ev, prog, items=items),
+                              verdicts=run_verdicts(out_dir, row["batch"], run_name, entry.analyst))
             if not ev.report and nothing_above_limit(ev):
                 row["notes"].append("nothing above the reporting limit")
             elif not ev.report:     # client report not made in this workbook: no client scores

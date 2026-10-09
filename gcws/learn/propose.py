@@ -74,6 +74,7 @@ def load_cached_runs(root: Path, out_dir: Path, method_name: str, process_fn=Non
     from gcws.learn.match import human_items, match_run
     from gcws.learn.rules import CachedRun
     from gcws.learn.runner import migration_from_header, process
+    from gcws.learn.review import run_verdicts
     from gcws.learn.workbook import parse_workbook, report_is_draft
     process_fn = process_fn or process
     batches: dict = {}
@@ -93,7 +94,10 @@ def load_cached_runs(root: Path, out_dir: Path, method_name: str, process_fn=Non
         sums = [r.label for r in ev.report if r.label.casefold().startswith("sum of")]
         run = CachedRun(Path(entry.batch_dir).name, items, prog, match_run(ev, prog, items=items),
                         footnotes=list(ev.footnotes) + sums,
-                        client_report=bool(ev.report) and not report_is_draft(ev))
+                        client_report=bool(ev.report) and not report_is_draft(ev), run_dir=entry.run_dir,
+                        analyst=entry.analyst, workbook=entry.workbook,
+                        verdicts=run_verdicts(out_dir, Path(entry.batch_dir).name, Path(entry.run_dir).name,
+                                              entry.analyst))
         batches.setdefault(run.batch, []).append(run)
     return batches
 
@@ -119,14 +123,14 @@ def _fit_naming(root: Path, out_dir: Path, method_name: str, process_fn, progres
             if not r.client_report or all(c is None for c in peak_conc(r.prog)):
                 continue                           # the same runs for every candidate
             if params.get("as_today"):            # the program's real client report
-                scores.append(score_run(r.items, r.prog, r.pairs).client_f1)
+                scores.append(score_run(r.items, r.prog, r.pairs, verdicts=r.verdicts).client_f1)
                 continue
             lines = simulate_report(r.prog, params, families or [])
             if lines is None:
                 continue
             prog = copy.copy(r.prog)
             prog.report_lines = lines
-            scores.append(score_run(r.items, prog, r.pairs).client_f1)
+            scores.append(score_run(r.items, prog, r.pairs, verdicts=r.verdicts).client_f1)
         return _mean(scores)
 
     space = {**NAMING_SPACE, "family_min_share": [0.6, 0.5, 0.75]}
