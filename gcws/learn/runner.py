@@ -3,7 +3,16 @@
 of its FID peaks."""
 from __future__ import annotations
 
-from typing import Any
+import hashlib
+import json
+import os
+import re
+from dataclasses import asdict, dataclass, field
+from pathlib import Path, PureWindowsPath
+from typing import Any, Optional
+
+from gcws.learn.corpus import CorpusEntry
+from gcws.learn.model import Header
 
 #: per-peak values taken from the Peaks panel's getters (gcws.quant.peak_values.VALUES)
 PEAK_KEYS = ("num", "rt", "ms_rt", "start", "end", "area", "height", "w50", "sym", "sn", "name", "cas", "score",
@@ -42,3 +51,89 @@ def collect_peaks(ws, run_id: str) -> list[dict]:
 def collect(ws, members: list[str]) -> dict:
     """``run_job`` inspect hook: the evidence of the single evaluated run."""
     return {"peaks": collect_peaks(ws, members[0])}
+
+
+@dataclass
+class ProgramResult:
+    run_dir: str
+    method: str
+    state: str
+    reason: str = ""
+    peaks: list[dict] = field(default_factory=list)
+    reported: list[dict] = field(default_factory=list)      # the NIAS report's reported rows {"name","cas","rt"}
+    rows: list[dict] = field(default_factory=list)          # run_job evidence rows (slim combined rows)
+    warnings: list[str] = field(default_factory=list)
+    timings: dict = field(default_factory=dict)
+
+
+def run_key(run_dir: str, method: str) -> str:
+    name = PureWindowsPath(run_dir).name
+    digest = hashlib.sha1(f"{run_dir}|{method}".encode("utf-8")).hexdigest()[:8]
+    return re.sub(r"_+", "_", re.sub(r"[^A-Za-z0-9_.-]", "_", f"{name}-{method}"))[:100] + f"-{digest}"
+
+
+def migration_from_header(h: Header) -> dict:
+    """The migration conditions the analyst entered (worksheet header and 'Berechnungen'), in the form of a
+    processing method's migration section. Inputs of the evaluation, not decisions."""
+    from gcws.quant.migration import _fmt, complete
+    m: dict = {"analyst": h.evaluator, "simulant": h.simulant,
+               "temperature": f"{_fmt(h.temperature)} °C" if h.temperature is not None else h.temperature_text,
+               "duration": h.duration}
+    for key, value in (("cell_area_dm2", h.cell_area_dm2), ("occupancy_factor", h.occupancy_factor),
+                       ("volume_ml", h.volume), ("ov_ratio", h.sv_ratio)):
+        if value is not None:
+            m[key] = value
+    return complete(m)
+
+
+def build_spec(entry: CorpusEntry, method: dict, out_dir: Path, migration: Optional[dict] = None) -> dict:
+    """The automation job for one evaluated run: a single determination with the blanks of its batch, the
+    library search, ISTD detection and the NIAS report, as the user's automation workflow runs it.
+    ``migration`` (the analyst's conditions) goes into a copy of the method."""
+    import copy
+    from gcws.io.sequence import BLANK_ISTD, classify_role
+    if migration is not None:
+        method = copy.deepcopy(method)
+        method.setdefault("sections", {})["migration"] = dict(migration)
+    run = Path(entry.run_dir).name
+    blanks = {"blank": [b for b in entry.blanks if classify_role(b) != BLANK_ISTD],
+              "blank_istd": [b for b in entry.blanks if classify_role(b) == BLANK_ISTD]}
+    return {"job_id": "learn", "revision": 1, "mode": "full", "method": method, "batch_folder": entry.batch_dir,
+            "group": {"key": run, "name": run[:-2] if run.lower().endswith(".d") else run, "members": [run]},
+            "blanks": blanks, "override": {"allow_no_blank": True},
+            "reports": [{"node": "learn", "kind": "nias", "formats": ["xlsx"]}], "rules": None,
+            "auto_accept": True, "has_review": True, "out_dir": str(out_dir), "search": True, "istd_detect": True,
+            "min_confidence": "high", "require_blank": "auto"}
+
+
+def load_program(path: Path) -> ProgramResult:
+    return ProgramResult(**json.loads(Path(path).read_text(encoding="utf-8")))
+
+
+def process(entry: CorpusEntry, out_root: Path, method_name: str = "NIAS", *, method: Optional[dict] = None,
+            migration: Optional[dict] = None, force: bool = False, identify=None) -> ProgramResult:
+    """Run (or read from the cache) the production job for ``entry``'s run. ``method`` replaces the stored
+    processing method ``method_name`` (tests). A job that raises is a failed result, not an exception."""
+    from gcws.automation import pipeline as PL
+    if method is None:
+        from gcws.core import proc_method as PM
+        method = PM.load(method_name)
+    name = method.get("name") or method_name
+    folder = Path(out_root) / "runs" / run_key(entry.run_dir, name)
+    cache = folder / "program.json"
+    if cache.is_file() and not force:
+        return load_program(cache)
+    try:
+        res = PL.run_job(build_spec(entry, method, folder / "job", migration), identify=identify, inspect=collect)
+        ev = res.evidence or {}
+        prog = ProgramResult(run_dir=entry.run_dir, method=name, state=res.state, reason=res.reason,
+                             peaks=(ev.get("inspect") or {}).get("peaks", []),
+                             reported=((ev.get("reported") or {}).get("learn") or {}).get("rows", []),
+                             rows=ev.get("rows", []), warnings=list(res.warnings), timings=dict(res.timings))
+    except Exception as exc:  # noqa: BLE001 - one run failing must not stop a corpus run
+        prog = ProgramResult(run_dir=entry.run_dir, method=name, state="failed", reason=f"{type(exc).__name__}: {exc}")
+    folder.mkdir(parents=True, exist_ok=True)
+    tmp = cache.with_suffix(".tmp")
+    tmp.write_text(json.dumps(asdict(prog), ensure_ascii=False, default=str), encoding="utf-8")
+    os.replace(tmp, cache)
+    return prog

@@ -392,6 +392,20 @@ def parse_report(values: dict[str, object]) -> tuple[list[ReportRow], list[str]]
     return rows, notes
 
 
+def parse_berechnungen(values: dict[str, object]) -> tuple[Optional[float], Optional[float]]:
+    """Migration cell area (dm²) and coverage factor from the calculation sheet ('Zelle:', 'Belegung')."""
+    grid = _grid(values)
+    found: dict[str, Optional[float]] = {}
+    for r in sorted(grid):
+        row = grid[r]
+        for c in sorted(row):
+            label = _text(row[c]).casefold().rstrip(":")
+            if label in ("zelle", "belegung") and label not in found:
+                right = [row[k] for k in sorted(row) if k > c]
+                found[label] = _num(right[0]) if right else None
+    return found.get("zelle"), found.get("belegung")
+
+
 # --- whole workbook ----------------------------------------------------------------------------------------------
 
 def _sheet_cells(ws) -> dict[str, object]:
@@ -442,6 +456,8 @@ def _parse_workbook(path: Path) -> HumanEvaluation:
         if "Auswertung (2)" in names:
             ev.pre_clean = parse_eval_table(_sheet_cells(wv["Auswertung (2)"]), _sheet_cells(wf["Auswertung (2)"]))
             classify_rows(ev.pre_clean)
+        if "Berechnungen" in names:
+            ev.header.cell_area_dm2, ev.header.occupancy_factor = parse_berechnungen(_sheet_cells(wv["Berechnungen"]))
         if "externerBericht" in names:
             ev.report, ev.footnotes = parse_report(_sheet_cells(wv["externerBericht"]))
         else:

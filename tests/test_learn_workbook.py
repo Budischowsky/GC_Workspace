@@ -210,3 +210,17 @@ def test_header_text_temperature_and_unit_below_istd(tmp_path):
     h = parse_header(_cells(path))
     assert (h.temperature, h.temperature_text) == (None, "USB")
     assert [i.name for i in h.istd] == ["C17", "BBP", "DnNP", "DBP-d4"]
+
+
+def test_migration_from_berechnungen(tmp_path):
+    import openpyxl
+    from learn_fixtures import make_workbook
+    from gcws.learn.workbook import parse_workbook
+    path = make_workbook(tmp_path / "w.xlsx")
+    wb = openpyxl.load_workbook(path)
+    ws = wb.create_sheet("Berechnungen")
+    ws["A1"], ws["B1"], ws["A6"], ws["B6"] = "Zelle:", 0.51, "Belegung", 1
+    wb.save(path)
+    h = parse_workbook(path).header
+    assert (h.cell_area_dm2, h.occupancy_factor) == (0.51, 1)
+    assert parse_workbook(make_workbook(tmp_path / "v.xlsx")).header.cell_area_dm2 is None

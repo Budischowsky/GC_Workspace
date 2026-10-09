@@ -49,6 +49,8 @@ class Header:
     sv_ratio: Optional[float] = None
     gc_method: str = ""
     inj_volume: Optional[float] = None
+    cell_area_dm2: Optional[float] = None        # 'Berechnungen' sheet: migration cell area
+    occupancy_factor: Optional[float] = None     # 'Berechnungen' sheet: Belegung (1 = one side)
     istd: list[IstdEntry] = field(default_factory=list)
     istd_mean_area: Optional[float] = None
     alkanes: list[AlkanePoint] = field(default_factory=list)

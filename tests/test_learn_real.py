@@ -43,3 +43,29 @@ def test_scan_testsample():
     assert not any("rptdef" in e.workbook for e in entries)
     coffee = [e for e in entries if "25026244_coffeecapsule" in e.batch_dir]
     assert coffee and all(e.blanks for e in coffee)
+
+
+def _snapshot(folder: Path) -> dict:
+    return {str(p): (p.stat().st_size, p.stat().st_mtime_ns) for p in folder.rglob("*") if p.is_file()}
+
+
+def test_process_gio_run(tmp_path, monkeypatch):
+    """The real baseline path: the user's NIAS method and library search (the app's own data folder)."""
+    from PySide6.QtWidgets import QApplication
+    from gcws import paths
+    from gcws.learn.corpus import scan
+    from gcws.learn.runner import process
+    _gio_workbook()
+    if not (ROOT / "data" / "processing_methods").is_dir():
+        pytest.skip("the app's data folder (methods, libraries) is not available")
+    monkeypatch.setattr(paths, "DATA", ROOT / "data")
+    QApplication.instance() or QApplication([])
+    entry = next(e for e in scan(LEARN_ROOT / "25011662_GIO_Diary") if e.workbook.endswith("_A.xlsm"))
+    before = _snapshot(Path(entry.batch_dir))
+    from gcws.learn.runner import migration_from_header
+    from gcws.learn.workbook import parse_workbook
+    migration = migration_from_header(parse_workbook(Path(entry.workbook)).header)
+    prog = process(entry, tmp_path / "learn", migration=migration)
+    assert prog.state in ("accepted_auto", "control"), prog.reason
+    assert len(prog.peaks) > 50 and prog.reported
+    assert _snapshot(Path(entry.batch_dir)) == before
