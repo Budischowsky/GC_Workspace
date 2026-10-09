@@ -54,7 +54,7 @@ def prepare(ws, kind: str, group: Optional[dict], *, recompute: bool = True,
                                     "Method > Report template....", "information")
     if recompute:
         ws.recompute_quant()
-    members = [m for m in group["members"] if m in ws.runs]
+    members = report_order(ws, group)
     samples = [ws.nias_sample(m) for m in members]
     if hs:
         errors = [ws.quant_result.errors[m] for m in members if m in ws.quant_result.errors]
@@ -94,6 +94,21 @@ def prepare(ws, kind: str, group: Optional[dict], *, recompute: bool = True,
             raise ReportNotPossible("no_migration", "The NIAS report needs the migration conditions "
                                     "(Quantification panel > Migration conditions...).")
     return members, samples
+
+
+def report_order(ws, group: dict) -> list[str]:
+    """The determinations of ``group`` in injection order (A before B), as the automation reports them: the
+    first one is the reference of the double determination (its row names, sums and the report's Sample),
+    so a report does not depend on the order the pair was picked in. A group whose analyst edits refer to
+    determination 1 / 2 keeps its order, so those values stay with their determination."""
+    from gcws.io.sequence import order_key
+    from gcws.quant import duplicate_view as DV
+    members = [m for m in group["members"] if m in ws.runs]
+    edits = group.get(DV.edits_key(ws.quant, ws.quant_unit())) or {}
+    if any(isinstance(v, dict) and (v.get("dismissed") or any(v.get(k) is not None for k in ("a1", "a2", "c1", "c2")))
+           for v in edits.values()):
+        return members
+    return sorted(members, key=lambda m: order_key(ws.runs[m].run.path.name))
 
 
 def blank_warnings(ws, members: list[str]) -> list[str]:

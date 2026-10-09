@@ -111,3 +111,16 @@ def test_peaks_panel_reports_the_active_run_alone(qtbot, win, samples, monkeypat
     assert seen[-1]["members"] == [ids[1]]
     w.report("nias")                                            # the Report menu still takes the group
     assert seen[-1]["members"] == ids
+
+
+def test_report_order_is_the_injection_order(ws):
+    """A pair picked as B, A is reported as A, B (as the automation does); edits made for determination
+    1 / 2 keep the analyst's order."""
+    from gcws.quant import duplicate_view as DV
+    from gcws.report import assemble as AS
+    ids = _group(ws)["members"]
+    picked = dict(_group(ws), members=ids[::-1])
+    assert AS.report_order(ws, picked) == ids
+    key = DV.edits_key(ws.quant, ws.quant_unit())
+    assert AS.report_order(ws, dict(picked, **{key: {"F-1": {"c1": 0.5}}})) == ids[::-1]
+    assert AS.report_order(ws, dict(picked, **{key: {"F-1": {"accepted": True}}})) == ids
