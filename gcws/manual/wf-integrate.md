@@ -102,8 +102,18 @@ with processing methods and used by the automation.
    (or one component fits it badly), gets a **closer look**: its MS is deconvoluted again, more sensitively
    and with a pass over what the found component leaves. This finds a substance that elutes on the tail of a
    larger one and shares most of its ions. It is switched by **Closer look at shoulders**.
+   A component that no peak holds, but that elutes into the tail (or front) of a peak -- a small substance
+   behind a large, often overloaded peak whose end the integrator set before it -- is a **hidden component**:
+   the peak is extended over it, to the lowest point of the trace after it, and split. This is kept only when
+   the fit to the trace splits the hidden component off; otherwise the peak keeps its integrated bounds. Such
+   splits say *peak extended over the hidden component* in their comment. A hidden component needs an MS S/N
+   of at least 20 at every detection level.
 3. Components that are too weak, whose model ion is a bleed ion, whose curve the trace does not show, or whose
-   spectrum is the same as their neighbour's are not split off.
+   spectrum is the same as their neighbour's are not split off. A component with less than **Min. component
+   share** of the peak is split off all the same when it is resolved from the peak's main substance (its apex
+   at least two half-height widths from the main apex) and its area would pass the method's **Area reject**:
+   in the tail of a large peak a substance of its own has well under 1 %. A hidden component always needs
+   that area.
 4. Each fragment keeps its component spectrum. The library search searches the fragments with these clean
    spectra, also when it searches the TIC peaks, so every FID peak gets its own name.
 

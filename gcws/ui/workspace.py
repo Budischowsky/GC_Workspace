@@ -580,8 +580,11 @@ class Workspace(QObject):
         st.auto_split[key] = plan
         if not plan.events:
             return res
+        extended = plan.extension_events        # peaks extended over hidden components, before their split
+        if extended:
+            res = integrate(sig, method, list(st.events(key)) + extended, t_min=t_min)
         st.presplit[key] = res
-        return integrate(sig, method, list(st.events(key)) + plan.events, t_min=t_min)
+        return integrate(sig, method, list(st.events(key)) + extended + plan.events, t_min=t_min)
 
     def _deconvolute_in_background(self, st: RunState, method: IntegrationMethod) -> None:
         """Whole-run deconvolution of ``st`` on the thread pool; the signals with an automatic

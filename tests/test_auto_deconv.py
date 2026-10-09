@@ -1,6 +1,7 @@
 """The automatic deconvolution split of a whole run (integration stage), its gates, the analyst's
 overrides, the double determination (split carried over) and the Report² rule."""
 import math
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -582,3 +583,168 @@ def test_keep_unsplit_again_after_a_reset_range(win):
     assert not fragments(ws, st)
     st.undo.undo()
     assert len(fragments(ws, st)) == 2
+
+
+#: sample 05 of the GIO diary batch: alpha-methylstyrene (CAS 98-83-9, 7.189 min in the NIAS evaluation)
+#: elutes in the tail of an overloaded butyl methacrylate peak; the integrator ends that peak at 7.158
+HIDDEN_SAMPLE = Path(os.environ.get("GCWS_HIDDEN_SAMPLE", Path(__file__).resolve().parents[2] / "Testsample"
+                                    / "25011662_GIO_Diary" / "05_25011675_4891130401_HSL_OPV100m_A.D"))
+
+
+def _tail_case(small=500.0):
+    """A big FID peak (10.0) and a small compound (10.065) in its tail, resolved from it; the integrated
+    peak ends at 10.05, before the small compound's apex (10.0716 in the FID), which no peak holds."""
+    from test_component_fit import component, trace
+    from gcws.core.model import Baseline, Peak
+    big, minor = component(10.0, mz=57, sn=900.0, area=1e6), component(10.065, mz=91, sn=150.0, area=1e4)
+    t, y = trace([(10.0, 80000.), (10.065, small)], 0.0066, 1.0, noise=1.0)
+    lo, hi = 9.95, 10.05
+    use = (t >= lo) & (t <= hi)
+    area = float(np.trapezoid(y[use], t[use] * 60))
+    peak = Peak(start=lo, end=hi, apex_rt=10.0066, baseline=Baseline("line", lo, 100.0, hi, 100.0),
+                area=area, area_raw=area)
+    return Signal(FID, t, y + 100.0), SimpleNamespace(peaks=[peak]), [big, minor]
+
+
+def test_a_component_hidden_in_a_peaks_tail_extends_the_peak():
+    from gcws.core.events import ManualKind as K
+    from gcws.integration.auto_deconv import adoptions
+    from gcws.integration.method import IntegrationMethod
+    signal, result, (big, minor) = _tail_case()
+    m = IntegrationMethod(deconv_split="auto")
+    (ext,) = adoptions(signal, result, FID, 0.0066, [big, minor], m)
+    assert ext.components == [minor] and ext.start == 9.95
+    (event,) = ext.events
+    assert event.kind == K.MOVE_END and event.ref_rt == result.peaks[0].apex_rt and event.uid.startswith("auto-")
+    # the peak now reaches over the small compound's elution (its profile above 5 % of the maximum,
+    # 10.049-10.094) to the trace's lowest point within one such span after it
+    assert ext.end == event.t0 and 10.094 <= ext.end <= 10.094 + 0.045
+    assert signal.y[np.searchsorted(signal.rt, ext.end)] < 100.0 + 3.0
+    # not taken in: weak, column bleed, outside the peak's reach, kept unsplit, split switched off there
+    assert not adoptions(signal, result, FID, 0.0066, [big, minor], m.copy(deconv_min_sn=200.0))
+    assert not adoptions(signal, result, FID, 0.0066, [big, minor], m.copy(deconv_exclude_mz=[91]))
+    far = SimpleNamespace(**{**vars(minor), "rt": 10.2, "profile_rt": minor.profile_rt + 0.15})
+    assert not adoptions(signal, result, FID, 0.0066, [big, far], m)
+    from gcws.integration.auto_deconv import keep_marker
+    assert not adoptions(signal, result, FID, 0.0066, [big, minor], m, events=[keep_marker(result.peaks[0])])
+
+
+def _extended(signal, ext, apex):
+    """The peak of :func:`_tail_case` after its automatic extension (as the replay draws it)."""
+    from gcws.core.model import Baseline, Peak
+    t = signal.rt
+    y1 = float(np.interp(ext.end, t, signal.y))
+    use = (t >= ext.start) & (t <= ext.end)
+    base = Baseline("line", ext.start, 100.0, ext.end, y1)
+    area = float(np.trapezoid(signal.y[use] - base.eval(t[use]), t[use] * 60))
+    return SimpleNamespace(peaks=[Peak(start=ext.start, end=ext.end, apex_rt=apex, baseline=base, area=area,
+                                       area_raw=area)])
+
+
+def test_two_peaks_extended_into_one_gap_meet_at_its_valley():
+    """One hidden compound in the tail of a peak and one in the front of the next: both peaks are
+    extended, but never over each other; they meet at the trace's lowest point between them."""
+    from test_component_fit import component, trace
+    from gcws.core.model import Baseline, Peak
+    from gcws.integration.auto_deconv import adoptions
+    from gcws.integration.method import IntegrationMethod
+    comps = [component(10.0, mz=57, sn=900.0, area=1e6), component(10.065, mz=91, sn=150.0, area=1e4),
+             component(10.125, mz=105, sn=150.0, area=1e4), component(10.19, mz=71, sn=900.0, area=1e6)]
+    t, y = trace([(10.0, 80000.), (10.065, 500.), (10.125, 500.), (10.19, 80000.)], 0.0066, 1.0, noise=1.0,
+                 t1=10.5)
+    peaks = []
+    for lo, hi, apex in ((9.95, 10.05, 10.0066), (10.14, 10.25, 10.1966)):
+        use = (t >= lo) & (t <= hi)
+        area = float(np.trapezoid(y[use], t[use] * 60))
+        peaks.append(Peak(start=lo, end=hi, apex_rt=apex, baseline=Baseline("line", lo, 100.0, hi, 100.0),
+                          area=area, area_raw=area))
+    exts = adoptions(Signal(FID, t, y + 100.0), SimpleNamespace(peaks=peaks), FID, 0.0066, comps,
+                     IntegrationMethod(deconv_split="auto"))
+    assert [[c.model_mz for c in x.components] for x in exts] == [[91], [105]]
+    assert exts[0].end == exts[1].start and 10.0716 < exts[0].end < 10.1316
+
+
+def test_a_compound_apart_from_the_main_one_is_split_off_by_its_area_not_its_share():
+    """0.6 % of the peak: below the level's minimum share, which keeps negligible parts of the main
+    compound with it; a compound eluting apart from the main one (here in its tail) is a peak of its
+    own when its area would pass the integrator (the method's area reject)."""
+    from gcws.integration.auto_deconv import adoptions, plan_peaks
+    from gcws.integration.method import IntegrationMethod
+    signal, result, comps = _tail_case()
+    m = IntegrationMethod(deconv_split="auto", area_reject=100.0)
+    (ext,) = adoptions(signal, result, FID, 0.0066, comps, m)
+    extended = _extended(signal, ext, result.peaks[0].apex_rt)
+    for adopted in (ext.components, ()):         # adopted, or inside the peak as integrated
+        plan = plan_peaks(signal, extended, FID, 0.0066, comps, m, adopted=adopted)
+        (split,) = plan.plans
+        assert [split.candidates[i].component.model_mz for i in split.checked] == [57, 91]
+        assert split.candidates[1].apart and split.shares[1] < 0.01 and split.areas[1] >= 100.0
+    # a compound too small for the integrator is not split off
+    assert not plan_peaks(signal, extended, FID, 0.0066, comps, m.copy(area_reject=1e9),
+                          adopted=ext.components).events
+
+
+def test_only_compounds_resolved_from_the_main_one_are_apart():
+    """The share limit still keeps a small component near the main compound (an isotopologue, a bleed
+    or artefact component on its flank) with it; the area is the alternative only for a component
+    resolved from the main compound (two half-height widths of its fitted curve from its apex)."""
+    from gcws.ms.peak_split import Candidate, Limits, SplitPlan, _mark_apart, _weak_reason
+    t = np.linspace(9.9, 10.1, 2001)
+    main = np.exp(-0.5 * ((t - 10.0) / 0.012) ** 2)              # half-height width 0.0283
+    fit = SimpleNamespace(areas=np.array([1.0, 10.0, 1.0, 1.0]),
+                          curves=np.stack([main * .1, main, main * .1, main * .1]), shift=0.0)
+    comps = [SimpleNamespace(rt=9.94), SimpleNamespace(rt=10.0), SimpleNamespace(rt=10.03), SimpleNamespace(rt=10.06)]
+    plan = SplitPlan(FID, 0.0, None, [Candidate(c, None) for c in comps], [], t=t, first=fit)
+    _mark_apart(plan)
+    assert [c.apart for c in plan.candidates] == [True, False, False, True]
+    limits = Limits(min_sn=20, min_share=0.01, min_area=100.0)
+    c = SimpleNamespace(s_n=150.0)
+    assert _weak_reason(c, 0.005, limits, 500.0, apart=False) == "0.5 % of the signal"
+    assert _weak_reason(c, 0.005, limits, 500.0, apart=True) == ""
+    assert _weak_reason(c, 0.005, limits, 50.0, apart=True) == "0.5 % of the signal, area 50 < 100"
+    assert _weak_reason(c, 0.02, limits, 50.0, apart=True) == ""
+    # a component the integrator left without a peak always needs the integrator's area
+    assert _weak_reason(c, 0.2, limits, 50.0, apart=True, adopted=True) == "area 50 < 100"
+    assert _weak_reason(c, 0.005, Limits(min_share=0.01), 500.0, apart=True) == "0.5 % of the signal"
+
+
+#: the NIAS-SCREENING FID method of the reported case
+NIAS_FID = {"name": "NIAS-SCREENING FID", "slope_sensitivity": 8.0, "smoothing_order": 2, "area_reject": 500000.0,
+            "height_reject": 5000.0, "min_sn": 3.0, "min_width_fraction": 0.2, "shoulders": "off",
+            "baseline_mode": "drop", "skim_mode": "none", "area_unit_factor": 10.0, "deconv_split": "auto",
+            "deconv_level": 3, "timed_events": [{"time": 0.0, "kind": "INTEGRATOR_OFF"},
+                                                {"time": 6.2, "kind": "INTEGRATOR_ON"}]}
+
+
+@pytest.mark.parametrize("integration", ["method", "wider"])
+def test_alpha_methylstyrene_in_the_butyl_methacrylate_tail_is_split_off(app, integration):
+    """The reported case (sample 05, level 3): the MS deconvolution finds alpha-methylstyrene (model
+    m/z 118, 7.175 MS) in the tail of an overloaded butyl methacrylate peak. The method's integration
+    ends that peak at 7.158, before alpha-methylstyrene's apex, so no peak carried it; a wider one
+    (6.741-7.515) holds it, but at 0.8 % of the peak it stayed with butyl methacrylate. The NIAS
+    evaluation reports it at 7.189 with 0.82 % of the combined peak (988 201 of 119 966 715)."""
+    if not HIDDEN_SAMPLE.is_dir():
+        pytest.skip("sample 05 of the GIO diary batch not available (set GCWS_HIDDEN_SAMPLE)")
+    from gcws.automation import headless as H
+    from gcws.integration.method import IntegrationMethod
+    from gcws.ui.workspace import Workspace
+    ws = Workspace()
+    ws.deconv_background = False
+    ws.default_methods[FID] = (IntegrationMethod.from_dict(NIAS_FID) if integration == "method" else
+                               IntegrationMethod(slope_sensitivity=8.0, area_reject=500000.0, height_reject=5000.0,
+                                                 min_sn=3.0, area_unit_factor=10.0, deconv_split="auto"))
+    run, results, delay = H.load_one(ws, HIDDEN_SAMPLE)
+    st = ws.add_run(run, results, delay=delay)
+    st.delay_override = 0.00603
+    ws.integrate(st.id, FID)
+    parts = [p for p in ws.result(st.id, FID).peaks if 6.9 < p.apex_rt < 7.4 and (p.extra or {}).get("deconv_component")]
+    by_ion = {p.extra["deconv_component"]["model_mz"]: p for p in parts}
+    assert {87, 118} <= set(by_ion)
+    ams, bma = by_ion[118], by_ion[87]
+    assert 7.15 < ams.apex_rt < 7.22 and ams.end > 7.2
+    # its share of the combined peak: the fitted FID curves give 2-3 %, the analyst's split 0.82 %
+    assert 0.003 < ams.area / math.fsum(p.area for p in parts) < 0.04
+    extended = [x for x in st.auto_split[FID].extensions if x.start < 7.1 < x.end]
+    assert bool(extended) == (integration == "method")             # the method's peak was extended
+    if extended:
+        assert extended[0].end == pytest.approx(7.44, abs=0.03)      # to the tail's lowest point

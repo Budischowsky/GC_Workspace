@@ -5,10 +5,16 @@ shows it as a preview and :meth:`SplitPlan.event` turns it into the replayable
 manual event of :mod:`gcws.integration.deconv_split`.
 
 1. The candidates are the components whose apex (MS time + detector delay)
-   lies inside the integrated peak.
+   lies inside the integrated peak. The automatic split may have extended the
+   peak over components the integrator left without a peak ("adopted", see
+   :func:`gcws.integration.auto_deconv.adoptions`).
 2. Their MS elution shapes are fitted to the trace above the peak's baseline
    (:mod:`gcws.ms.component_fit`). Components with a low S/N or almost no
-   share of the fitted signal are listed, but not checked by default.
+   share of the fitted signal are listed, but not checked by default. A
+   component resolved from the peak's main compound (its apex two half-height
+   widths of the main fitted curve or more from the main apex) also passes with
+   the area of a peak (the method's area reject) instead of the share: in the
+   tail of a large, overloaded peak a compound of its own has well under 1 %.
 3. The checked components are fitted again. A good fit (R^2 >= FIT_MIN_R2,
    no two curves alike) makes the fitted areas the weights: the relative areas
    then come from the trace itself (FID response, not MS response). Otherwise
@@ -35,6 +41,8 @@ class Candidate:
     suggested: bool = True
     reason: str = ""            # why the component is not suggested
     share: float = math.nan     # share of the fit over all candidates
+    adopted: bool = False       # it had no peak of its own: the peak was extended over it
+    apart: bool = False         # resolved from the main compound (APART_WIDTHS)
 
 
 @dataclass
@@ -120,12 +128,23 @@ class SplitPlan:
                             profiles=[c.shape.points() if c.shape is not None else None for c in comps])
 
 
+#: a component this many half-height widths of the main fitted curve from its apex or more is
+#: resolved from the main compound
+APART_WIDTHS = 2.0
+
+
 @dataclass(frozen=True)
 class Limits:
-    """Thresholds of a split plan (the automatic split takes them from the integration method)."""
+    """Thresholds of a split plan (the automatic split takes them from the integration method).
+
+    ``min_area`` (reported area units, the method's area reject) is the alternative to the share
+    limit for a component that elutes apart from the peak's main compound: its share of a large
+    peak says nothing about whether it is a peak; its area does, as for any integrated peak. An
+    adopted component (the integrator left it without a peak) always needs that area."""
     min_sn: float = F.SUGGEST_MIN_SN
     min_share: float = F.SUGGEST_MIN_SHARE
     fit_r2: float = F.FIT_MIN_R2
+    min_area: float = 0.0
 
 
 def _get(item, key, default=None):
@@ -150,27 +169,39 @@ def candidates_in(components, peak, key: str, delay: float) -> list:
                   key=lambda c: float(_get(c, "rt")))
 
 
-def _weak_reason(component, share: float, limits: Optional[Limits] = None) -> str:
+def _weak_reason(component, share: float, limits: Optional[Limits] = None, area: float = math.nan,
+                 apart: bool = False, adopted: bool = False) -> str:
     limits = limits or Limits()
     sn = _get(component, "s_n")
     if sn is not None and math.isfinite(float(sn)) and 0 < float(sn) < limits.min_sn:
         return f"S/N {float(sn):.0f} < {limits.min_sn:.0f}"
+    if adopted and limits.min_area > 0 and math.isfinite(area) and area < limits.min_area:
+        # the integrator left it without a peak: it has to pass the integrator's own area limit
+        return f"area {area:.4g} < {limits.min_area:.4g}"
     if math.isfinite(share) and share < limits.min_share:
+        if apart and limits.min_area > 0 and math.isfinite(area):
+            if area >= limits.min_area:
+                return ""
+            return f"{100 * share:.1f} % of the signal, area {area:.4g} < {limits.min_area:.4g}"
         return f"{100 * share:.1f} % of the signal"
     return ""
 
 
 def plan_split(signal, peak, key: str, delay: float, components, checked: Optional[Sequence[int]] = None,
-               riders: Sequence[tuple[float, float]] = (), limits: Optional[Limits] = None) -> SplitPlan:
+               riders: Sequence[tuple[float, float]] = (), limits: Optional[Limits] = None,
+               adopted: Sequence = ()) -> SplitPlan:
     """Plan the split of ``peak`` on ``signal`` (the trace of ``key``).
 
     ``components`` may be all components of the deconvolution window; only those
     inside the peak become candidates. ``checked`` are candidate indices; None
-    checks the suggested ones.
+    checks the suggested ones. ``adopted`` are components the peak was extended
+    over (they had no peak of their own).
     """
     delay = float(delay)
     shift0 = delay if is_fid(key) else 0.0
-    cands = [Candidate(c, F.Shape.of(c)) for c in candidates_in(components, peak, key, delay)]
+    taken = {id(c) for c in adopted}
+    cands = [Candidate(c, F.Shape.of(c), adopted=id(c) in taken)
+             for c in candidates_in(components, peak, key, delay)]
     plan = SplitPlan(key, delay, peak, cands, [], limits=limits)
     if base_key(key) not in ("FID", "TIC"):
         plan.problem = "Splitting by components supports FID and TIC peaks only."
@@ -190,17 +221,36 @@ def plan_split(signal, peak, key: str, delay: float, components, checked: Option
         first = plan.first = F.fit_trace(plan.t, plan.y, [c.shape for c in cands], shift0, mask=plan.mask)
         for c, share in zip(cands, first.shares):
             c.share = float(share)
+        _mark_apart(plan)
     elif cands:
         areas = np.array([max(float(_get(c.component, "area", 0) or 0), 0.0) for c in cands])
         for c, a in zip(cands, areas):
             c.share = float(a / areas.sum()) if areas.sum() > 0 else math.nan
     for c in cands:
-        c.reason = _weak_reason(c.component, c.share, limits)
+        c.reason = _weak_reason(c.component, c.share, limits, c.share * float(peak.area), c.apart, c.adopted)
         c.suggested = not c.reason
     plan.checked = sorted(set(checked)) if checked is not None else [i for i, c in enumerate(cands) if c.suggested]
     plan.checked = [i for i in plan.checked if 0 <= i < len(cands)]
     _allocate(plan, shift0)
     return plan
+
+
+def _mark_apart(plan: SplitPlan) -> None:
+    """Mark the candidates resolved from the main compound (the largest fitted curve): their fitted
+    apex lies APART_WIDTHS of that curve's half-height width or more from its apex (a resolution of
+    about 1 for peaks of equal width), so the integrator would have seen them as peaks of their own
+    had they not been a hundred times smaller."""
+    fit = plan.first
+    main = int(np.argmax(fit.areas)) if fit is not None and fit.areas.size else -1
+    if main < 0 or not fit.curves[main].max() > 0:
+        return
+    curve = fit.curves[main]
+    top = np.flatnonzero(curve >= 0.5 * curve.max())
+    width = float(plan.t[top[-1]] - plan.t[top[0]])
+    centre = float(plan.t[int(np.argmax(curve))])
+    for i, c in enumerate(plan.candidates):
+        apex = float(_get(c.component, "rt")) + fit.shift
+        c.apart = i != main and width > 0 and abs(apex - centre) >= APART_WIDTHS * width
 
 
 def replan(plan: SplitPlan, checked: Sequence[int]) -> SplitPlan:
