@@ -123,3 +123,30 @@ def test_sum_line_covers_the_family():
     assert s.client_recall == pytest.approx(2 / 3)
     assert s.client_precision == pytest.approx(1 / 2)
     assert s.disagreements["not_reported"] == 1 and s.disagreements["extra_reported"] == 1
+
+
+def _three():
+    items = [_item(5.0, "reported_named", cas="1-1-1"), _item(6.0, "reported_named", cas="2-2-2"),
+             _item(7.07, "reported_named", cas="97-88-1"), _item(8.5, "kept_unreported")]
+    prog = _prog([_peak(6.0), _peak(7.07), _peak(8.5)],
+                 reported=[{"rt": 7.07, "cas": "50-00-0"}, {"rt": 8.0, "cas": ""}])
+    return items, prog
+
+
+def test_details_list_each_disagreement():
+    items, prog = _three()
+    s = _score(items, prog)
+    assert sorted((d["type"], d["rt"]) for d in s.details) == [
+        ("extra_reported", 8.0), ("missing_peak", 5.0), ("name_differs", 7.07), ("not_reported", 6.0)]
+
+
+def test_verdicts_change_the_scores():
+    items, prog = _three()
+    base = _score(items, prog)
+    assert (base.client_precision, base.client_recall) == (0, 0)
+    s = _score(items, prog, verdicts={("not_reported", 6.0): "program", ("missing_peak", 5.0): "both"})
+    assert s.client_recall == 0 and s.disagreements["not_reported"] == 0 and s.disagreements["missing_peak"] == 0
+    s = _score(items, prog, verdicts={("name_differs", 7.07): "program", ("extra_reported", 8.0): "both"})
+    assert s.client_precision == 1 and s.client_recall == pytest.approx(1 / 3)
+    same = _score(items, prog, verdicts={("name_differs", 7.07): "analyst", ("x", 1.0): "program"})
+    assert (same.client_precision, same.client_recall) == (0, 0)

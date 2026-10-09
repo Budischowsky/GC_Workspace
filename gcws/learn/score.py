@@ -27,6 +27,7 @@ class RunScore:
     worksheet_agreement: Optional[float] = None
     total: Optional[float] = None
     disagreements: dict = field(default_factory=lambda: dict.fromkeys(DISAGREEMENTS, 0))
+    details: list = field(default_factory=list)     # one entry per counted disagreement
 
 
 def _reported(decision: str) -> bool:
@@ -61,8 +62,19 @@ def program_removes(peak: dict, blank_ratio_limit: float = 3.0) -> bool:
 
 
 def score_run(items: list[HumanItem], prog: ProgramResult, pairs: list[Pair], *, weights=(0.7, 0.3),
-              rt_tol: float = 0.02, blank_ratio_limit: float = 3.0) -> RunScore:
+              rt_tol: float = 0.02, blank_ratio_limit: float = 3.0, verdicts: Optional[dict] = None) -> RunScore:
+    """``verdicts``: (disagreement type, RT rounded to 2) -> "analyst" | "program" | "both" (the user's review);
+    with "program" or "both" that disagreement does not count."""
     s = RunScore()
+    verdicts = verdicts or {}
+
+    def excused(kind: str, rt) -> bool:
+        return verdicts.get((kind, None if rt is None else round(rt, 2))) in ("program", "both")
+
+    def note(kind: str, rt, human=None, program=None, line=None) -> None:
+        s.disagreements[kind] += 1
+        s.details.append({"type": kind, "rt": rt, "human": human, "program": program, "line": line})
+
     peaks = prog.peaks
     by_human = {p.human: p for p in pairs if p.human is not None}
     lines = client_lines(prog)
@@ -75,7 +87,8 @@ def score_run(items: list[HumanItem], prog: ProgramResult, pairs: list[Pair], *,
             continue
         human_lines += 1
         pair = by_human.get(h)
-        ref = peaks[pair.program]["rt"] if pair and pair.program is not None else it.rt
+        k = pair.program if pair else None
+        ref = peaks[k]["rt"] if k is not None else it.rt
         near = sorted((abs(rt - ref), j) for j, (rt, _, _) in enumerate(lines)
                       if rt is not None and j not in used and abs(rt - ref) <= rt_tol)
         if not near and it.decision == "reported_group":
@@ -86,23 +99,34 @@ def score_run(items: list[HumanItem], prog: ProgramResult, pairs: list[Pair], *,
                 tp += 1
                 continue
         if not near:
-            s.disagreements["missing_peak" if pair is None or pair.program is None else "not_reported"] += 1
+            kind = "missing_peak" if k is None else "not_reported"
+            if excused(kind, it.rt):
+                human_lines -= 1
+            else:
+                note(kind, it.rt, human=h, program=k)
             continue
         j = near[0][1]
         used.add(j)
         cas = lines[j][1]
         if it.decision == "reported_named" and it.cas and cas:
             named_both += 1
-            if cas == it.cas:
+            if cas == it.cas or excused("name_differs", it.rt):
                 named_equal += 1
             else:
-                s.disagreements["name_differs"] += 1
+                note("name_differs", it.rt, human=h, program=k, line=j)
                 continue
         correct.add(j)
         tp += 1
-    s.disagreements["extra_reported"] = len(lines) - len(used)
-    if lines or human_lines:
-        s.client_precision = len(correct) / len(lines) if lines else 0.0
+    n_lines = len(lines)
+    for j, (rt, _, _) in enumerate(lines):
+        if j in used:
+            continue
+        if excused("extra_reported", rt):
+            n_lines -= 1
+        else:
+            note("extra_reported", rt, line=j)
+    if n_lines or human_lines:
+        s.client_precision = len(correct) / n_lines if n_lines else 0.0
         s.client_recall = tp / human_lines if human_lines else 0.0
         pr = s.client_precision + s.client_recall
         s.client_f1 = 2 * s.client_precision * s.client_recall / pr if pr else 0.0
@@ -130,12 +154,11 @@ def score_run(items: list[HumanItem], prog: ProgramResult, pairs: list[Pair], *,
             continue
         removes = program_removes(peaks[pair.program], blank_ratio_limit)
         n += 1
-        if human_keeps != removes:
+        kind = "kept_but_program_removes" if human_keeps else "removed_but_program_keeps"
+        if human_keeps != removes or excused(kind, it.rt):
             agree += 1
-        elif human_keeps:
-            s.disagreements["kept_but_program_removes"] += 1
         else:
-            s.disagreements["removed_but_program_keeps"] += 1
+            note(kind, it.rt, human=h, program=pair.program)
     s.worksheet_agreement = agree / n if n else None
     if s.client_f1 is not None and s.worksheet_agreement is not None:
         s.total = weights[0] * s.client_f1 + weights[1] * s.worksheet_agreement
