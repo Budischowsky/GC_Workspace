@@ -97,3 +97,29 @@ def test_total_weights():
     assert s.client_f1 == 1 and s.worksheet_agreement == 0.5
     assert s.total == pytest.approx(0.7 * 1 + 0.3 * 0.5)
     assert _score([], _prog([])).total is None
+
+
+def test_report_lines_preferred_over_register_list():
+    """The client report's lines (report_lines) are what the client sees; the register list also holds ISTDs."""
+    from gcws.learn.runner import ProgramResult
+    items = [_item(7.0, "reported_group"), _item(14.3, "istd")]
+    prog = ProgramResult(run_dir="r", method="M", state="control", peaks=[_peak(7.0), _peak(14.3)],
+                         reported=[{"rt": 7.0, "cas": ""}, {"rt": 14.3, "cas": ""}],
+                         report_lines=[{"rt": 7.0, "name": "x", "cas": "", "kind": "line"}])
+    s = _score(items, prog)
+    assert s.client_precision == 1 and s.disagreements["extra_reported"] == 0
+
+
+def test_sum_line_covers_the_family():
+    from gcws.learn.runner import ProgramResult
+    items = [_item(21.0, "reported_group", label="Styrene Oligomer"),
+             _item(24.5, "reported_group", label="styrene oligomer"),
+             _item(26.0, "reported_group", label="Hydrocarbon")]
+    prog = ProgramResult(run_dir="r", method="M", state="control", peaks=[_peak(21.0), _peak(24.5), _peak(26.0)],
+                         report_lines=[{"rt": None, "name": "Sum of styrene oligomers (estimated)**", "cas": "",
+                                        "kind": "sum"},
+                                       {"rt": None, "name": "Sum of decanamides", "cas": "", "kind": "sum"}])
+    s = _score(items, prog)
+    assert s.client_recall == pytest.approx(2 / 3)
+    assert s.client_precision == pytest.approx(1 / 2)
+    assert s.disagreements["not_reported"] == 1 and s.disagreements["extra_reported"] == 1

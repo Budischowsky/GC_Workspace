@@ -1,6 +1,7 @@
 """How close the program's result for one run is to the analyst's (spec §7)."""
 from __future__ import annotations
 
+import re
 import statistics
 from dataclasses import dataclass, field
 from typing import Optional
@@ -32,6 +33,26 @@ def _reported(decision: str) -> bool:
     return decision.startswith("reported_")
 
 
+def _words(text: str) -> str:
+    """Lower-case words without plural s: 'Sum of styrene oligomers (estimated)**' -> 'sum of styrene oligomer estimated'."""
+    return " ".join(w[:-1] if len(w) > 3 and w.endswith("s") else w for w in re.findall(r"[a-zäöüß]+", text.casefold()))
+
+
+def same_family(label: str, sum_line: str) -> bool:
+    """Whether a program 'Sum of …' line names the analyst's group label (scoring only)."""
+    a = _words(label)
+    return bool(a) and a in _words(sum_line)
+
+
+def client_lines(prog: ProgramResult) -> list[tuple]:
+    """(rt, cas, name) of the program's client report lines; the register list (which also holds the ISTDs)
+    only when the report lines are not known."""
+    if prog.report_lines:
+        return [(r.get("rt"), normalise_cas(r.get("cas")), r.get("name", "")) for r in prog.report_lines]
+    return [(r.get("rt"), normalise_cas(r.get("cas")), r.get("name", "")) for r in prog.reported
+            if r.get("rt") is not None]
+
+
 def program_removes(peak: dict, blank_ratio_limit: float = 3.0) -> bool:
     """The program's own blank classification: found in a blank and below ratio_limit x the blank area
     (gcws.quant.blank_match.classify, default limit 3)."""
@@ -44,8 +65,9 @@ def score_run(items: list[HumanItem], prog: ProgramResult, pairs: list[Pair], *,
     s = RunScore()
     peaks = prog.peaks
     by_human = {p.human: p for p in pairs if p.human is not None}
-    lines = [(r.get("rt"), normalise_cas(r.get("cas"))) for r in prog.reported if r.get("rt") is not None]
+    lines = client_lines(prog)
     used: set[int] = set()
+    correct: set[int] = set()
     tp = named_both = named_equal = 0
     human_lines = 0
     for h, it in enumerate(items):
@@ -54,7 +76,15 @@ def score_run(items: list[HumanItem], prog: ProgramResult, pairs: list[Pair], *,
         human_lines += 1
         pair = by_human.get(h)
         ref = peaks[pair.program]["rt"] if pair and pair.program is not None else it.rt
-        near = sorted((abs(rt - ref), j) for j, (rt, _) in enumerate(lines) if j not in used and abs(rt - ref) <= rt_tol)
+        near = sorted((abs(rt - ref), j) for j, (rt, _, _) in enumerate(lines)
+                      if rt is not None and j not in used and abs(rt - ref) <= rt_tol)
+        if not near and it.decision == "reported_group":
+            family = [j for j, (rt, _, name) in enumerate(lines) if rt is None and same_family(it.label, name)]
+            if family:                  # a "Sum of …" line reports the whole family
+                used.add(family[0])
+                correct.add(family[0])
+                tp += 1
+                continue
         if not near:
             s.disagreements["missing_peak" if pair is None or pair.program is None else "not_reported"] += 1
             continue
@@ -68,10 +98,11 @@ def score_run(items: list[HumanItem], prog: ProgramResult, pairs: list[Pair], *,
             else:
                 s.disagreements["name_differs"] += 1
                 continue
+        correct.add(j)
         tp += 1
     s.disagreements["extra_reported"] = len(lines) - len(used)
     if lines or human_lines:
-        s.client_precision = tp / len(lines) if lines else 0.0
+        s.client_precision = len(correct) / len(lines) if lines else 0.0
         s.client_recall = tp / human_lines if human_lines else 0.0
         pr = s.client_precision + s.client_recall
         s.client_f1 = 2 * s.client_precision * s.client_recall / pr if pr else 0.0

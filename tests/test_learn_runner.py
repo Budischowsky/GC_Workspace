@@ -113,3 +113,45 @@ def test_build_spec_with_migration(tmp_path):
     s = build_spec(e, method, tmp_path / "job", migration={"simulant": "EtOH 95%"})
     assert s["method"]["sections"]["migration"] == {"simulant": "EtOH 95%"}
     assert "migration" not in method["sections"]
+
+
+def _nias_result(path):
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "NIAS Result"
+    rows = [["GC-MS/FID – NIAS-Screening –"], ["PA 26.007"], ["Sample:", "05_X_A.D"], [],
+            ["RT (min)", "Name", "CAS-No.", "% match", "Conc. mg/dm²", "Conc. mg/kg", "SML (mg/kg)", "Ref."],
+            [7.0689, "Butyl methacrylate", "97-88-1", 81, 0.2268, 1.361, 6, "[1],[2]"],
+            [24.72, "unknown (m/z 105, 432, 106)", None, None, 0.0028, 0.017],
+            [None, "Sum of styrene oligomers (estimated)**", None, None, 0.0701, 0.42],
+            [None, "Sum of 2-Methoxy-2'-methyl-stilbene", None, None, 0.007, 0.045], [None],
+            ["(a)", "CAS 95906-11-9: Oxidation product of Irgafos 168."],
+            ["** Only peaks with a concentration above or equal to 10 ppb were included in the calculation."]]
+    for r in rows:
+        ws.append(r)
+    wb.save(path)
+    return path
+
+
+def test_parse_program_report(tmp_path):
+    from gcws.learn.runner import parse_program_report
+    lines = parse_program_report(_nias_result(tmp_path / "r.xlsx"))
+    assert lines == [{"rt": 7.0689, "name": "Butyl methacrylate", "cas": "97-88-1", "kind": "line"},
+                     {"rt": 24.72, "name": "unknown (m/z 105, 432, 106)", "cas": "", "kind": "line"},
+                     {"rt": None, "name": "Sum of styrene oligomers (estimated)**", "cas": "", "kind": "sum"},
+                     {"rt": None, "name": "Sum of 2-Methoxy-2'-methyl-stilbene", "cas": "", "kind": "sum"}]
+
+
+def test_cached_result_gets_report_lines(tmp_path):
+    import json
+    from gcws.learn.runner import ProgramResult, process, run_key
+    from dataclasses import asdict
+    e = _entry(tmp_path / "B", "05_X_A.D", [])
+    folder = tmp_path / "learn" / "runs" / run_key(e.run_dir, "M")
+    (folder / "job" / "learn").mkdir(parents=True)
+    _nias_result(folder / "job" / "learn" / "X_NIAS_Report.xlsx")
+    old = ProgramResult(run_dir=e.run_dir, method="M", state="control")
+    (folder / "program.json").write_text(json.dumps(asdict(old)), encoding="utf-8")
+    prog = process(e, tmp_path / "learn", method={"name": "M"})
+    assert [line["kind"] for line in prog.report_lines] == ["line", "line", "sum", "sum"]
