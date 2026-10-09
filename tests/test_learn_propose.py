@@ -150,3 +150,54 @@ def test_naming_proposal_shows_families_when_today_wins(tmp_path):
     assert r.best == {"as_today": True}
     md = (tmp_path / "out" / "proposals" / "naming.md").read_text(encoding="utf-8")
     assert "## Learned families" in md and "styrene oligomer" in md
+
+
+def _proposal(tmp_path, families):
+    p = tmp_path / "naming.json"
+    p.write_text(json.dumps({"target": "naming", "families": families}), encoding="utf-8")
+    return p
+
+
+def test_apply_families_to_named_method_only(tmp_path, monkeypatch):
+    from gcws import paths
+    from gcws.core import proc_method as PM
+    from gcws.learn.propose import apply_families_to_method
+    monkeypatch.setattr(paths, "DATA", tmp_path / "data")
+    PM.save({"name": "M", "sections": {"quant": {"mode": "nias_mgkg"}}})
+    PM.save({"name": "Other", "sections": {"quant": {"mode": "nias_mgkg"}}})
+    fam = {"label": "hydrocarbon", "row_name": "Hydrocarbon", "sum_text": "Sum of hydrocarbons", "names": ["Hydrocarbon"],
+           "hints": [], "support": 9, "batches": 2}
+    apply_families_to_method(_proposal(tmp_path, [fam]), "M")
+    m = PM.load("M")
+    assert m["sections"]["learned_rules"]["families"] == [fam] and m["sections"]["learned_rules"]["version"] == 1
+    assert m["sections"]["quant"] == {"mode": "nias_mgkg"}
+    assert "learned_rules" not in PM.load("Other")["sections"]
+
+
+def test_apply_families_needs_families(tmp_path, monkeypatch):
+    import pytest
+    from gcws import paths
+    from gcws.core import proc_method as PM
+    from gcws.learn.propose import apply_families_to_method
+    monkeypatch.setattr(paths, "DATA", tmp_path / "data")
+    PM.save({"name": "M", "sections": {}})
+    with pytest.raises(ValueError):
+        apply_families_to_method(_proposal(tmp_path, []), "M")
+
+
+def test_cli_apply_families_requires_method(tmp_path):
+    import pytest
+    from gcws.learn.__main__ import main
+    with pytest.raises(SystemExit):
+        main(["apply-families", str(_proposal(tmp_path, []))])
+
+
+def test_cli_apply_families_writes_the_method(tmp_path, monkeypatch):
+    from gcws import paths
+    from gcws.core import proc_method as PM
+    from gcws.learn.__main__ import main
+    monkeypatch.setattr(paths, "DATA", tmp_path / "data")
+    PM.save({"name": "M (copy)", "sections": {}})
+    fam = {"label": "x", "row_name": "X", "sum_text": "Sum of x", "names": ["X"], "hints": [], "support": 5, "batches": 2}
+    assert main(["apply-families", str(_proposal(tmp_path, [fam])), "--method", "M (copy)"]) == 0
+    assert PM.load("M (copy)")["sections"]["learned_rules"]["families"][0]["label"] == "x"

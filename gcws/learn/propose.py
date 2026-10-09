@@ -183,3 +183,25 @@ def run_fit(target: str, root: Path, out_dir: Path, method_name: str = "NIAS", *
                          lambda p, rs: _mean(R.report_agreement(r, p) for r in rs), progress=progress)
     write_proposal(result, out_dir, method_name=method_name, extra_notes=notes)
     return result
+
+
+def apply_families_to_method(proposal_json: Path, method_name: str) -> Path:
+    """Write the family table of a naming proposal into the processing method ``method_name`` (only that one):
+    the explicit approval step. Returns the method file."""
+    import datetime
+    from gcws.core import proc_method as PM
+    data = json.loads(Path(proposal_json).read_text(encoding="utf-8"))
+    families = data.get("families") or []
+    if not families:
+        raise ValueError(f"{proposal_json} has no learned families")
+    method = PM.load(method_name)
+    method.setdefault("sections", {})["learned_rules"] = {
+        "version": 1, "approved": datetime.date.today().isoformat(), "source": str(proposal_json),
+        "families": [{**f, "row_name": f.get("row_name") or f["label"]} for f in families]}
+    for f in PM.folder().glob("*.json"):           # save over the file the method came from
+        try:
+            if PM.read(f).get("name") == method_name:
+                return PM.save(method, f)
+        except (OSError, ValueError):
+            continue
+    return PM.save(method)
