@@ -31,3 +31,15 @@ def test_gio_workbook():
     assert any(r.cas == "97-88-1" for r in ev.report)
     assert not any(r.row_class == "unnamed" for r in ev.report)
     assert removed_peaks(ev)
+
+
+def test_scan_testsample():
+    from gcws.learn.corpus import scan
+    root = LEARN_ROOT / "2025"
+    if not root.is_dir():
+        pytest.skip("training data not available (set GCWS_LEARN_ROOT)")
+    entries = scan(root)
+    assert len(entries) >= 31
+    assert not any("rptdef" in e.workbook for e in entries)
+    coffee = [e for e in entries if "25026244_coffeecapsule" in e.batch_dir]
+    assert coffee and all(e.blanks for e in coffee)
