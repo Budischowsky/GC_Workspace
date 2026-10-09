@@ -26,6 +26,7 @@ def engine_peaks(sample, value: Optional[Callable] = None) -> list[dict]:
     for row in gc_fid.report_rows(sample):
         d = gc_fid._as_engine_peak(row)
         d["gcws_index"] = row.derived.get("gcws_index")      # the integrated peak (AutoLib ignores the key)
+        d["learned"] = row.derived.get("learned", "")         # a learned report rule renamed the row (gcws.learn)
         if value is not None:
             d["mg_kg"] = value(row)
         out.append(d)

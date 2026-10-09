@@ -77,7 +77,11 @@ def row_of(feature, sources: list, labels: list, required: int) -> dict:
     reviews += _review_de(feature, labels, n)
     # name and identification status
     single = present[0] if len(present) == 1 else None
-    if ident is None or ident.case in ("none",) or not ident.name:
+    learned = next((s for s in present if s.get("learned")), None)
+    if learned is not None:
+        # an approved learned rule (gcws.learn family) named the row: it wins over the consensus name
+        name, cas, id_status = learned["name"], "", learned.get("id_status", "")
+    elif ident is None or ident.case in ("none",) or not ident.name:
         name = (single or present[0])["name"]
         cas = (single or present[0])["cas"]
         id_status = (single or present[0]).get("id_status", "")
