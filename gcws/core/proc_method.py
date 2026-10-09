@@ -34,13 +34,14 @@ SECTIONS = {
     "own_search": "Own library search options",
     "report": "Report options",
     "report_template": "Report template (columns, header, rows of the Template Report)",
+    "learned_rules": "Learned report rules (families learned from analyst evaluations)",
     "table": "Peak table (columns, value filter)",
 }
 QUANT_KEYS = ("mode", "unit", "istd_conc_value", "settings", "istd_defs", "istd_options", "solvent_cut", "hs",
               "ms_solvent", "rrt_reference", "detector", "istd_refs", "istd_detect", "method")
 #: sections that live in ``ws.quant`` under one key
 QUANT_SECTIONS = {"blank": "blank_sub", "deconv": "deconv", "ri": "ri", "migration": "migration",
-                  "features": "features", "report_template": "report_template"}
+                  "features": "features", "report_template": "report_template", "learned_rules": "learned_rules"}
 
 
 def folder() -> Path:
@@ -190,7 +191,8 @@ def summary(method: dict) -> str:
 # -- applying -----------------------------------------------------------------------------------
 
 #: sections that change the workspace itself (quantification settings and integration methods)
-WORKSPACE_SECTIONS = ("integration", "quant", "blank", "deconv", "ri", "migration", "features", "report_template")
+WORKSPACE_SECTIONS = ("integration", "quant", "blank", "deconv", "ri", "migration", "features", "report_template",
+                      "learned_rules")
 
 
 def chosen_sections(method: dict, sections=None) -> list[str]:
