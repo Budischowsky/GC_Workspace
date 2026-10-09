@@ -191,12 +191,25 @@ def _design(shapes: Sequence[Shape], t: np.ndarray, shift: float, stretch: float
     return np.column_stack([curve(s, t, shift, stretch) for s in shapes])
 
 
+def _unit_columns(a: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """``a`` with each nonzero column scaled to a maximum of 1, and the scales.
+
+    The NNLS of the NIAS engine takes a value below ``m * eps * max|A| * max|b|`` for zero; it is
+    sized for the engine's unit-maximum model shapes. MS profiles of millions of counts fitted to a
+    trace of a few hundred thousand pA have amplitudes far below that tolerance, so the columns are
+    scaled to unit maximum first (the amplitudes are scaled back)."""
+    scale = np.abs(a).max(axis=0)
+    scale = np.where(scale > 0, scale, 1.0)
+    return a / scale, scale
+
+
 def _residual(a: np.ndarray, y: np.ndarray) -> tuple[float, np.ndarray]:
     if not a.any():
         return float(y @ y), np.zeros(a.shape[1])
+    a, scale = _unit_columns(a)
     x = _nias.nnls(a, y)
     r = y - a @ x
-    return float(r @ r), x
+    return float(r @ r), x / scale
 
 
 def _grid(center: float, step: float, half: int) -> np.ndarray:
@@ -307,7 +320,8 @@ def _ss_column(columns: np.ndarray, y: np.ndarray) -> list:
     With one column the Lawson-Hanson NNLS of the NIAS engine comes down to one pseudo-inverse
     product: x = pinv(a) @ y when both a.T @ y and that product exceed the engine's tolerance,
     else 0. The pseudo-inverses are taken in one stacked call (LAPACK factors each matrix on its
-    own); every product, tolerance and residual is the engine's own operation."""
+    own); every product, tolerance and residual is the engine's own operation, on the column
+    scaled to unit maximum as :func:`_residual` scales it."""
     out = [0.0] * len(columns)
     pending = []
     m = y.size
@@ -318,6 +332,7 @@ def _ss_column(columns: np.ndarray, y: np.ndarray) -> list:
         if not a.any():
             out[i] = float(y @ y)
             continue
+        a = _unit_columns(a)[0]
         if ymax is None:
             ymax = float(max(np.abs(y).max(), 1.0))
         tol = max(m, 1) * eps * (float(max(np.abs(a).max(), 1.0)) * ymax)

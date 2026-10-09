@@ -73,6 +73,22 @@ def test_fit_recovers_shift_width_and_shares(offset, stretch):
     assert fit.collinear is None
 
 
+@pytest.mark.parametrize("count", [1, 2])
+def test_fit_does_not_depend_on_the_scale_of_the_ms_profiles(count):
+    """MS profiles of millions of counts against a trace of a few hundred pA: the NNLS zero tolerance
+    of the NIAS engine grows with max|A| * max|b|, so unscaled profiles had every amplitude (~1e-4)
+    taken for zero (seen on a 16-million-count butyl methacrylate peak: R² below 0, nothing split)."""
+    comps = [component(10.0), component(10.022)][:count]
+    t, y = trace([(10.0, 400.), (10.022, 700.)][:count], 0.0066, 1.0, noise=2.0)
+    small = [F.Shape.of(c) for c in comps]
+    big = [F.Shape.from_arrays(s.rt, s.t, s.y * 1.7e7) for s in small]
+    one, two = F.fit_trace_uncached(t, y, small, 0.0066), F.fit_trace_uncached(t, y, big, 0.0066)
+    assert two.r2 > 0.99 and np.all(two.amplitudes > 0)
+    assert two.shift == one.shift and two.stretch == one.stretch
+    np.testing.assert_allclose(two.areas, one.areas, rtol=1e-9)
+    np.testing.assert_allclose(two.amplitudes * 1.7e7, one.amplitudes, rtol=1e-9)
+
+
 def test_fit_is_deterministic_and_masked_points_are_ignored():
     shapes = [F.Shape.of(component(10.0)), F.Shape.of(component(10.02))]
     t, y = trace([(10.0, 300.), (10.02, 500.)], 0.006, 0.9, noise=1.0)
