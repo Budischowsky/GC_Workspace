@@ -133,3 +133,31 @@ def test_the_table_survives_a_round_trip():
     back = TB.ReportTable.from_dict(t.to_dict())
     assert back == t
     assert TB.fmt(1.23456, 2) == "1.23" and TB.fmt(None, 2) == "" and TB.fmt("x", 2) == "x"
+
+
+@pytest.mark.parametrize("name", ["Styrene Dimer", "Styrene Trimer", "Styrene Butadiene Dimer", "aMeStyrene Dimer",
+                                  "Styrene/aMeStyrene Trimer", "Styrene/aMeStyrene Tetramer",
+                                  "Styrene/aMeStyrene Pentamer", "Styrol-Dimer", "Styroltrimer",
+                                  "Sum of styrene oligomers"])
+def test_styrene_oligomer_names_of_the_library_are_summed(name):
+    from gcws.report.legacy_api import main_script
+    assert main_script().classify_name(name) == "styrene"
+
+
+@pytest.mark.parametrize("name", ["Styrene", "Polystyrene", "alpha-Methylstyrene",
+                                  "3,5-Di-tert-butyl-4-hydroxystyrene (Arvin 5, degradation product of Irganox 1076)"])
+def test_styrene_itself_keeps_its_own_row(name):
+    from gcws.report.legacy_api import main_script
+    assert main_script().classify_name(name) is None
+
+
+def test_the_styrene_oligomers_of_the_library_form_one_sum_row():
+    rows = [_row(20.0, "Styrene Trimer", "", (0.05,)), _row(21.0, "Styrene/aMeStyrene Tetramer", "", (0.07,)),
+            _row(19.0, "Styrene Butadiene Dimer", "", (0.02,)), _row(9.0, "Styrene", "100-42-5", (0.1,))]
+    t = TB.build(_data(rows), TP.preset("NIAS"))
+    names = _texts(t, "Name")
+    assert names[0] == "Styrene"
+    assert names.count("Sum of styrene oligomers (estimated)**") == 1
+    i = names.index("Sum of styrene oligomers (estimated)**")
+    assert _texts(t, "Conc. mg/kg")[i] == pytest.approx(0.14)
+    assert not any("Trimer" in n or "Tetramer" in n or "Dimer" in n for n in names)

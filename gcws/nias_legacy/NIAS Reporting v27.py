@@ -3764,6 +3764,10 @@ def cas_lookup_match(cas_lookup: dict[str, dict[str, Any]],
     return merged
 
 
+# GCWS-PATCH: a styrene (or styrol, alpha-methylstyrene) dimer ... hexamer or oligomer
+STYRENE_OLIGOMER = re.compile(r"(styren|styrol).*(di|tri|tetra|penta|hexa|oligo)mer")
+
+
 def classify_name(name: str) -> Optional[str]:
     """Classify report names, including abbreviated cyclic ester oligomers.
 
@@ -3774,6 +3778,10 @@ def classify_name(name: str) -> Optional[str]:
     """
     lowered = text(name).casefold()
     if "styrene oligomer" in lowered or "styreme oligomer" in lowered:
+        return "styrene"
+    # GCWS-PATCH: the in-house library names its styrene oligomers by size ("Styrene Trimer",
+    # "Styrene/aMeStyrene Tetramer", "Styrene Butadiene Dimer"); the monomer keeps its own row
+    if STYRENE_OLIGOMER.search(lowered):
         return "styrene"
     if "cyclic polyester oligomer" in lowered or "cyclic ester oligomer" in lowered:
         return "cyclic_polyester"
