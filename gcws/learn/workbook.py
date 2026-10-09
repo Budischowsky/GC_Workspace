@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Optional
 
-from gcws.learn.model import AlkanePoint, EvalRow, Header, IstdEntry, RawPeak, normalise_cas
+from gcws.learn.model import (AlkanePoint, EvalRow, Header, HumanEvaluation, IstdEntry, RawPeak, ReportRow,
+                              normalise_cas)
 
 
 def _num(v) -> Optional[float]:
@@ -326,3 +328,119 @@ def classify_rows(rows: list) -> None:
             r.row_class = "group"
         else:
             r.row_class = "named_no_cas"
+
+
+# --- 'externerBericht' sheet (client report) ----------------------------------------------------------------------
+
+def parse_report(values: dict[str, object]) -> tuple[list[ReportRow], list[str]]:
+    """Substance lines of the client report and the footnote lines below them. The concentration units are
+    in the row under the header, from the concentration column up to the SML column."""
+    grid = _grid(values)
+    hr = next((r for r in sorted(grid) if _text(grid[r].get(1)).upper() == "RT"
+               and _text(grid[r].get(2)).casefold() == "name"), None)
+    if hr is None:
+        return [], []
+    cols: dict[str, int] = {}
+    for c, v in sorted(grid[hr].items()):
+        tl = _text(v).casefold()
+        if tl == "name":
+            cols["label"] = c
+        elif tl.startswith("cas"):
+            cols["cas"] = c
+        elif "match" in tl:
+            cols["match"] = c
+        elif "conc" in tl:
+            cols["conc"] = c
+        elif tl == "sml":
+            cols["sml"] = c
+        elif tl.startswith("ref"):
+            cols["reference"] = c
+    if "cas" in cols and cols["cas"] + 1 not in cols.values():
+        cols["library"] = cols["cas"] + 1                    # the DB column has no header text
+    units = grid.get(hr + 1, {})
+    conc_cols = []
+    if "conc" in cols:
+        end = cols.get("sml", max(units, default=cols["conc"]) + 1)
+        conc_cols = [(_text(units[c]), c) for c in sorted(units) if cols["conc"] <= c < end]
+    rows: list[ReportRow] = []
+    notes: list[str] = []
+    for r in sorted(grid):
+        if r <= hr + 1:
+            continue
+        row = grid[r]
+        rt = _num(row.get(1))
+        if rt is None:
+            text = " ".join(_text(v) for _, v in sorted(row.items()) if isinstance(v, str))
+            if text and rows:
+                notes.append(text)
+            continue
+        rows.append(ReportRow(
+            rt=rt, label=_text(row.get(cols.get("label", 0))), cas=normalise_cas(row.get(cols.get("cas", 0))),
+            library=_text(row.get(cols.get("library", 0))), match=_num(row.get(cols.get("match", 0))),
+            conc={unit: _num(row.get(c)) for unit, c in conc_cols},
+            sml=_plain(row.get(cols["sml"])) if "sml" in cols else "",
+            reference=_plain(row.get(cols["reference"])) if "reference" in cols else ""))
+    classify_rows(rows)
+    return rows, notes
+
+
+# --- whole workbook ----------------------------------------------------------------------------------------------
+
+def _sheet_cells(ws) -> dict[str, object]:
+    return {c.coordinate: c.value for row in ws.iter_rows() for c in row
+            if getattr(c, "value", None) is not None}
+
+
+def parse_workbook(path: Path) -> HumanEvaluation:
+    """One evaluation workbook. Content problems are recorded in .problems; nothing raises."""
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")      # openpyxl: unsupported Excel extensions in these templates
+        return _parse_workbook(path)
+
+
+def _parse_workbook(path: Path) -> HumanEvaluation:
+    import openpyxl
+
+    ev = HumanEvaluation(path=str(path))
+    try:
+        wv = openpyxl.load_workbook(path, data_only=True, read_only=True, keep_vba=False)
+        wf = openpyxl.load_workbook(path, data_only=False, read_only=True, keep_vba=False)
+    except Exception as exc:  # noqa: BLE001 - any unreadable file is a corpus problem, not a crash
+        ev.problems.append(f"cannot open: {type(exc).__name__}: {exc}")
+        return ev
+    try:
+        names = set(wv.sheetnames)
+        if "Rohdaten" in names:
+            ev.raw = parse_rohdaten(list(wv["Rohdaten"].iter_rows(values_only=True)))
+        else:
+            ev.problems.append("sheet missing: Rohdaten")
+        if "Auswertung" in names:
+            cells = _sheet_cells(wv["Auswertung"])
+            ev.template = detect_template(cells)
+            ev.header = parse_header(cells)
+            ev.final = parse_eval_table(cells, _sheet_cells(wf["Auswertung"]))
+            classify_rows(ev.final)
+            ev.problems += [f"ISTD area missing: {i.name}" for i in ev.header.istd if i.area is None]
+            if not ev.final:
+                ev.problems.append("no worksheet table in Auswertung")
+        else:
+            ev.problems.append("sheet missing: Auswertung")
+        if "Auswertung (2)" in names:
+            ev.pre_clean = parse_eval_table(_sheet_cells(wv["Auswertung (2)"]), _sheet_cells(wf["Auswertung (2)"]))
+            classify_rows(ev.pre_clean)
+        if "externerBericht" in names:
+            ev.report, ev.footnotes = parse_report(_sheet_cells(wv["externerBericht"]))
+        else:
+            ev.problems.append("sheet missing: externerBericht")
+    finally:
+        wv.close()
+        wf.close()
+    return ev
+
+
+def removed_peaks(ev: HumanEvaluation, rt_tol: float = 0.01) -> list[RawPeak]:
+    """FID peaks of the raw integration that have no row in the final worksheet: what the analyst removed."""
+    kept = [r.rt for r in ev.final if r.rt is not None]
+    return [p for p in ev.raw if p.signal == "FID" and not any(abs(p.rt - k) <= rt_tol for k in kept)]

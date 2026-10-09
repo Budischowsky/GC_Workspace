@@ -116,3 +116,66 @@ def test_eval_table_other_units(tmp_path):
                                              "I": 3}]))
     assert rows[0].conc == {"µg/L": 1, "µg/Zipper": 2, "µg/0.25gGranulat": 3}
     assert rows[0].sml == ""
+
+
+def test_parse_report(tmp_path):
+    from learn_fixtures import FOOTNOTES, make_workbook
+    from gcws.learn.workbook import parse_report
+    rows, notes = parse_report(_cells(make_workbook(tmp_path / "w.xlsx"), "externerBericht"))
+    assert [r.rt for r in rows] == [7.07, 10.846, 17.878, 21.048, 21.449]
+    bma = rows[0]
+    assert (bma.label, bma.cas, bma.library, bma.match, bma.sml, bma.reference) == (
+        "Butyl methacrylate", "97-88-1", "NIST05", 90, "6", "[1],[2]")
+    assert bma.conc == {"mg/dm²": 0.243, "mg/kg": 1.458}
+    assert rows[1].sml == "CC I(a)"
+    assert [r.row_class for r in rows] == ["named", "named", "coelution", "group", "group"]
+    assert notes == FOOTNOTES
+
+
+def test_parse_report_lowercase_headers(tmp_path):
+    import openpyxl
+    from learn_fixtures import make_workbook
+    from gcws.learn.workbook import parse_report
+    path = make_workbook(tmp_path / "w.xlsx")
+    wb = openpyxl.load_workbook(path)
+    ws = wb["externerBericht"]
+    ws["B25"], ws["G25"], ws["J25"] = "name", "migration conc.", "ref."
+    wb.save(path)
+    rows, _ = parse_report(_cells(path, "externerBericht"))
+    assert rows[0].label == "Butyl methacrylate" and rows[0].reference == "[1],[2]"
+    assert list(rows[0].conc) == ["mg/dm²", "mg/kg"]
+
+
+def test_parse_workbook_synthetic(tmp_path):
+    from learn_fixtures import make_workbook
+    from gcws.learn.workbook import parse_workbook
+    ev = parse_workbook(make_workbook(tmp_path / "w.xlsx"))
+    assert ev.problems == []
+    assert ev.template == "v2" and ev.header.simulant == "EtOH 95%"
+    assert {p.signal for p in ev.raw} == {"TIC", "FID"}
+    assert ev.pre_clean is not None and len(ev.pre_clean) == len(ev.final) + 2
+    assert len(ev.report) == 5 and ev.footnotes
+    assert parse_workbook(make_workbook(tmp_path / "v.xlsx", pre_clean=False)).pre_clean is None
+
+
+def test_parse_workbook_bad_file(tmp_path):
+    from gcws.learn.workbook import parse_workbook
+    bad = tmp_path / "bad.xlsm"
+    bad.write_text("not a workbook")
+    ev = parse_workbook(bad)
+    assert len(ev.problems) == 1 and ev.problems[0].startswith("cannot open: ")
+    assert (ev.raw, ev.final, ev.report) == ([], [], [])
+
+
+def test_parse_workbook_div0_is_a_problem(tmp_path):
+    from learn_fixtures import make_workbook
+    from gcws.learn.workbook import parse_workbook
+    ev = parse_workbook(make_workbook(tmp_path / "w.xlsx", istd_area_c17="#DIV/0!"))
+    assert ev.problems == ["ISTD area missing: C17"]
+
+
+def test_removed_peaks(tmp_path):
+    from learn_fixtures import make_workbook
+    from gcws.learn.workbook import parse_workbook, removed_peaks
+    removed = removed_peaks(parse_workbook(make_workbook(tmp_path / "w.xlsx")))
+    assert [p.rt for p in removed] == [5.132, 6.409]
