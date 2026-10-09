@@ -678,6 +678,16 @@ def test_word_preview_failure_is_shown_once(qtbot, data, tmp_path, monkeypatch, 
     assert len(calls) == 2 and "Word could not convert" in dock.preview_note.text()
 
 
+def test_preview_says_why_no_report_was_made(qtbot, data, tmp_path, monkeypatch, settings):
+    wf, jr, ids, batch = _seed(data, tmp_path)
+    job = jr.job(ids["S-control"])
+    msg = "NIAS Report not made: The NIAS report needs the migration conditions"
+    jr.update_job(job.id, files={}, evidence=dict(job.evidence or {}, errors=[msg]))
+    dock = _dock(jr, monkeypatch, qtbot)
+    dock.select(ids["S-control"])
+    assert "No report was made" in dock.preview_note.text() and msg in dock.preview_note.text()
+
+
 def test_docks_and_menus(qtbot, win):
     assert "report2" in win.docks and "automation" in win.docks
     labels = [a.text() for a in win.report_menu.actions()]

@@ -1066,8 +1066,13 @@ class Report2Dock(QWidget):
                                "(the first time only; it is kept with the job)")
                     return
         if path is None:
-            self._note("Select a report to preview it." if job is None else
-                       "This report has no PDF and no Word file to preview. Open report shows it in Excel.")
+            errors = [] if job is None else [e for e in (job.evidence or {}).get("errors") or [] if e]
+            if job is None:
+                self._note("Select a report to preview it.")
+            elif not any(job.files.values() if job.files else ()) and errors:
+                self._note("No report was made:\n" + "\n".join(errors))   # e.g. no migration conditions
+            else:
+                self._note("This report has no PDF and no Word file to preview. Open report shows it in Excel.")
             return
         if path == self._preview_path:
             return
