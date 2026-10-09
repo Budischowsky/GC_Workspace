@@ -84,12 +84,16 @@ def parse_rohdaten(rows: list[tuple]) -> list[RawPeak]:
 
 # --- 'Auswertung' sheet -------------------------------------------------------------------------------------------
 
-ROW_CLASSES = ("istd", "named", "named_no_cas", "group", "unknown", "coelution", "derivative", "unnamed", "sum")
+ROW_CLASSES = ("istd", "named", "named_no_cas", "group", "unknown", "coelution", "derivative", "background",
+               "unnamed", "sum")
 
 _RE_ISTD = re.compile(r"^IS\d+$", re.IGNORECASE)
 _RE_UNKNOWN = re.compile(r"^unknown\b", re.IGNORECASE)
-_RE_COELUTION = re.compile(r"mehrere Verbindungen|several compounds|co-?elut", re.IGNORECASE)
-_RE_DERIVATIVE = re.compile(r"possible derivative|m[öo]gliche[sr]? Derivat", re.IGNORECASE)
+_RE_COELUTION = re.compile(r"mehrere verb|several compounds|co-?elut", re.IGNORECASE)
+_RE_DERIVATIVE = re.compile(r"derivat|transformation product|^(possible\s+)?degradation product", re.IGNORECASE)
+# remarks by which the analyst marks a listed peak as not coming from the sample
+_RE_BACKGROUND = re.compile(r"\bblank\b|nicht aus (der )?probe|\bseptum\b|\b(im|in) (std|standard)\b",
+                            re.IGNORECASE)
 _RE_SUM = re.compile(r"^(sum|summe)\b", re.IGNORECASE)
 _RE_COORD = re.compile(r"^([A-Z]{1,3})(\d+)$")
 _RE_REF = re.compile(r"\$?([A-Z]{1,3})\$?(\d+)")
@@ -167,6 +171,8 @@ def parse_header(cells: dict[str, object]) -> Header:
             right = [row[k] for k in sorted(row) if k > c]
             if right:
                 setattr(h, key, _num(right[0]) if key in _NUMERIC_HEADER else _plain(right[0]))
+                if key == "temperature" and h.temperature is None:
+                    h.temperature_text = _plain(right[0])        # a condition, e.g. "USB" (ultrasonic bath)
     h.istd, h.istd_mean_area = _istd(grid, stop)
     h.alkanes = _alkanes(grid)
     h.conc_units = [unit for unit, _ in _table_columns(grid)["conc"]]
@@ -192,7 +198,7 @@ def _istd(grid, stop: int) -> tuple[list[IstdEntry], Optional[float]]:
             for rr in range(r + 1, stop):
                 row = grid.get(rr, {})
                 name = row.get(c - 1)
-                if name is None or _num(name) is not None:
+                if name is None or _num(name) is not None or "/" in _text(name):   # numbers, units
                     continue
                 block.append(IstdEntry(_text(name), _num(row.get(c)), _num(row.get(c + 1))))
                 last = rr
@@ -314,6 +320,8 @@ def classify_rows(rows: list) -> None:
             r.row_class = "sum"
         elif _RE_ISTD.match(label):
             r.row_class = "istd"
+        elif _RE_BACKGROUND.search(label):
+            r.row_class = "background"
         elif _RE_UNKNOWN.match(label):
             r.row_class = "unknown"
         elif _RE_COELUTION.search(label):

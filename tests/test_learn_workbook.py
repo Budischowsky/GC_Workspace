@@ -179,3 +179,34 @@ def test_removed_peaks(tmp_path):
     from gcws.learn.workbook import parse_workbook, removed_peaks
     removed = removed_peaks(parse_workbook(make_workbook(tmp_path / "w.xlsx")))
     assert [p.rt for p in removed] == [5.132, 6.409]
+
+
+def test_eval_table_analyst_remarks(tmp_path):
+    """Wordings found in the real workbooks: exclusion remarks, abbreviations, related-structure labels."""
+    from learn_fixtures import make_workbook
+    labels = {
+        "blank": "background", "Hydrocarbon auch im Blank": "background", "nicht aus probe": "background",
+        "septum": "background", "nonanol in std": "background", "auch im Standard Nonanol": "background",
+        "mehrere Verb": "coelution", "mehrere verb.": "coelution",
+        "Derivative of siloxane": "derivative", "cycloasiloxane derivative": "derivative",
+        "degradation product of EAA (possible (13Z)-13-Docosenenitrile CAS 73170-89-5)": "derivative",
+        "possible transformation product of 3-(3,5-di-tert-butyl-4-hydroxyphenyl)propionic acid": "derivative",
+        "3,5-Di-tert-butyl-4-hydroxystyrene (Arvin 5, degradation product of Irganox 1076)": "named_no_cas",
+    }
+    rows = _table(make_workbook(tmp_path / "w.xlsx", final_rows=[
+        {"A": 10 + i, "B": label, "F": 1000} for i, label in enumerate(labels)]))
+    assert {r.label: r.row_class for r in rows} == labels
+
+
+def test_header_text_temperature_and_unit_below_istd(tmp_path):
+    import openpyxl
+    from learn_fixtures import make_workbook
+    from gcws.learn.workbook import parse_header
+    path = make_workbook(tmp_path / "w.xlsx")
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Auswertung"]
+    ws["E8"], ws["D26"] = "USB", "µg/L"
+    wb.save(path)
+    h = parse_header(_cells(path))
+    assert (h.temperature, h.temperature_text) == (None, "USB")
+    assert [i.name for i in h.istd] == ["C17", "BBP", "DnNP", "DBP-d4"]

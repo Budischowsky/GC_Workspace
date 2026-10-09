@@ -43,6 +43,7 @@ class Header:
     data_file: str = ""
     simulant: str = ""
     temperature: Optional[float] = None
+    temperature_text: str = ""
     duration: str = ""
     volume: Optional[float] = None
     sv_ratio: Optional[float] = None
