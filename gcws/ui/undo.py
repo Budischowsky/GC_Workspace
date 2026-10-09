@@ -16,15 +16,26 @@ def _plain_copy(value):
     lists of identifications hold): the same independent containers, without the memo
     bookkeeping that makes deepcopy slow on thousands of small peak lists."""
     kind = type(value)
-    if kind in (str, int, float, bool, type(None)):
+    if kind in _ATOMS:
         return value
     if kind is list:
-        return [_plain_copy(v) for v in value]
+        out = value[:]
+        for i, v in enumerate(out):
+            if type(v) not in _ATOMS:
+                out[i] = _plain_copy(v)
+        return out
     if kind is dict:
-        return {k: _plain_copy(v) for k, v in value.items()}
+        out = dict(value)
+        for k, v in out.items():
+            if type(v) not in _ATOMS:
+                out[k] = _plain_copy(v)
+        return out
     if kind is tuple:
-        return tuple(_plain_copy(v) for v in value)
+        return value if all(type(v) in _ATOMS for v in value) else tuple(_plain_copy(v) for v in value)
     return copy.deepcopy(value)
+
+
+_ATOMS = frozenset((str, int, float, bool, type(None)))
 
 
 def _copy_idents(items) -> list:
