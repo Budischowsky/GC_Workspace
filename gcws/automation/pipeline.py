@@ -115,9 +115,10 @@ def _paths(folder: Path, names: list[str]) -> list[Path]:
 # -- the job -----------------------------------------------------------------------------------
 
 def run_job(spec: dict, *, progress: Callable[[str], None] = log.info,
-            identify: Optional[Callable] = None) -> JobResult:
+            identify: Optional[Callable] = None, inspect: Optional[Callable] = None) -> JobResult:
     """Process one sample (see the module text). ``identify(ws, run_ids)`` replaces the library search
-    (tests); ``spec`` is written by the watcher (``spec.json`` in the job folder)."""
+    (tests); ``inspect(ws, run_ids)`` returns extra evidence from the processed workspace (gcws.learn),
+    kept as ``evidence["inspect"]``; ``spec`` is written by the watcher (``spec.json`` in the job folder)."""
     t0 = time.time()
     out_dir = Path(spec["out_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -284,11 +285,19 @@ def run_job(spec: dict, *, progress: Callable[[str], None] = log.info,
     except Exception as exc:  # noqa: BLE001
         warnings.append(f"Project not saved: {exc}")
         project = None
+    inspected = None
+    if inspect is not None:
+        try:
+            inspected = _json_safe(inspect(ws, members))
+        except Exception as exc:  # noqa: BLE001 - the job's result stands without the extra evidence
+            warnings.append(f"Learning evidence failed: {exc}")
     # evidence and the Report² rules
     evidence = evidence_for(ws, members, kind=(spec.get("reports") or [{}])[0].get("kind"),
                             require=spec.get("require_blank", "auto"), detection=detection)
     evidence.update(rows=rows, summary=summary, warnings=warnings + sample_warn, errors=errors_ev,
                     reported=reported, double_determination=dd)
+    if inspect is not None:
+        evidence["inspect"] = inspected
     if spec.get("has_review", True):
         ev = RU.evaluate(RU.from_list(spec.get("rules")) if spec.get("rules") is not None else RU.default_rules(),
                          evidence, bool(spec.get("auto_accept", True)))
