@@ -79,7 +79,9 @@ def load_cached_runs(root: Path, out_dir: Path, method_name: str, process_fn=Non
         if prog.state == "failed":
             continue
         items = human_items(ev)
-        run = CachedRun(Path(entry.batch_dir).name, items, prog, match_run(ev, prog, items=items))
+        sums = [r.label for r in ev.report if r.label.casefold().startswith("sum of")]
+        run = CachedRun(Path(entry.batch_dir).name, items, prog, match_run(ev, prog, items=items),
+                        footnotes=list(ev.footnotes) + sums)
         batches.setdefault(run.batch, []).append(run)
     return batches
 

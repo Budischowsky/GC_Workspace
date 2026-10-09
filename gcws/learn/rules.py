@@ -2,7 +2,7 @@
 its parameters and returns its decision with a reason naming the rule, its version and the values."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from gcws.learn.match import HumanItem, Pair
@@ -43,6 +43,7 @@ class CachedRun:
     items: list[HumanItem]
     prog: Optional[ProgramResult]
     pairs: list[Pair]
+    footnotes: list[str] = field(default_factory=list)   # the analyst's 'Sum of …' wording
 
 
 def worksheet_agreement(run: CachedRun, params: dict) -> Optional[float]:
