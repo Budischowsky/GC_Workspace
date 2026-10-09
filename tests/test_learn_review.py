@@ -72,3 +72,16 @@ def test_cli_review(root, tmp_path, monkeypatch):
     assert cli.main(["review", str(root), "--out", str(tmp_path / "o")]) == 0
     data = json.loads((tmp_path / "o" / "review" / "items.json").read_text(encoding="utf-8"))
     assert any(d["type"] == "not_reported" for d in data)
+
+
+def test_draft_client_report_gives_no_client_items_and_no_client_score(tmp_path):
+    from learn_fixtures import make_workbook
+    from gcws.learn.baseline import run_baseline
+    from gcws.learn.review import build_items
+    root = tmp_path / "root"
+    make_workbook(root / "B1/05_X_A.D/Auswertung/NIAS-Screening-SYN1_BDa_ 05_X_A.xlsx",
+                  report_rows=[{"A": 7.07, "F": 1}, {"A": 8.0, "F": 1}, {"A": 17.878, "B": "mehrere Verbindungen"}])
+    client = {"missing_peak", "not_reported", "extra_reported", "name_differs"}
+    assert not [i for i in build_items(root, tmp_path / "out", process_fn=_missing_one) if i.type in client]
+    (run,) = run_baseline(root, tmp_path / "out", process_fn=_missing_one, progress=lambda t: None)["runs"]
+    assert run["score"]["client_f1"] is None and "client report looks like a draft" in run["notes"]

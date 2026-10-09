@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 VERDICTS = ("analyst", "program", "both")
+CLIENT_TYPES = ("missing_peak", "not_reported", "extra_reported", "name_differs")
 
 
 @dataclass
@@ -60,6 +61,8 @@ def build_items(root: Path, out_dir: Path, method_name: str = "NIAS", process_fn
         for r in runs:
             lines = client_lines(r.prog)
             for d in score_run(r.items, r.prog, r.pairs).details:
+                if not r.client_report and d["type"] in CLIENT_TYPES:
+                    continue             # no (or only a draft) client report: nothing to say about its lines
                 it = r.items[d["human"]] if d["human"] is not None else None
                 peak = r.prog.peaks[d["program"]] if d["program"] is not None else None
                 line = lines[d["line"]] if d["line"] is not None else None

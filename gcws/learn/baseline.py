@@ -25,7 +25,7 @@ def run_baseline(root: Path, out_dir: Path, method_name: str = "NIAS", *, force:
                  limit: Optional[int] = None, process_fn: Optional[Callable] = None,
                  progress: Callable[[str], None] = print) -> dict:
     from gcws.learn.runner import migration_from_header, process
-    from gcws.learn.workbook import parse_workbook
+    from gcws.learn.workbook import parse_workbook, report_is_draft
     process_fn = process_fn or process
     root, out_dir = Path(root), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -52,14 +52,15 @@ def run_baseline(root: Path, out_dir: Path, method_name: str = "NIAS", *, force:
             items = human_items(ev)
             score = score_run(items, prog, match_run(ev, prog, items=items),
                               verdicts=run_verdicts(out_dir, row["batch"], run_name, entry.analyst))
+            draft = report_is_draft(ev)
             if not ev.report and nothing_above_limit(ev):
                 row["notes"].append("nothing above the reporting limit")
-            elif not ev.report:     # client report not made in this workbook: no client scores
+            elif not ev.report or draft:     # no client report (or a draft) in this workbook: no client scores
                 score.client_f1 = score.client_precision = score.client_recall = score.total = None
                 score.name_agreement = None
                 for k in ("missing_peak", "not_reported", "extra_reported", "name_differs"):
                     score.disagreements[k] = 0
-                row["notes"].append("no client report in the workbook")
+                row["notes"].append("client report looks like a draft" if draft else "no client report in the workbook")
             row["score"] = asdict(score)
         runs.append(row)
     result = {"method": method_name, "root": str(root), "runs": runs, "aggregate": _aggregate(runs)}
@@ -89,7 +90,9 @@ def _stats(values: list) -> dict:
 def _aggregate(runs: list[dict]) -> dict:
     scored = [r for r in runs if r["score"] is not None]
     agg: dict = {"scored": len(scored), "failed": sum(r["state"] == "failed" for r in runs), "mean": {}, "median": {},
-                 "no_client_report": sum("no client report in the workbook" in r.get("notes", []) for r in runs)}
+                 "no_client_report": sum(any(n in r.get("notes", []) for n in ("no client report in the workbook",
+                                                                     "client report looks like a draft"))
+                                      for r in runs)}
     for k in SCORE_KEYS:
         st = _stats([r["score"][k] for r in scored])
         agg["mean"][k], agg["median"][k] = st["mean"], st["median"]
@@ -114,7 +117,7 @@ def _markdown(result: dict) -> str:
     agg = result["aggregate"]
     lines = [f"# Baseline: method {result['method']}", "", f"Training root: `{result['root']}`", "", "## Summary", "",
              f"{agg['scored']} runs scored, {agg['failed']} failed, {agg['no_client_report']} without a client "
-             "report in the workbook (client scores left out).", "", "| score | mean | median |", "|---|---|---|"]
+             "report in the workbook or with a draft one (client scores left out).", "", "| score | mean | median |", "|---|---|---|"]
     lines += [f"| {k} | {_fmt(agg['mean'][k])} | {_fmt(agg['median'][k])} |" for k in SCORE_KEYS]
     lines += ["", "## Per batch", "", "| batch | runs | total | client F1 | worksheet |", "|---|---|---|---|---|"]
     lines += [f"| {b} | {v['runs']} | {_fmt(v['total'])} | {_fmt(v['client_f1'])} | {_fmt(v['worksheet_agreement'])} |"
