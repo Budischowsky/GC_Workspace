@@ -82,3 +82,28 @@ def test_batch_no_candidate_can_score_is_left_out():
     r = fit("toy", {"x": [1, 2, 3, 4]}, {"x": 1}, _batches(overrides={dead: None}), partial)
     assert r.best == {"x": 3} and r.cv_best is not None
     assert any(dead in n and "not scorable" in n for n in r.notes)
+
+
+def _learn(params, runs):
+    return sum(r.optimum for r in runs) / len(runs)
+
+
+def _eval(params, model, runs):
+    return sum(1 - abs(model + params["shift"] - r.optimum) for r in runs) / len(runs)
+
+
+def test_fit_learned_scores_held_out_batches_with_a_model_learned_without_them():
+    from gcws.learn.fit import fit_learned
+    odd = next(b for b in BATCHES if b not in _split().test)
+    r = fit_learned("toy", {"shift": [0, 1]}, {"shift": 0}, _batches(overrides={odd: 9}), _learn, _eval)
+    # held out, the odd batch is scored with a model learned from optimum-3 batches only
+    assert r.per_batch[odd]["current"] == pytest.approx(1 - abs(3 - 9))
+    cv_runs = [b for b in BATCHES if b not in _split().test]
+    assert r.model == pytest.approx((3 * (len(cv_runs) - 1) + 9) / len(cv_runs))
+    assert r.best == {"shift": 0}
+
+
+def test_fit_is_fit_learned_without_a_model():
+    from gcws.learn.fit import fit
+    r = fit("toy", {"x": [1, 2, 3, 4]}, {"x": 1}, _batches(), toy)
+    assert r.model is None and r.best == {"x": 3}

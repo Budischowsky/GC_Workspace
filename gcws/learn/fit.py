@@ -1,11 +1,14 @@
 """Grid search with batch-grouped cross-validation (spec §8). The choice uses only the cross-validation
 batches; the locked test batches are scored afterwards for the report. A proposal is recommended only when it
-beats the current settings and no batch loses more than ``max_loss``."""
+beats the current settings and no batch loses more than ``max_loss``.
+
+``fit_learned`` also learns a model (e.g. a family table) per fold from the other cross-validation batches, so a
+held-out batch never contributes to the model it is scored with; ``fit`` is the same without a model."""
 from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from gcws.learn.folds import make_split
 
@@ -23,6 +26,7 @@ class FitResult:
     table: list = field(default_factory=list)           # [{"params", "cv"}] in grid order
     accept_recommended: bool = False
     notes: list = field(default_factory=list)
+    model: Any = None                                   # the best candidate's model, learned on all CV batches
 
 
 def grid(space: dict[str, list]) -> list[dict]:
@@ -37,9 +41,23 @@ def _weighted(scores: dict[str, Optional[float]], sizes: dict[str, int], batches
     return sum(s * w for s, w in pairs) / n if n else None
 
 
+def _safe(fn, *args):
+    try:
+        return fn(*args)
+    except Exception:  # noqa: BLE001 - a parameter set that cannot be evaluated is never chosen
+        return None
+
+
 def fit(target: str, space: dict[str, list], current: dict, batches: dict[str, list],
-        evaluate: Callable[[dict, list], Optional[float]], *, tie: float = 0.005, max_loss: float = 0.02,
-        progress: Callable[[str], None] = lambda t: None) -> FitResult:
+        evaluate: Callable[[dict, list], Optional[float]], **kw) -> FitResult:
+    return fit_learned(target, space, current, batches, lambda params, runs: None,
+                       lambda params, model, runs: evaluate(params, runs), **kw)
+
+
+def fit_learned(target: str, space: dict[str, list], current: dict, batches: dict[str, list],
+                learn: Callable[[dict, list], Any], evaluate: Callable[[dict, Any, list], Optional[float]], *,
+                tie: float = 0.005, max_loss: float = 0.02,
+                progress: Callable[[str], None] = lambda t: None) -> FitResult:
     split = make_split(list(batches))
     cv_batches = [b for fold in split.folds for b in fold]
     sizes = {b: len(runs) for b, runs in batches.items()}
@@ -47,16 +65,20 @@ def fit(target: str, space: dict[str, list], current: dict, batches: dict[str, l
     if current not in candidates:
         candidates = [current] + candidates
     per: list[dict[str, Optional[float]]] = []
+    models: list[Any] = []
     for i, params in enumerate(candidates, 1):
         progress(f"{target}: candidate {i}/{len(candidates)} {params}")
-        scores = {}
-        for b, runs in batches.items():
-            try:
-                scores[b] = evaluate(params, runs)
-            except Exception:  # noqa: BLE001 - a parameter set that cannot be evaluated is never chosen
-                scores[b] = None
+        scores: dict[str, Optional[float]] = {}
+        for fold in split.folds:
+            train = [r for b in cv_batches if b not in fold for r in batches[b]]
+            model = _safe(learn, params, train)
+            for b in fold:                          # held out: scored with a model learned without it
+                scores[b] = _safe(evaluate, params, model, batches[b])
+        full = _safe(learn, params, [r for b in cv_batches for r in batches[b]])
+        for b in split.test:
+            scores[b] = _safe(evaluate, params, full, batches[b])
         per.append(scores)
-
+        models.append(full)
     # a batch no candidate can score (e.g. no mg/kg values) is left out; a candidate that fails on a batch
     # the others can score is never chosen
     dead = [b for b in cv_batches if all(s.get(b) is None for s in per)]
@@ -85,13 +107,13 @@ def fit(target: str, space: dict[str, list], current: dict, batches: dict[str, l
     top = max(scored)
     best_i = next(i for i, c in enumerate(cvs) if c is not None and c >= top - tie)
     cur_i = candidates.index(current)
-    result.best = candidates[best_i]
+    result.best, result.model = candidates[best_i], models[best_i]
     result.cv_current, result.cv_best = cvs[cur_i], cvs[best_i]
     result.test_current = _weighted(per[cur_i], sizes, split.test)
     result.test_best = _weighted(per[best_i], sizes, split.test)
     result.per_batch = {b: {"current": per[cur_i].get(b), "best": per[best_i].get(b), "test": b in split.test}
                         for b in sorted(batches)}
-    losers = [b for b in cv_batches if per[cur_i].get(b) is not None and per[best_i].get(b) is not None
+    losers = [b for b in live if per[cur_i].get(b) is not None and per[best_i].get(b) is not None
               and per[cur_i][b] - per[best_i][b] > max_loss]
     for b in losers:
         result.notes.append(f"batch {b} loses {per[cur_i][b] - per[best_i][b]:.3f} with the proposal")
