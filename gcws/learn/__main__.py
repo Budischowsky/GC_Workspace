@@ -1,6 +1,6 @@
 """python -m gcws.learn check <root> [--out DIR]
 python -m gcws.learn baseline <root> [--out DIR] [--method NIAS] [--limit N] [--force]
-python -m gcws.learn fit {detection,background,report} <root> [--out DIR] [--method NIAS]"""
+python -m gcws.learn fit {detection,background,report,naming} <root> [--out DIR] [--method NIAS]"""
 from __future__ import annotations
 
 import argparse
@@ -32,7 +32,7 @@ def main(argv=None) -> int:
     base.add_argument("--limit", type=int, default=None, help="only the first N workbooks")
     base.add_argument("--force", action="store_true", help="process again instead of using the cache")
     fitp = sub.add_parser("fit", help="fit settings on the corpus and write a proposal (nothing is applied)")
-    fitp.add_argument("target", choices=("detection", "background", "report"))
+    fitp.add_argument("target", choices=("detection", "background", "report", "naming"))
     fitp.add_argument("root", type=Path)
     fitp.add_argument("--out", type=Path, default=None, help="output folder (default: <data>/learn)")
     fitp.add_argument("--method", default="NIAS", help="processing method name (default: NIAS)")

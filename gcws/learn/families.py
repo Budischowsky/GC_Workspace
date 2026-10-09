@@ -40,7 +40,7 @@ def learn_families(runs: list, *, min_peaks: int = 5, min_share: float = 0.6,
                 continue
             ev = _evidence(run.prog.peaks[p.program])
             total.update(ev)
-            if it.decision == "reported_group":
+            if it.decision == "reported_group" or it.row_class == "group":    # reported or below the limit
                 label = _words(it.label)
                 by_label[label].update(ev)
                 support[label] += 1

@@ -44,6 +44,7 @@ class CachedRun:
     prog: Optional[ProgramResult]
     pairs: list[Pair]
     footnotes: list[str] = field(default_factory=list)   # the analyst's 'Sum of …' wording
+    client_report: bool = True                           # the workbook has a client report that is not a draft
 
 
 def worksheet_agreement(run: CachedRun, params: dict) -> Optional[float]:

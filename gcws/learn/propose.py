@@ -9,7 +9,7 @@ from typing import Callable, Optional
 
 from gcws.learn.fit import FitResult, fit
 
-TARGETS = ("detection", "background", "report")
+TARGETS = ("detection", "background", "report", "naming")
 
 
 def _v(x) -> str:
@@ -28,6 +28,9 @@ def write_proposal(result: FitResult, out_dir: Path, *, method_name: str, extra_
     folder = Path(out_dir) / "proposals"
     folder.mkdir(parents=True, exist_ok=True)
     data = {"method": method_name, **asdict(result), "extra_notes": list(extra_notes)}
+    families = result.model if isinstance(result.model, list) else None
+    if families is not None:
+        data["families"] = families
     (folder / f"{result.target}.json").write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
     lines = [f"# Proposal: {result.target} (method {method_name})", "",
              "Nothing was applied: this is a proposal. Accepting it is a separate, explicit step.", "",
@@ -41,6 +44,14 @@ def write_proposal(result: FitResult, out_dir: Path, *, method_name: str, extra_
     notes = list(result.notes) + list(extra_notes)
     if notes:
         lines += ["", "Notes:", ""] + [f"- {n}" for n in notes]
+    if families is not None:
+        lines += ["", "## Learned families", "",
+                  "Learned from the cross-validation batches; a program peak with one of these names or class hints "
+                  "is reported in the family's sum line.", "",
+                  "| label | sum line | program names | class hints | analyst peaks | batches |",
+                  "|---|---|---|---|---|---|"]
+        lines += [f"| {f['label']} | {f['sum_text']} | {'; '.join(f['names'])} | {'; '.join(f['hints'])} | "
+                  f"{f['support']} | {f['batches']} |" for f in families] or ["| (none learned) | | | | | |"]
     lines += ["", "## Per batch", "", "| batch | test set | current | proposed |", "|---|---|---|---|"]
     lines += [f"| {b} | {'yes' if v.get('test') else ''} | {_s(v.get('current'))} | {_s(v.get('best'))} |"
               for b, v in result.per_batch.items()]
@@ -63,7 +74,7 @@ def load_cached_runs(root: Path, out_dir: Path, method_name: str, process_fn=Non
     from gcws.learn.match import human_items, match_run
     from gcws.learn.rules import CachedRun
     from gcws.learn.runner import migration_from_header, process
-    from gcws.learn.workbook import parse_workbook
+    from gcws.learn.workbook import parse_workbook, report_is_draft
     process_fn = process_fn or process
     batches: dict = {}
     programs: dict = {}
@@ -81,9 +92,60 @@ def load_cached_runs(root: Path, out_dir: Path, method_name: str, process_fn=Non
         items = human_items(ev)
         sums = [r.label for r in ev.report if r.label.casefold().startswith("sum of")]
         run = CachedRun(Path(entry.batch_dir).name, items, prog, match_run(ev, prog, items=items),
-                        footnotes=list(ev.footnotes) + sums)
+                        footnotes=list(ev.footnotes) + sums,
+                        client_report=bool(ev.report) and not report_is_draft(ev))
         batches.setdefault(run.batch, []).append(run)
     return batches
+
+
+def _fit_naming(root: Path, out_dir: Path, method_name: str, process_fn, progress, notes: list) -> FitResult:
+    """Families 3-5: the client report simulated from the cached evidence, scored by client F1; the family
+    table is learned on the training folds only."""
+    import copy
+    from gcws.learn.families import learn_families
+    from gcws.learn.fit import fit_learned
+    from gcws.learn.score import score_run
+    from gcws.learn.simulate import NAMING_SPACE, peak_conc, simulate_report
+    batches = load_cached_runs(root, out_dir, method_name, process_fn, progress)
+    left_out = sum(1 for runs in batches.values() for r in runs if not r.client_report)
+    if left_out:
+        notes.append(f"{left_out} workbooks without a (non-draft) client report are not scored")
+    notes.append("the client report is simulated from the cached program evidence (ISTD, background ratio 3, "
+                 "limit 0.01 mg/kg, families, naming, unknowns)")
+
+    def evaluate(params, families, runs):
+        scores = []
+        for r in runs:
+            if not r.client_report or all(c is None for c in peak_conc(r.prog)):
+                continue                           # the same runs for every candidate
+            if params.get("as_today"):            # the program's real client report
+                scores.append(score_run(r.items, r.prog, r.pairs).client_f1)
+                continue
+            lines = simulate_report(r.prog, params, families or [])
+            if lines is None:
+                continue
+            prog = copy.copy(r.prog)
+            prog.report_lines = lines
+            scores.append(score_run(r.items, prog, r.pairs).client_f1)
+        return _mean(scores)
+
+    space = {**NAMING_SPACE, "family_min_share": [0.6, 0.5, 0.75]}
+    current = {"as_today": True}
+    result = fit_learned("naming", space, current, batches,
+                         lambda p, runs: None if p.get("as_today") else learn_families(
+                             [r for r in runs if r.client_report], min_share=p["family_min_share"]),
+                         evaluate, progress=progress)
+    if result.model is None:      # today's report won: still show the table the best simulated setting learns
+        sims = [row for row in result.table if not row["params"].get("as_today") and row["cv"] is not None]
+        if sims:
+            top = max(sims, key=lambda row: row["cv"])
+            from gcws.learn.folds import make_split
+            split = make_split(list(batches))
+            cv_runs = [r for b in batches if b not in split.test for r in batches[b] if r.client_report]
+            result.model = learn_families(cv_runs, min_share=top["params"]["family_min_share"])
+            notes.append(f"the learned families below belong to the best simulated setting {top['params']} "
+                         f"(cross-validation {top['cv']:.3f}), which is not recommended")
+    return result
 
 
 def run_fit(target: str, root: Path, out_dir: Path, method_name: str = "NIAS", *, process_fn=None,
@@ -108,6 +170,8 @@ def run_fit(target: str, root: Path, out_dir: Path, method_name: str = "NIAS", *
         result = fit(target, D.DETECTION_SPACE, current, batches,
                      lambda p, rs: _mean(D.detection_score(r, D.integrate_peaks(r, method, p)) for r in rs),
                      progress=progress)
+    elif target == "naming":
+        result = _fit_naming(Path(root), Path(out_dir), method_name, process_fn, progress, notes)
     else:
         from gcws.learn import rules as R
         batches = load_cached_runs(Path(root), Path(out_dir), method_name, process_fn, progress)

@@ -63,3 +63,16 @@ def test_simulate_with_family_gives_one_sum_line():
     fam = {"label": "hydrocarbon", "names": ["Hydrocarbon"], "hints": [], "support": 6, "sum_text": "Sum of hydrocarbons"}
     lines = simulate_report(prog, {"min_score": 80.0, "unknowns": "report"}, [fam])
     assert lines == [{"rt": None, "name": "Sum of hydrocarbons", "cas": "", "kind": "sum"}]
+
+
+def test_unreported_group_rows_count_for_the_family():
+    """Analysts put the group label on peaks below the limit too; they are family evidence as well."""
+    from gcws.learn.families import learn_families
+    from gcws.learn.match import HumanItem
+    low = ("kept_unreported", "Hydrocarbon", "Hydrocarbon", "Alkane (n- or branched)")
+    runs = [_run("B1", [HC] * 2 + [low] * 2), _run("B2", [HC] * 2 + [low] * 2)]
+    for r in runs:
+        for it in r.items:
+            it.row_class = "group"
+    (fam,) = learn_families(runs, min_peaks=5)
+    assert fam["names"] == ["Hydrocarbon"] and fam["support"] == 8

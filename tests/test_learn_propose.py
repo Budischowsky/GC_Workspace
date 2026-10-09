@@ -67,3 +67,86 @@ def test_cli_fit_parses_args(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_ensure_app", lambda: None)
     assert cli.main(["fit", "detection", str(tmp_path), "--out", str(tmp_path / "o"), "--method", "X"]) == 0
     assert got == {"target": "detection", "root": tmp_path, "out": tmp_path / "o", "method_name": "X"}
+
+
+def _named_program(entry, out_dir, method_name="NIAS", **kw):
+    """A program whose peaks carry the analyst's labels as names (group rows share a class hint)."""
+    from pathlib import Path
+    from gcws.learn.match import human_items
+    from gcws.learn.runner import ProgramResult
+    from gcws.learn.workbook import parse_workbook
+    items = human_items(parse_workbook(Path(entry.workbook)))
+    peaks, reported = [], []
+    for it in items:
+        peaks.append({"rt": it.rt, "start": it.rt - 0.004, "end": it.rt + 0.004, "area": it.area or 1.0,
+                      "name": it.label, "cas": it.cas, "score": 95.0, "istd": "IS1" if it.decision == "istd" else "",
+                      "in_blank": "", "blank_ratio": None,
+                      "class_hint": "oligomer hint" if it.decision == "reported_group" else "-"})
+        if it.conc_mgkg is not None and it.area:
+            reported.append({"rt": it.rt, "mean_mgkg": it.conc_mgkg, "cas": it.cas, "name": it.label})
+    return ProgramResult(run_dir=entry.run_dir, method=method_name, state="control", peaks=peaks, reported=reported)
+
+
+def test_run_fit_naming_learns_families(tmp_path):
+    from learn_fixtures import make_workbook
+    from gcws.learn.propose import run_fit
+    root = tmp_path / "root"
+    for b in ("B1", "B2", "B3", "B4", "B5"):
+        make_workbook(root / b / "05_X_A.D/Auswertung/NIAS-Screening-SYN1_BDa_ 05_X_A.xlsx")
+    r = run_fit("naming", root, tmp_path / "out", process_fn=_named_program, progress=lambda t: None)
+    # "current" is the program's real client report, not a simulation
+    assert r.current == {"as_today": True}
+    assert r.cv_best is not None
+    assert any(f["label"] == "styrene oligomer" for f in r.model)
+    md = (tmp_path / "out" / "proposals" / "naming.md").read_text(encoding="utf-8")
+    assert "## Learned families" in md and "styrene oligomer" in md and "oligomer hint" in md
+    saved = json.loads((tmp_path / "out" / "proposals" / "naming.json").read_text(encoding="utf-8"))
+    assert saved["families"] and saved["families"][0]["label"] == "styrene oligomer"
+
+
+def test_cli_fit_naming_parses(tmp_path, monkeypatch):
+    from gcws.learn import __main__ as cli
+    from gcws.learn import propose
+    got = {}
+    monkeypatch.setattr(propose, "run_fit", lambda target, *a, **k: got.update(target=target) or _result())
+    monkeypatch.setattr(cli, "_ensure_app", lambda: None)
+    assert cli.main(["fit", "naming", str(tmp_path), "--out", str(tmp_path / "o")]) == 0
+    assert got["target"] == "naming"
+
+
+def test_naming_fit_skips_runs_that_cannot_be_simulated_for_every_candidate(tmp_path):
+    from learn_fixtures import make_workbook
+    from gcws.learn.propose import run_fit
+    root = tmp_path / "root"
+    for b in ("B1", "B2", "B3", "B4", "B5"):
+        make_workbook(root / b / "05_X_A.D/Auswertung/NIAS-Screening-SYN1_BDa_ 05_X_A.xlsx")
+    make_workbook(root / "B0" / "07_Y_A.D/Auswertung/NIAS-Screening-SYN2_BDa_ 07_Y_A.xlsx")   # a CV batch
+
+    def no_conc_for_y(entry, out_dir, method_name="NIAS", **kw):
+        prog = _named_program(entry, out_dir, method_name, **kw)
+        if "07_Y_A" in entry.run_dir:
+            prog.reported = [{k: v for k, v in r.items() if k != "mean_mgkg"} for r in prog.reported]
+        return prog
+
+    r = run_fit("naming", root, tmp_path / "out", process_fn=no_conc_for_y, progress=lambda t: None)
+    assert all(row["cv"] is not None for row in r.table)
+
+
+def test_naming_proposal_shows_families_when_today_wins(tmp_path):
+    """The real report already equals the analyst's: 'as today' wins, the learned table is still shown."""
+    from learn_fixtures import make_workbook
+    from gcws.learn.propose import run_fit
+    root = tmp_path / "root"
+    for b in ("B1", "B2", "B3", "B4", "B5"):
+        make_workbook(root / b / "05_X_A.D/Auswertung/NIAS-Screening-SYN1_BDa_ 05_X_A.xlsx")
+
+    def perfect_report(entry, out_dir, method_name="NIAS", **kw):
+        prog = _named_program(entry, out_dir, method_name, **kw)
+        prog.report_lines = [{"rt": r["rt"], "name": r["name"], "cas": r["cas"], "kind": "line"}
+                             for r in _perfect(entry, out_dir, method_name).reported]
+        return prog
+
+    r = run_fit("naming", root, tmp_path / "out", process_fn=perfect_report, progress=lambda t: None)
+    assert r.best == {"as_today": True}
+    md = (tmp_path / "out" / "proposals" / "naming.md").read_text(encoding="utf-8")
+    assert "## Learned families" in md and "styrene oligomer" in md
