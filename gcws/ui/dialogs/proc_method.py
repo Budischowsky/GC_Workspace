@@ -48,11 +48,40 @@ class SaveMethodDialog(QDialog):
                 self, "Save method", f"Replace the saved method '{name}'?") != QMessageBox.Yes:
             return
         method = PM.collect(self.win, name, self.comment.toPlainText().strip())
+        method = self._guard(name, method)
+        if method is None:
+            return
         self.saved = PM.save(method)
         from PySide6.QtCore import QSettings
         QSettings().setValue("method/current", name)
         self.win.ws.log("Processing method saved", "", name, "", str(self.saved))
         self.accept()
+
+    def _guard(self, name: str, method: dict):
+        """``method``, or with the saved method's migration conditions / quantification parameters when the
+        workspace has none (the analyst chooses); None = cancelled."""
+        if name not in PM.names():
+            return method
+        try:
+            old = PM.read(PM._file(name))
+        except (OSError, ValueError):
+            return method
+        lost = PM.dropped(old, method)
+        if not lost:
+            return method
+        box = QMessageBox(QMessageBox.Warning, "Save method",
+                          f"The saved method '{name}' has " + " and ".join(PM.GUARDED[k] for k in lost)
+                          + ", the current settings have none. Saving them as they are removes "
+                          + ("them" if len(lost) > 1 else "it") + " from the method (the automation then "
+                          "cannot make the NIAS report).", QMessageBox.NoButton, self)
+        keep = box.addButton("Keep the saved ones", QMessageBox.AcceptRole)
+        drop = box.addButton("Save without", QMessageBox.DestructiveRole)
+        box.addButton(QMessageBox.Cancel)
+        box.setDefaultButton(keep)
+        box.exec()
+        if box.clickedButton() is keep:
+            return PM.keep_from(method, old, lost)
+        return method if box.clickedButton() is drop else None
 
 
 class LoadMethodDialog(QDialog):

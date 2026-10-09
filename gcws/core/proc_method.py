@@ -102,6 +102,34 @@ def collect(win, name: str, comment: str = "") -> dict:
             "created": datetime.now().isoformat(timespec="seconds"), "by": current_user(), "sections": sections}
 
 
+#: what a method should not lose unnoticed when it is saved again from a workspace that lacks it
+GUARDED = {"migration": "the migration conditions", "quant.settings": "the quantification parameters"}
+
+
+def _guarded_value(method: dict, key: str):
+    sec = (method or {}).get("sections") or {}
+    if key == "quant.settings":
+        return (sec.get("quant") or {}).get("settings")
+    return sec.get(key)
+
+
+def dropped(old: Optional[dict], new: dict) -> list[str]:
+    """The :data:`GUARDED` parts the saved method ``old`` has and ``new`` (about to replace it) lacks."""
+    return [k for k in GUARDED if old is not None and _guarded_value(old, k) and not _guarded_value(new, k)]
+
+
+def keep_from(new: dict, old: dict, keys: list[str]) -> dict:
+    """``new`` with the ``keys`` (of :data:`GUARDED`) taken over from ``old``."""
+    out = copy.deepcopy(new)
+    sec = out.setdefault("sections", {})
+    for k in keys:
+        if k == "quant.settings":
+            sec.setdefault("quant", {})["settings"] = copy.deepcopy(_guarded_value(old, k))
+        else:
+            sec[k] = copy.deepcopy(_guarded_value(old, k))
+    return out
+
+
 # -- storing ------------------------------------------------------------------------------------
 
 def save(method: dict, path: Optional[Path] = None) -> Path:
