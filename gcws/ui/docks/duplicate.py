@@ -1595,7 +1595,7 @@ class DuplicatePage(QWidget):
             if tr is None:
                 continue
             rt, y, color = tr
-            self.mirror.plot(rt, sign * y, pen=pg.mkPen(color, width=1.2), shadowPen=theme.glow_pen(color))
+            self.mirror.plot(rt, sign * y, pen=pg.mkPen(color, width=1.2))
             self._traces.append((rt, sign * y))
         self.mirror.addItem(pg.InfiniteLine(pos=0, angle=0, pen=pg.mkPen(theme.BORDER_STRONG)), ignoreBounds=True)
         spots, self._marks = [], []

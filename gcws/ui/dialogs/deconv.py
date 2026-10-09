@@ -213,8 +213,7 @@ class TracePreview(pg.PlotWidget):
         width = max(pk.end - pk.start, 1e-3)
         sl = sig.window(pk.start - 0.6 * width, pk.end + 0.6 * width)
         self.setLabel("bottom", f"{plan.signal_name} RT", units="min")
-        self.plot(sig.rt[sl], sig.y[sl], pen=pg.mkPen(theme.PLOT["secondary"], width=1.4),
-                  shadowPen=theme.glow_pen(theme.PLOT["secondary"], 5.0))
+        self.plot(sig.rt[sl], sig.y[sl], pen=pg.mkPen(theme.PLOT["secondary"], width=1.4))
         if plan.t.size:
             t, fitted, first = plan.dense()
             base = pk.baseline.eval(t)
@@ -260,8 +259,7 @@ class TracePreview(pg.PlotWidget):
         lo = min(float(c.profile_rt[0]) for c in profiled)
         hi = max(float(c.profile_rt[-1]) for c in profiled)
         sl = ms.scans_between(lo, hi)
-        self.plot(ms.rt[sl], ms.tic()[sl], pen=pg.mkPen(theme.PLOT["secondary"], width=1.0),
-                  shadowPen=theme.glow_pen(theme.PLOT["secondary"]))
+        self.plot(ms.rt[sl], ms.tic()[sl], pen=pg.mkPen(theme.PLOT["secondary"], width=1.0))
         shown = set(sorted(range(len(comps)), key=lambda i: comps[i].area, reverse=True)[:PROFILE_LIMIT])
         if selected is not None:
             shown.add(selected)

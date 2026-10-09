@@ -449,7 +449,6 @@ class ChromPanel(QWidget):
             start = 0 if cut is None else int(np.searchsorted(sig.rt, cut))
             curve.setData(sig.rt[start:] + self.shift(st), sig.y[start:] * sc + off)
             curve.setPen(_pen(st.color, 1.8 if is_active else 1.0, 255 if is_active else 150))
-            curve.setShadowPen(theme.glow_pen(st.color, 6.0 if is_active else 4.0, 70 if is_active else 32))
             curve.setZValue(10 if is_active else 1)
             if is_active:
                 self.vb.transform = (sc, off)

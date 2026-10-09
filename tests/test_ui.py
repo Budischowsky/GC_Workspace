@@ -1411,19 +1411,14 @@ def test_dark_mode(qtbot, win, samples, tmp_path, name):
             fg, soft = theme.LEVELS[level]
             assert _contrast(fg, soft) >= 4.5 and _contrast(fg, theme.SURFACE) >= 4.5, level
         assert _contrast(theme.BORDER_STRONG, theme.SURFACE) >= 1.8          # button outlines are visible
-        # plots, icons and run colours follow; only the neon chromatograms glow
+        # plots, icons and run colours follow; no theme draws a halo behind the traces
         assert win.chrom.plot.backgroundBrush().color().name().lower() == tokens["PLOT"]["bg"].lower()
         assert st.color == tokens["RUN_COLORS"][theme.LIGHT["RUN_COLORS"].index(light_color)]
         assert icons.icon("zoom").pixmap(QSize(32, 32)).toImage() != before
         curve = win.chrom.curves[st.id]
         assert curve.opts["pen"].color().name().lower() == st.color.lower()
-        shadow = curve.opts.get("shadowPen")
-        if name == "neon":
-            assert shadow is not None and shadow.color().name().lower() == st.color.lower()
-            assert shadow.widthF() > curve.opts["pen"].widthF()
-        else:
-            assert shadow is None
-        # a picture for a report stays white, its traces in the light colours without the halo
+        assert curve.opts.get("shadowPen") is None
+        # a picture for a report stays white, its traces in the light colours
         out = E.export([win.chrom], tmp_path / f"{name}.png", 600, 200)
         img = QImage(str(out))
         assert img.pixelColor(3, img.height() - 3).lightness() > 240
@@ -1438,7 +1433,6 @@ def test_dark_mode(qtbot, win, samples, tmp_path, name):
         assert theme.MODE == name and win.chrom.plot.backgroundBrush().color().name().lower() == \
             tokens["PLOT"]["bg"].lower()
         assert curve.opts["pen"].color().name().lower() == st.color.lower()       # restored after the export
-        assert (curve.opts.get("shadowPen") is not None) == (name == "neon")
     finally:
         win.theme_actions["light"].trigger()
     assert not theme.is_dark() and st.color == light_color

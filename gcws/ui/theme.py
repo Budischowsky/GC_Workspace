@@ -8,7 +8,7 @@ muted helper text with ``setObjectName("hint")`` and primary actions with
 from __future__ import annotations
 
 from PySide6.QtCore import QObject, Qt, Signal as QtSignal
-from PySide6.QtGui import QBrush, QColor, QPalette, QPen
+from PySide6.QtGui import QBrush, QColor, QPalette
 from PySide6.QtWidgets import QApplication, QDockWidget, QLabel
 
 # -- tokens --------------------------------------------------------------------
@@ -40,7 +40,7 @@ LIGHT = {
         "blank_fill": (140, 150, 160, 70), "label": "#33424D", "label_selected": "#124658", "event": "#7E57C2",
         "off_region": (120, 130, 140, 26), "spectrum": "#1F6F8B", "reference": "#C0392B",
         "apex_region": "#1F6F8B", "bg_region": "#C0392B", "secondary": "#46555F", "band": (31, 111, 139, 45),
-        "band_bg": (192, 57, 43, 45), "glow": False,
+        "band_bg": (192, 57, 43, 45),
     },
 }
 
@@ -65,11 +65,11 @@ DARK = {
         "blank_fill": (150, 162, 172, 70), "label": "#D3DDE3", "label_selected": "#A6E1F0", "event": "#B79CFF",
         "off_region": (200, 210, 220, 22), "spectrum": "#4DB6D0", "reference": "#FF7A6B",
         "apex_region": "#4DB6D0", "bg_region": "#FF7A6B", "secondary": "#B9C6CE", "band": (77, 182, 208, 55),
-        "band_bg": (242, 118, 106, 55), "glow": False,
+        "band_bg": (242, 118, 106, 55),
     },
 }
 
-#: black and dark grey with neon cyan as the accent; chromatograms glow in neon colours
+#: black and dark grey with neon cyan as the accent; chromatograms in neon colours
 NEON = {
     "ACCENT": "#00E5FF", "ACCENT_HOVER": "#5CF0FF", "ACCENT_PRESSED": "#00B8D4",
     "ACCENT_SOFT": "#062A30", "ACCENT_SOFT2": "#0B3F48",
@@ -92,7 +92,6 @@ NEON = {
         "off_region": (190, 190, 220, 20), "spectrum": "#00E5FF", "reference": "#FF2BD6",
         "apex_region": "#00E5FF", "bg_region": "#FF2BD6", "secondary": "#D4FF3A", "band": (0, 229, 255, 50),
         "band_bg": (255, 43, 214, 50),
-        "glow": True,                  # traces get a soft halo of their own colour
     },
 }
 
@@ -166,17 +165,6 @@ def shade(color: str, rank: int) -> str:
     a, b = QColor(color), QColor(globals()[towards])
     mix = lambda x, y: round(x + (y - x) * share)
     return QColor(mix(a.red(), b.red()), mix(a.green(), b.green()), mix(a.blue(), b.blue())).name()
-
-
-def glow_pen(color, width: float = 4.0, alpha: int = 50) -> QPen | None:
-    """The halo drawn behind a trace (a wide, faint pen of its colour) in a theme whose traces
-    glow (Dark Mode - Neon), else None - for pyqtgraph's ``shadowPen``."""
-    if not PLOT["glow"]:
-        return None
-    pen = QPen(qcolor(color, alpha))
-    pen.setWidthF(width)
-    pen.setCosmetic(True)
-    return pen
 
 
 def status_brush(level: str) -> QBrush:

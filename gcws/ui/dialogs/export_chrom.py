@@ -35,7 +35,7 @@ def _scaled_pen(pen, f: float) -> QPen:
 def export_state(panels, line_scale: float = 1.0):
     """Hide the interactive helpers and thicken the lines by ``line_scale`` while exporting.
 
-    The traces take their light-theme colours without the neon halo: the paper is white."""
+    The traces take their light-theme colours: the paper is white."""
     hidden, restore = [], []
     for panel in panels:
         for it in (panel.cursor, panel.cursor_label, panel.vb.band, panel.vb.preview):
@@ -48,9 +48,6 @@ def export_state(panels, line_scale: float = 1.0):
             paper = QPen(pen)
             paper.setColor(theme.paper_color(pen.color()))
             c.setPen(_scaled_pen(paper, line_scale) if line_scale != 1.0 else paper)
-            if c.opts.get("shadowPen") is not None:
-                restore.append((c.setShadowPen, QPen(c.opts["shadowPen"])))
-                c.setShadowPen(None)
         restore.append((lambda color, p=panel: setattr(p.peaks, "color", color), QColor(panel.peaks.color)))
         panel.peaks.color = theme.paper_color(panel.peaks.color)
         if line_scale != 1.0:
