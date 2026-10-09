@@ -118,6 +118,8 @@ COLUMNS: list[Column] = [
            tip="Concentration in the unit of the quantification mode"),
     Column("sml", "SML", _v("sml"), numeric=False, default=False),
     Column("qstatus", "Status", _v("qstatus"), numeric=False),
+    Column("learned", "Learned rule", _v("learned"), numeric=False, default=False,
+           tip="The learned report rule that changed this peak's report row, with its evidence"),
     Column("origin", "Integration", _v("origin"), numeric=False, default=False),
     Column("class_hint", "Class hint", _hint, numeric=False, default=False,
            tip="Substance-class clue from the MS interpreter (spectrum of the peak); hover for details"),

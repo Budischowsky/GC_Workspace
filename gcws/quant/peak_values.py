@@ -128,6 +128,7 @@ VALUES: dict[str, Callable] = {
                           "ug_hs", "ug_g", "conc")},
     "sml": _q("sml", ""),
     "qstatus": _q("status", ""),
+    "learned": _q("learned", ""),
     "origin": lambda r, ws, rid, key: r.peak.origin,
     "class_hint": lambda r, ws, rid, key: class_hint(ws, rid, key, r.peak)[0],
 }

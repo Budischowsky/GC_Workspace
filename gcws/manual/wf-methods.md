@@ -37,6 +37,7 @@ opens when both are moved together.
 - the library search method and the choices of the search dialog (TIC or FID peaks, spectrum, skip named);
 - the own-library search options and the report options;
 - the report template of the Template Report (see [Report templates](wf-report-templates.md));
+- the learned report rules, once approved (see [Learning from evaluations](wf-learn.md));
 - the columns of the peak table and its value filter.
 
 **Method > Load Method...** lists the saved methods with a summary of each. Tick under **Apply** which parts

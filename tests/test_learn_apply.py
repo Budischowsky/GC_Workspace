@@ -46,3 +46,22 @@ def test_renamed_rows_reach_the_category_sums():
     main = main_script()
     assert main.classify_name("Hydrocarbon") == "hydrocarbon"
     assert main.classify_name("Styrene Oligomer") == "styrene"
+
+
+def test_learned_reason_reaches_the_peak_table_and_report_columns():
+    from gcws.quant.peak_values import VALUES
+    from gcws.report import catalog as C
+    from gcws.ui.models.peak_table import COLUMN_KEYS
+    assert "learned" in VALUES and "learned" in COLUMN_KEYS and C.get("learned") is not None
+
+
+def test_rows_for_carries_the_reason():
+    from types import SimpleNamespace
+    import gc_model as M
+    from gcws.quant.service import rows_for
+    row = M.PeakRow(row_id=1, peak_no=1, source="FID+PBM", rt=20.0, area=1000.0, name="Hydrocarbon", cas="0")
+    row.derived.update(gcws_index=0, learned="family v1 (hydrocarbon): ...")
+    sample = SimpleNamespace(rows=[row], standards=[], meta={})
+    st = SimpleNamespace(id="r", results={})
+    out = rows_for(sample, st, "area_pct", {"detector": "FID"}, None, [], {})
+    assert out[0]["learned"] == "family v1 (hydrocarbon): ..."

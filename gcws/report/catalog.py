@@ -113,6 +113,8 @@ _FIELDS = [
        tip="≤ SML, > SML or no SML (the mg/kg result)"),
     _f("qstatus", "SML status", R, "Status", kind="text", agg="first", modes=("nias_mgkg",), width=14,
        tip="The peak table's NIAS status"),
+    _f("learned", "Learned rule", R, kind="text", agg="first", per_det=False, width=30,
+       tip="The learned report rule that changed the row (rule, evidence, former name)"),
 ]
 
 

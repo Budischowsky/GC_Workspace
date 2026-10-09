@@ -356,6 +356,7 @@ def rows_for(sample, st, mode, quant, settings, defs, options) -> dict[int, dict
             "status": d.get("status", "") if mode == "nias_mgkg" else "",
             "blank_status": d.get("blank_status", ""),
             "review": d.get("review", ""),
+            "learned": d.get("learned", ""),
             **unit_values(mode, settings, corr_area=corr, mg_dm2=d.get("mg_dm2") if mode == "nias_mgkg" else None,
                           conc=conc, mean_area=mean_area, c_istd=c_istd),
         }

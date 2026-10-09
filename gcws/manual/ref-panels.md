@@ -127,6 +127,7 @@ Columns marked * are shown unless you change it.
 | **Status** * | Status of the quantification. |
 | **Integration** | How the peak came about: automatic, manual, gap fill ... |
 | **Class hint** | The substance class suggested by the interpretation of the spectrum. |
+| **Learned rule** | The learned report rule that changed the peak's report row, with its evidence and the former name. |
 
 ## Mass spectrum
 
