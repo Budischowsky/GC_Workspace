@@ -18,7 +18,7 @@ from gcws.learn.runner import ProgramResult, run_key
 #: candidate integration settings; the current NIAS value first (the tie-break's preference)
 DETECTION_SPACE = {
     "slope_sensitivity": [8.0, 4.0, 2.0, 16.0],
-    "area_reject": [500000.0, 250000.0, 100000.0],
+    "area_reject": [500000.0, 250000.0, 100000.0, 50000.0, 25000.0],
     "height_reject": [5000.0, 2500.0, 1000.0],
     "min_sn": [3.0, 5.0],
     "integrator_on": [6.2, 5.5, 5.0],
