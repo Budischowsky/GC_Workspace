@@ -259,6 +259,7 @@ class Report2Dock(QWidget):
         self.a_show_deleted.setCheckable(True)
         self.a_show_deleted.toggled.connect(lambda *_: self.refresh())
         vm.addAction("Reject reasons...", self.edit_reasons)
+        vm.addAction("Learning review...", self.open_learning_review)
         self.b_view.setMenu(vm)
         c.addWidget(self.b_view)
         lay.addLayout(c)
@@ -1940,6 +1941,17 @@ class Report2Dock(QWidget):
         dlg = RulesDialog(RU.load_default_rules(), self, allow_default=False)
         if dlg.exec():
             RU.save_default_rules(dlg.rules())
+
+    def open_learning_review(self):
+        """The program/analyst disagreements of gcws.learn with the verdicts (a window, not modal)."""
+        from gcws.ui.dialogs.learn_review import LearningReview
+        win = getattr(self, "_learning_review", None)
+        if win is None:
+            win = self._learning_review = LearningReview(self)
+        else:
+            win.reload()
+        win.show()
+        win.raise_()
 
     def edit_reasons(self):
         from gcws.automation import rules as RU

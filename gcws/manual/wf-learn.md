@@ -63,3 +63,25 @@ With learned rules in the quantification, a NIAS row whose peak belongs to a lea
 name as the analysts write it ("Hydrocarbon", "Styrene oligomer"), so the report adds it to the family's sum
 line. Names you typed yourself and internal standards are never changed. The peak table's **Learned rule**
 column shows the rule, the evidence and the former name of every row it changed.
+
+## Reviewing the disagreements
+
+**review** lists every disagreement between the program and the analysts with its evidence: the analyst's
+decision, label, CAS and mg/kg, and the program's name, CAS, match score, the next library hits, the class hint
+and the blank match. **Report² > View > Learning review...** opens the list in a window that stays open next to
+the program.
+
+- **All types** narrows the list to one kind of disagreement; **Only without a verdict** hides the ones you have
+  decided.
+- Select a row to see its evidence, type a **Note** if you like, and decide:
+  - **Analyst right**: the program should change; the disagreement keeps counting;
+  - **Program right** or **Both acceptable**: the disagreement no longer counts in the next baseline and fit.
+
+A verdict is saved at once (`learn/review/verdicts.json`) and stays with the disagreement when the list is made
+again.
+
+## How far do the analysts agree?
+
+**consistency** compares the runs two analysts evaluated, peak by peak: whether they kept or removed the same
+peaks, gave the same kind of label (named, group, unknown, co-elution, blank remark) and the same CAS. It shows
+how far the evaluations themselves agree, the best any learned rule can reach.
