@@ -69,3 +69,16 @@ def test_nothing_written_to_root(corpus_root, tmp_path):
     before = _files(corpus_root)
     run_check(corpus_root, tmp_path / "out")
     assert _files(corpus_root) == before
+
+
+def test_unexpected_parse_error_is_a_problem_not_a_crash(corpus_root, tmp_path, monkeypatch):
+    import gcws.learn.workbook as wbmod
+    from gcws.learn.check import run_check
+
+    def boom(rows):
+        raise ValueError("odd sheet")
+
+    monkeypatch.setattr(wbmod, "parse_rohdaten", boom)
+    s = run_check(corpus_root, tmp_path / "out")
+    assert s["workbooks"] == 3
+    assert sum("parse error: ValueError: odd sheet" in "; ".join(p) for p in s["problems"].values()) == 2

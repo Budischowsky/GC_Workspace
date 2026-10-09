@@ -412,12 +412,16 @@ def _parse_workbook(path: Path) -> HumanEvaluation:
     import openpyxl
 
     ev = HumanEvaluation(path=str(path))
+    opened = []
     try:
-        wv = openpyxl.load_workbook(path, data_only=True, read_only=True, keep_vba=False)
-        wf = openpyxl.load_workbook(path, data_only=False, read_only=True, keep_vba=False)
+        for data_only in (True, False):
+            opened.append(openpyxl.load_workbook(path, data_only=data_only, read_only=True, keep_vba=False))
     except Exception as exc:  # noqa: BLE001 - any unreadable file is a corpus problem, not a crash
+        for wb in opened:
+            wb.close()
         ev.problems.append(f"cannot open: {type(exc).__name__}: {exc}")
         return ev
+    wv, wf = opened
     try:
         names = set(wv.sheetnames)
         if "Rohdaten" in names:
@@ -442,6 +446,8 @@ def _parse_workbook(path: Path) -> HumanEvaluation:
             ev.report, ev.footnotes = parse_report(_sheet_cells(wv["externerBericht"]))
         else:
             ev.problems.append("sheet missing: externerBericht")
+    except Exception as exc:  # noqa: BLE001 - an unexpected sheet layout is a corpus problem, not a crash
+        ev.problems.append(f"parse error: {type(exc).__name__}: {exc}")
     finally:
         wv.close()
         wf.close()
