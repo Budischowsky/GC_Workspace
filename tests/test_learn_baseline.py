@@ -125,3 +125,44 @@ def test_workbook_without_client_report_is_not_scored_on_it(tmp_path):
     assert "no client report in the workbook" in run["notes"]
     assert result["aggregate"]["no_client_report"] == 1
     assert "no client report" in (tmp_path / "out" / "baseline.md").read_text(encoding="utf-8")
+
+
+def test_empty_client_report_with_nothing_above_the_limit_is_scored(tmp_path):
+    """User rule: an empty client report means 'nothing above the reporting limit' when no kept worksheet peak
+    (ISTDs and blank-marked peaks excluded) reaches the limit (10 ppb = 0.01 mg/kg); then the program's lines
+    count as extra."""
+    from learn_fixtures import make_workbook
+    from gcws.learn.baseline import run_baseline
+    root = tmp_path / "root"
+    low = [{"A": 7.0, "F": 10, "G": 0.0001, "H": 0.009}, {"A": 14.33, "B": "IS1", "F": 100, "G": 0.02, "H": 0.12},
+           {"A": 9.0, "B": "im blank", "F": 50, "G": 0.01, "H": 0.06}]
+    make_workbook(root / "B1/05_X_A.D/Auswertung/NIAS-Screening-SYN1_BDa_ 05_X_A.xlsx", report_rows=[], final_rows=low)
+
+    def one_line(entry, out_dir, method_name="NIAS", **kw):
+        prog = _perfect(entry, out_dir, method_name, **kw)
+        prog.reported = [{"rt": 7.0, "cas": "", "name": "x"}]
+        return prog
+
+    (run,) = run_baseline(root, tmp_path / "out", process_fn=one_line, progress=lambda t: None)["runs"]
+    assert "nothing above the reporting limit" in run["notes"]
+    assert run["score"]["client_precision"] == 0 and run["score"]["disagreements"]["extra_reported"] == 1
+
+
+def test_empty_client_report_with_peaks_above_the_limit_is_not_made(tmp_path):
+    from learn_fixtures import make_workbook
+    from gcws.learn.baseline import run_baseline
+    root = tmp_path / "root"
+    make_workbook(root / "B1/05_X_A.D/Auswertung/NIAS-Screening-SYN1_BDa_ 05_X_A.xlsx", report_rows=[],
+                  final_rows=[{"A": 7.0, "F": 10, "G": 0.002, "H": 0.011}])
+    (run,) = run_baseline(root, tmp_path / "out", process_fn=_perfect, progress=lambda t: None)["runs"]
+    assert "no client report in the workbook" in run["notes"] and run["score"]["client_f1"] is None
+
+
+def test_empty_client_report_without_mgkg_is_not_made(tmp_path):
+    from learn_fixtures import make_workbook
+    from gcws.learn.baseline import run_baseline
+    root = tmp_path / "root"
+    make_workbook(root / "B1/05_X_A.D/Auswertung/NIAS-Screening-SYN1_BDa_ 05_X_A.xlsx", report_rows=[],
+                  conc_headers=("Conc. mg/13 cm",), final_rows=[{"A": 7.0, "F": 10, "G": 0.0001}])
+    (run,) = run_baseline(root, tmp_path / "out", process_fn=_perfect, progress=lambda t: None)["runs"]
+    assert "no client report in the workbook" in run["notes"]

@@ -13,6 +13,9 @@ from gcws.learn.corpus import scan
 from gcws.learn.match import human_items, match_run
 from gcws.learn.score import DISAGREEMENTS, score_run
 
+#: the NIAS reporting limit (report footnote: peaks >= 10 ppb), in mg/kg food
+REPORTING_LIMIT_MGKG = 0.01
+
 SCORE_KEYS = ("total", "client_f1", "client_precision", "client_recall", "name_agreement", "conc_dev_median",
               "worksheet_agreement")
 
@@ -47,7 +50,9 @@ def run_baseline(root: Path, out_dir: Path, method_name: str = "NIAS", *, force:
         if prog.state != "failed":
             items = human_items(ev)
             score = score_run(items, prog, match_run(ev, prog, items=items))
-            if not ev.report:       # client report not made in this workbook: no client scores
+            if not ev.report and nothing_above_limit(ev):
+                row["notes"].append("nothing above the reporting limit")
+            elif not ev.report:     # client report not made in this workbook: no client scores
                 score.client_f1 = score.client_precision = score.client_recall = score.total = None
                 score.name_agreement = None
                 for k in ("missing_peak", "not_reported", "extra_reported", "name_differs"):
@@ -59,6 +64,19 @@ def run_baseline(root: Path, out_dir: Path, method_name: str = "NIAS", *, force:
     (out_dir / "baseline.json").write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
     (out_dir / "baseline.md").write_text(_markdown(result), encoding="utf-8")
     return result
+
+
+def nothing_above_limit(ev, limit_mgkg: float = REPORTING_LIMIT_MGKG) -> bool:
+    """An empty client report means "nothing above the reporting limit" when the worksheet was quantified
+    (ISTD areas present, a mg/kg column with values) and no kept peak reaches the limit; ISTDs and peaks the
+    analyst marked as blank/background do not count. Otherwise the report was simply not made."""
+    unit = next((u for u in ev.header.conc_units if "mg/kg" in u.casefold()), None)
+    if unit is None or any(p.startswith("ISTD area missing") for p in ev.problems):
+        return False
+    values = [r.conc.get(unit) for r in ev.final
+              if r.rt is not None and r.row_class not in ("istd", "background", "sum")]
+    values = [v for v in values if v is not None]
+    return bool(values) and any(v > 0 for v in values) and max(values) < limit_mgkg
 
 
 def _stats(values: list) -> dict:
