@@ -38,6 +38,7 @@ Two chromatogram panels with the same controls. They share one time axis.
 | Signal box | The signal shown: FID, TIC, BPC or an extracted ion. |
 | **subtract blank** | Shows and integrates this signal minus the assigned blank. |
 | **Solvent cut** | Leaves out everything before the solvent end time. |
+| **Lock view** | A peak picked in the substance or replicate list is selected without zooming to it. Applies to both panels. |
 | **Overlay** | Shows the other loaded chromatograms behind the active one. |
 | **Normalize** | Scales every trace to its own maximum. |
 | **Stack** | Offsets the traces vertically. |

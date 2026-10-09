@@ -16,7 +16,7 @@ from __future__ import annotations
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QSettings, Qt, QTimer, Signal as QtSignal
-from PySide6.QtGui import QColor, QFont, QFontMetricsF, QPen
+from PySide6.QtGui import QAction, QColor, QFont, QFontMetricsF, QPen
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QInputDialog, QToolButton, QVBoxLayout,
                                QSizePolicy, QWidget)
 
@@ -204,6 +204,15 @@ class ChromPanel(QWidget):
         self.title = ElidedLabel()
         self.title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         self.title.setObjectName("hint")
+        # Shared by both panels: a peak picked in a list is selected without zooming to it.
+        self.lock_action = QAction("Lock view", self)
+        self.lock_action.setCheckable(True)
+        self.lock_action.setToolTip("Keep the current time window when a peak is picked in the substance "
+                                    "or replicate list (the peak is still selected)")
+        self.lock_action.setChecked(s.value("chrom/lock_view", False, type=bool))
+        self.lock_action.toggled.connect(self._lock_toggled)
+        self.lock_btn = QToolButton()
+        self.lock_btn.setDefaultAction(self.lock_action)
         self.others = QCheckBox("Overlay")
         self.others.setToolTip("Show the other loaded chromatograms")
         self.others.setChecked(s.value(f"{self._prefix}/overlay", True, type=bool))
@@ -226,7 +235,7 @@ class ChromPanel(QWidget):
         self.export_btn.setToolTip("Save this chromatogram as a picture (PNG, SVG, PDF ...)")
         self.export_btn.clicked.connect(lambda: self.exportRequested.emit(self.index))
         from gcws.ui.plot.overlay import PlotOverlay
-        self.controls = PlotOverlay(self.plot, [self.signal, self.title, self.table_chip, self.others,
+        self.controls = PlotOverlay(self.plot, [self.signal, self.title, self.table_chip, self.lock_btn, self.others,
                                                 self.norm, self.stack, self.label_mode, self.export_btn])
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -736,8 +745,17 @@ class ChromPanel(QWidget):
         self.vb.setXRange(*xr, padding=0)
         self.fit_y()
 
+    def _lock_toggled(self, on: bool) -> None:
+        QSettings().setValue("chrom/lock_view", bool(on))
+        for p in (self.link.panels if self.link else ()):
+            if p is not self:
+                p.lock_action.setChecked(on)
+
     def zoom_to_selected(self):
-        """Zoom the shared axis to the table's selected peak (with some room around it)."""
+        """Zoom the shared axis to the table's selected peak (with some room around it);
+        with Lock view on the time window stays."""
+        if self.lock_action.isChecked():
+            return
         p = self.ws.selected_peak()
         st = self.ws.active
         if p is None or st is None:

@@ -50,6 +50,7 @@ In each panel you choose:
 | Signal box | **FID**, **TIC** (total ion current), **BPC** (base peak chromatogram) or an **EIC**. |
 | **subtract blank** | Shows and integrates the signal minus the assigned blank. See [Blanks, internal standards and quantification](wf-quantify.md). |
 | **Solvent cut** | Leaves out everything before the solvent end time. |
+| **Lock view** | Keeps the time window when you pick a peak in the substance or replicate list: the peak is selected, the view does not zoom to it. Applies to both panels and is remembered. |
 | **Overlay** | Shows the other loaded runs behind the active one. |
 | **Normalize** | Scales every trace to its own maximum, to compare shapes. |
 | **Stack** | Moves the traces apart vertically. |
