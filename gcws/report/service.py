@@ -136,13 +136,14 @@ def build_session(job: ReportJob):
 def combined_rows(job: ReportJob):
     """The merged rows of the determinations. For a double determination only the substances
     the analyst reports (default: AutoLib's rule, no artefacts and nothing below the reporting
-    limit); ``job.overrides`` receives the values the analyst set."""
+    limit); ``job.overrides`` receives the values the analyst set. Unknowns come without CAS and
+    match quality (:func:`without_id`)."""
     from gcws.quant.replicates import combine, engine_peaks
     tol = float(getattr(job.settings, "rt_tolerance", 0.035) or 0.035)
     lists = [engine_peaks(s) for s in job.samples]
     job.overrides = {}
     if job.features is not None and len(job.samples) >= 2:
-        return feature_rows(job, lists, tol)
+        return [without_id(r) for r in feature_rows(job, lists, tol)]
     rows = combine(lists, tol, job.policy)
     if len(job.samples) == 2 and job.policy == "all":
         from gcws.quant import duplicate_view as DV
@@ -153,7 +154,7 @@ def combined_rows(job: ReportJob):
             rl = getattr(job.settings, "reporting_limit", None)
             rl = float(rl if rl is not None else GD.DEFAULT_REPORTING_LIMIT)
         rows, job.overrides = DV.rows_for_report(rows, job.edits or {}, limit, rl, tol)
-    return rows
+    return [without_id(r) for r in rows]
 
 
 def feature_rows(job: ReportJob, lists: list, tol: float):
@@ -220,6 +221,7 @@ def generate(job: ReportJob, progress: Callable[[str], None] = lambda s: None) -
         # the table was built with the job: writing it never touches the workspace's samples
         from gcws.report.template_report import generate as generate_template
         return generate_template(job, progress)
+    job.samples = report_samples(job.samples)
     clean_samples(job.samples)
     if job.kind == "hs_screening":
         from gcws.report.hs import generate as generate_hs
@@ -305,6 +307,58 @@ def clean_samples(samples) -> None:
                 v = getattr(row, attr, None)
                 if isinstance(v, str) and ILLEGAL.search(v):
                     setattr(row, attr, clean_name(v))
+
+
+#: a row's library identification: an unknown is reported without it
+ID_KEYS = ("cas", "quality", "si", "score")
+
+
+def is_unknown(name) -> bool:
+    """Whether ``name`` names an unknown ("unknown (m/z 149, 57)", "Unbekannt", "no hit found"). A row
+    without a name is not one: it may be reported by its CAS."""
+    import gc_model as M
+    n = M.clean_name(name).casefold()
+    return bool(n) and (M.is_no_hit(n) or n.startswith("unbekannt"))
+
+
+def without_id(row: Optional[dict], unknown: Optional[bool] = None) -> Optional[dict]:
+    """A merged or source row as the report gives it: an unknown (``unknown``: else by its name) as a
+    copy without CAS and match quality, its determinations too (the export averages their quality).
+    Any other row is returned as it is."""
+    if row is None:
+        return None
+    if not (is_unknown(row.get("name")) if unknown is None else unknown):
+        return row
+    out = dict(row, **{k: "" if k == "cas" else None for k in ID_KEYS if k in row})
+    if out.get("sources") is not None:
+        out["sources"] = [without_id(s, True) for s in out["sources"]]
+    for k in ("source1", "source2"):
+        if isinstance(out.get(k), dict):
+            out[k] = without_id(out[k], True)
+    return out
+
+
+def report_samples(samples) -> list:
+    """The determinations as the report sees them: an unknown peak row without CAS and match quality.
+    Samples with such a row are copied, so the peak and replicate lists keep what the search found."""
+    import copy
+    out = []
+    for s in samples or []:
+        rows = getattr(s, "rows", None) or []
+        if not any(is_unknown(getattr(r, "name", "")) for r in rows):
+            out.append(s)
+            continue
+        c = copy.copy(s)
+        c.rows = []
+        for r in rows:
+            if is_unknown(getattr(r, "name", "")):
+                r = copy.copy(r)
+                r.cas = ""
+                if hasattr(r, "si"):
+                    r.si = None
+            c.rows.append(r)
+        out.append(c)
+    return out
 
 
 def json_safe(value):

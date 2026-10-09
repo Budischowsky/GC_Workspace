@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from gcws.report import catalog as C
+from gcws.report import service as RS
 
 #: fields every report reads (filters, sorting, sums, footnotes, the Determinations sheet's Conc. 1 / 2)
 BASE_FIELDS = {"rt", "name", "cas", "score", "conc", "istd", "sml", "ref", "footnote", "report_unit_1",
@@ -274,7 +275,9 @@ def collect(ws, members: list, group: Optional[dict], *, fields=(), method_name:
         warnings.append(f"CASINFO.xlsx not read: {exc}")
     out_rows = []
     for i, (r, v) in enumerate(zip(rows, verdicts)):
-        sources = list(r.get("sources") or [r.get("source1"), r.get("source2")][:n])
+        # an unknown is reported without CAS and match quality, also where a determination named it
+        r = RS.without_id(r)
+        sources = [RS.without_id(s) for s in (r.get("sources") or [r.get("source1"), r.get("source2")][:n])]
         sources += [None] * (n - len(sources))
         cs, mean, dismissed = CV.det_values(r, n)
         vals: dict = {}

@@ -333,3 +333,90 @@ def test_failed_report_leaves_no_temporary_folder(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="open in Excel"):
         RS.generate(job)
     assert made and not any(p.exists() for p in made)
+
+
+def test_unknown_rows_lose_cas_and_match_quality_in_the_report_only():
+    from types import SimpleNamespace
+    from gcws.report import service as RS
+    assert RS.is_unknown("unknown (m/z 149, 57)") and RS.is_unknown("Unbekannt") and RS.is_unknown("no hit found")
+    assert not RS.is_unknown("") and not RS.is_unknown("Diethyl phthalate")
+    a = {"name": "Phthalate", "cas": "84-66-2", "quality": 91}
+    b = {"name": "unknown (m/z 149)", "cas": "84-66-2", "quality": 60}
+    merged = {"name": "unknown (m/z 149)", "cas": "84-66-2", "quality": 75, "source1": a, "source2": b,
+              "sources": [a, b], "mean": 0.1}
+    out = RS.without_id(merged)
+    assert (out["cas"], out["quality"], out["mean"]) == ("", None, 0.1)
+    assert all((s["cas"], s["quality"]) == ("", None) for s in out["sources"] + [out["source1"], out["source2"]])
+    assert merged["cas"] == "84-66-2" and a["quality"] == 91            # the replicate list keeps its rows
+    named = dict(a, sources=[a, b])
+    assert RS.without_id(named) is named
+    rows = [SimpleNamespace(name="unknown (m/z 149)", cas="84-66-2", si=60),
+            SimpleNamespace(name="Phthalate", cas="84-66-2", si=91)]
+    sample = SimpleNamespace(rows=rows, meta={})
+    copy_, = RS.report_samples([sample])
+    assert copy_ is not sample and copy_.rows[1] is rows[1]
+    assert (copy_.rows[0].cas, copy_.rows[0].si) == ("", None)
+    assert (rows[0].cas, rows[0].si) == ("84-66-2", 60)                 # the peak list keeps them
+    plain = SimpleNamespace(rows=rows[1:])
+    assert RS.report_samples([plain])[0] is plain
+
+
+def test_unknowns_carry_no_cas_or_match_quality_in_the_nias_and_template_reports(samples, qapp, tmp_path):
+    """A peak named "unknown (m/z ...)" that still holds the CAS and quality of a library hit (peak list,
+    replicate list) is reported without them."""
+    import dataclasses
+    from openpyxl import load_workbook
+    from gcws.core.model import FID
+    from gcws.report import assemble as AS
+    from gcws.report import service as RS
+    from gcws.report import template as TP
+    from test_template_real import _build
+    ws = _ws_with(samples, ["06_", "07_", "08_", "11_"], qapp)
+    ws.quant["migration"] = dict(MIGRATION)
+    ids = [s.id for s in ws.states() if s.role == "sample"]
+    group = {"id": "g", "name": "26016606", "members": ids, "policy": "all"}
+    members, samples_ = AS.prepare(ws, "nias", group)
+    job = AS.build_job(ws, "nias", group, tmp_path / "a_NIAS_Report.xlsx", members=members, samples=samples_,
+                       preview=True)
+    best = max((r for r in RS.combined_rows(job) if r.get("cas") and r.get("mean")), key=lambda r: r["mean"])
+    cas, unknown = best["cas"], "unknown (m/z 149, 57, 71)"
+    digits = cas.lstrip("0")
+    for rid in ids:
+        items = ws.runs[rid].ident_set(FID).items
+        for k, ident in enumerate(items):
+            if ident.cas and ident.cas.lstrip("0") == digits:
+                items[k] = dataclasses.replace(ident, name=unknown, manual=True)
+    ws.recompute_quant()
+    kept = [r for r in ws.nias_sample(ids[0]).rows if r.name == unknown]
+    assert kept and all(r.cas for r in kept)                            # the peak list keeps the CAS
+
+    members, samples_ = AS.prepare(ws, "nias", group, recompute=False)
+    target = tmp_path / "b_NIAS_Report.xlsx"
+    job = AS.build_job(ws, "nias", group, target, members=members, samples=samples_, preview=True,
+                       keep_middle=True, record_seen=False)
+    job.keep_middle = tmp_path / "middle.xlsx"
+    RS.generate(job)
+    assert all(r.cas for r in kept)
+    id_headers = {"CAS", "CAS #", "CAS-No.", "CAS No.", "Quality", "Quality match", "% match", "Qual"}
+    seen = 0
+    for path in (job.keep_middle, target):
+        for sh in load_workbook(path).worksheets:
+            rows = [list(r) for r in sh.iter_rows(values_only=True)]
+            for r_i, row in enumerate(rows):
+                if "Name" not in row:
+                    continue
+                cols = [c for c, v in enumerate(row) if v in id_headers]
+                name_col = row.index("Name")
+                for line in rows[r_i + 1:]:
+                    if len(line) > name_col and str(line[name_col] or "").startswith("unknown (m/z 149, 57, 71)"):
+                        seen += 1
+                        assert all(line[c] in (None, "") for c in cols), (path.name, sh.title, line)
+                break
+    assert seen, "the unknown reaches the report"
+
+    _data, table = _build(ws, TP.preset("NIAS"))
+    head = [c.header for c in table.columns]
+    i_name, i_cas, i_score = head.index("Name"), head.index("CAS-No."), head.index("% match")
+    lines = [r for r in table.rows if r.cells[i_name].value == unknown]
+    assert lines and all(r.cells[i_cas].value in (None, "") and r.cells[i_score].value in (None, "")
+                         for r in lines)
