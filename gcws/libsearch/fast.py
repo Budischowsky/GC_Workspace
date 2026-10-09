@@ -50,7 +50,9 @@ import numpy as np
 import gcws.libsearch  # noqa: F401  (vendor on sys.path)
 import engine as _atlas_engine        # vendored SpectrAtlas modules
 import search_options
+from agilent import AgilentLibrary as _AgilentLibrary, u16 as _u16
 from msp import nominal_peaks
+from shimadzu import ShimadzuLibrary as _ShimadzuBase
 from pbm import (DEVIATION_PENALTY, FORWARD_WINDOW, MIN_ABUNDANCE, SIGNIFICANT_PEAKS, UNIQUENESS_WEIGHT, WINDOW,
                  _percent, _significant, qual)
 
@@ -447,15 +449,15 @@ class FastSearch:
         while len(cache) > REF_CACHE:
             cache.popitem(last=False)
         keys = [(row, minimum, maximum) for row in rows]
+        missing = [key for key in keys if key not in cache]
+        decoded = dict(zip(missing, _decode_many(self.engine, [key[0] for key in missing], minimum, maximum)))
         for key in keys:
             if key in cache:
                 cache.move_to_end(key)
                 self.counts["reused"] += 1
             else:
                 self.counts["decoded"] += 1
-                ref = {m: i for m, i in nominal_peaks(self.engine.peaks(key[0])).items()
-                       if minimum <= m <= maximum}
-                positive = None if all(i > 0 for i in ref.values()) else frozenset(m for m, i in ref.items() if i > 0)
+                ref, positive = decoded[key]
                 cache[key] = (ref, positive, False)
         if stats is not None:
             todo = [key for key in keys if cache[key][2] is False]
@@ -481,15 +483,19 @@ class FastSearch:
         query, minimum, maximum = job.query, job.minimum, job.maximum
         similarity = options.algorithm == 'similarity'
         references = self._references(list(candidates), minimum, maximum, None if similarity else stats)
+        if not similarity:
+            many = _pbm_many(job.pbm, [r[2] for r in references], stats)
+            confidences, reverses, forwards = (v.tolist() for v in many)
         ranked = []
-        for (row, (library, fcos, rcos)), (ref, positive, side) in zip(candidates.items(), references):
+        for n, ((row, (library, fcos, rcos)), (ref, positive, side)) in enumerate(zip(candidates.items(),
+                                                                                     references)):
             if similarity:
                 mf, rmf, score = search_options.similarity_scores(fcos, rcos)
                 if mf <= 0:
                     continue
                 ranked.append(((-mf, -rmf, row), row, library, fcos, rcos, ref, positive, (mf, rmf, score)))
             else:
-                confidence, reverse_pbm, forward_pbm = _pbm(job.pbm, ref, side, stats)
+                confidence, reverse_pbm, forward_pbm = confidences[n], reverses[n], forwards[n]
                 if confidence <= 0:
                     continue
                 ranked.append(((-confidence, -fcos, row), row, library, fcos, rcos, ref, positive,
@@ -781,13 +787,84 @@ def _select(rows, forward, reverse, sources, k: int):
     return candidates, chosen - definite
 
 
+def _peak_arrays(engine, row) -> tuple:
+    """``engine.peaks(row)`` as two float64 arrays: the same values in the same order (every
+    reader yields integers or float64 values). Agilent and Shimadzu records are read without the
+    tuple list, the others through ``peaks``."""
+    if row < engine.native_count:
+        reader, local = engine.native_row(row)
+        if isinstance(reader, _AgilentLibrary):
+            offset = reader.scan_offsets[local]
+            values = np.frombuffer(reader.data, dtype='>u2', count=_u16(reader.data, offset + 12) * 2,
+                                   offset=offset + 18).reshape(-1, 2)
+            raw = values[:, 1].astype(np.uint32)
+            return values[:, 0] / 20, ((raw & 16383) * (8 ** (raw >> 14))).astype(np.float64)
+        if isinstance(reader, _ShimadzuBase):
+            masses, intensities = reader.decode(local)
+            return np.array(masses, np.float64), np.array(intensities, np.float64)
+    peaks = engine.peaks(row)
+    return (np.fromiter((m for m, _i in peaks), np.float64, len(peaks)),
+            np.fromiter((i for _m, i in peaks), np.float64, len(peaks)))
+
+
+def _decode_many(engine, rows: list, minimum: int, maximum: int) -> list:
+    """(spectrum in the range, its m/z with a positive value or None for all) of each row:
+
+    ``{m: i for m, i in nominal_peaks(engine.peaks(row)).items() if minimum <= m <= maximum}``
+    for all rows at once, value for value: ``int(math.floor(mz + 0.5))`` binning, the sum per
+    nominal mass in peak order starting from 0.0 (``np.add.at`` adds in index order), the base
+    over all nominal masses, ``100.0 * i / base``, ascending m/z. A row ``nominal_peaks`` refuses
+    (nothing left, a zero base) is decoded the standard way, which raises its error."""
+    out = [None] * len(rows)
+    if not rows:
+        return out
+    arrays = [_peak_arrays(engine, row) for row in rows]
+    lengths = np.fromiter((len(a[0]) for a in arrays), np.int64, len(arrays))
+    mz = np.concatenate([a[0] for a in arrays]) if lengths.sum() else np.zeros(0)
+    intensity = np.concatenate([a[1] for a in arrays]) if lengths.sum() else np.zeros(0)
+    seg = np.repeat(np.arange(len(rows)), lengths)
+    mass = np.floor(mz + 0.5)
+    keep = mass > 0
+    mass, intensity, seg = mass[keep].astype(np.int64), intensity[keep], seg[keep]
+    keys, inverse = np.unique(seg * 1_000_000 + mass, return_inverse=True)
+    sums = np.zeros(len(keys))
+    np.add.at(sums, inverse, intensity)
+    useg, umass = keys // 1_000_000, keys % 1_000_000
+    counts = np.bincount(useg, minlength=len(rows))
+    starts = np.cumsum(counts) - counts
+    base = np.zeros(len(rows))
+    have = counts > 0
+    base[have] = np.maximum.reduceat(sums, starts[have])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        value = 100.0 * sums / base[useg]
+    inside = (umass >= minimum) & (umass <= maximum)
+    fseg = useg[inside]
+    fcounts = np.bincount(fseg, minlength=len(rows))
+    fstarts = (np.cumsum(fcounts) - fcounts).tolist()
+    nonpositive = np.bincount(fseg[~(value[inside] > 0)], minlength=len(rows)).tolist()
+    m_list, v_list, fcounts = umass[inside].tolist(), value[inside].tolist(), fcounts.tolist()
+    usable = (have & (base > 0)).tolist()
+    for n, row in enumerate(rows):
+        if not usable[n]:
+            ref = {m: i for m, i in nominal_peaks(engine.peaks(row)).items() if minimum <= m <= maximum}
+        else:
+            a = fstarts[n]
+            ref = dict(zip(m_list[a:a + fcounts[n]], v_list[a:a + fcounts[n]]))
+            if not nonpositive[n]:
+                out[n] = (ref, None)
+                continue
+        out[n] = (ref, None if all(i > 0 for i in ref.values()) else frozenset(m for m, i in ref.items() if i > 0))
+    return out
+
+
 def _reference_sides(refs: list, stats) -> list:
     """The reference side of ``pbm.pbm_match`` for many decoded spectra at once.
 
     ``pbm._percent`` and ``pbm._significant`` vectorised with the same float64 operations: per
-    spectrum (the largest value, whose percent is 100, ((m, weight, percent), ...) of the
-    significant peaks in their order, base m/z, attainable bits), or None when nothing is left
-    from 1 %. The percent spectrum itself is not kept (``_pbm`` recomputes a value when needed)."""
+    spectrum (the largest value, whose percent is 100, None for the significant peaks' tuple, base
+    m/z, attainable bits, the significant peaks (m/z, weight, percent) as rows of an array, every
+    m/z from 1 % with its percent as rows of an array), or None when nothing is left from 1 %.
+    ``_pbm`` takes the significant peaks from the array."""
     n = len(refs)
     lengths = np.fromiter((len(r) for r in refs), np.int64, n)
     total = int(lengths.sum())
@@ -816,7 +893,8 @@ def _reference_sides(refs: list, stats) -> list:
     weight = UNIQUENESS_WEIGHT * u + a
     order = np.lexsort((masses, -weight, seg))
     rank = np.arange(len(order)) - first[seg[order]]
-    top = order[rank < SIGNIFICANT_PEAKS]
+    chosen = rank < SIGNIFICANT_PEAKS
+    top, top_rank = order[chosen], rank[chosen]
     top_seg = seg[top]
     # base peak: the first (lowest m/z) of the largest percent values
     largest = np.zeros(n)
@@ -826,14 +904,29 @@ def _reference_sides(refs: list, stats) -> list:
     segs, where = np.unique(seg[at_max], return_index=True)
     base_mz = np.zeros(n, np.int64)
     base_mz[segs] = masses[at_max[where]]
-    mz_list, pct_list = masses.tolist(), percent.tolist()
-    top_list = top.tolist()
+    # attainable bits as pbm sums them with Python's sum(): compensated, in the significant
+    # peaks' order (a position a spectrum lacks adds nothing)
+    w = np.zeros((n, SIGNIFICANT_PEAKS))
+    on = np.zeros((n, SIGNIFICANT_PEAKS), bool)
+    w[top_seg, top_rank] = weight[top]
+    on[top_seg, top_rank] = True
+    attainable, comp = np.zeros(n), np.zeros(n)
+    for j in range(SIGNIFICANT_PEAKS):
+        x, counts = w[:, j], on[:, j]
+        t = attainable + x
+        step = np.where(np.abs(attainable) >= np.abs(x), (attainable - t) + x, (x - t) + attainable)
+        comp = np.where(counts, comp + step, comp)
+        attainable = np.where(counts, t, attainable)
+    attainable = np.where((comp != 0) & np.isfinite(comp), attainable + comp, attainable).tolist()
+    # the significant peaks (m/z, weight, percent) and every m/z from 1 % with its percent
+    top_rows = np.stack([masses[top].astype(np.float64), weight[top], percent[top]])
+    all_rows = np.stack([masses.astype(np.float64), percent])
     top_first = np.searchsorted(top_seg, np.arange(n + 1)).tolist()
-    weight_list = weight.tolist()
+    first_list, kept_list, base_list, base_mz_list = first.tolist(), kept.tolist(), base.tolist(), base_mz.tolist()
     for s in np.flatnonzero(has).tolist():
-        peaks = tuple((mz_list[i], weight_list[i], pct_list[i]) for i in top_list[top_first[s]:top_first[s + 1]])
-        # attainable bits with Python's sum() (compensated for floats since 3.12), as pbm sums them
-        out[s] = (float(base[s]), peaks, int(base_mz[s]), sum(w for _m, w, _p in peaks))
+        a, b, f = top_first[s], top_first[s + 1], first_list[s]
+        out[s] = (base_list[s], None, base_mz_list[s], attainable[s], top_rows[:, a:b],
+                  all_rows[:, f:f + kept_list[s]])
     return out
 
 
@@ -845,7 +938,10 @@ def _pbm(unknown_side, ref, reference_side, stats):
     if unknown_side is None or reference_side is None:
         return 0.0, 0.0, 0.0
     unknown, qpeaks, qweights, qattainable = unknown_side
-    largest, rpeaks, base, rattainable = reference_side
+    largest, rpeaks, base, rattainable = reference_side[:4]
+    if rpeaks is None:                  # (m/z, weight, percent) of the significant peaks, in order
+        rows = reference_side[4]
+        rpeaks = zip(rows[0].astype(np.int64).tolist(), rows[1].tolist(), rows[2].tolist())
     dilution = min(1.0, unknown.get(base, 0.0) / 100.0)
     if dilution <= 0 or rattainable <= 0:
         reverse = 0.0
@@ -867,3 +963,82 @@ def _pbm(unknown_side, ref, reference_side, stats):
                       if (value := ref.get(m)) is not None and (percent := 100.0 * value / largest) >= MIN_ABUNDANCE
                       and percent >= unknown[m] / FORWARD_WINDOW) / qattainable
     return (reverse + forward) / 2, reverse, forward
+
+
+def _pbm_many(unknown_side, sides: list, stats):
+    """:func:`_pbm` of one unknown against many references: (confidence, reverse, forward) arrays.
+
+    Value for value the scalar function: every candidate goes through the same float64 operations
+    in the same order. The reverse bits are accumulated peak position by peak position (a missing
+    position adds 0.0, which changes nothing); the forward sum repeats the compensated summation
+    of Python's ``sum()`` step by step; the dilution logarithm is ``math.log2``. A reference's
+    percent value at an m/z is the one :func:`_reference_sides` computed, with the same rule
+    (only values from ``MIN_ABUNDANCE`` exist), so the forward lookups need no decoded spectrum."""
+    n = len(sides)
+    confidence, reverse, forward = np.zeros(n), np.zeros(n), np.zeros(n)
+    if unknown_side is None or not n:
+        return confidence, reverse, forward
+    unknown, qpeaks, qweights, qattainable = unknown_side
+    use = [i for i, side in enumerate(sides) if side is not None]
+    if not use:
+        return confidence, reverse, forward
+    sel = [sides[i] for i in use]
+    k = len(sel)
+    rattainable = np.fromiter((side[3] for side in sel), np.float64, k)
+    dense = np.zeros(10002)
+    for m, v in unknown.items():
+        if 0 <= m <= 10001:
+            dense[m] = v
+    abundance = stats.abundance
+    rows = np.arange(k)
+
+    # reverse: the reference's significant peaks in the diluted unknown
+    base_mz = np.fromiter((side[2] for side in sel), np.int64, k)
+    dilution = np.minimum(1.0, dense[np.clip(base_mz, 0, 10001)] / 100.0)
+    ok = (dilution > 0) & (rattainable > 0)
+    top = [side[4] for side in sel]
+    lengths = np.fromiter((t.shape[1] for t in top), np.int64, k)
+    width = int(lengths.max())
+    rev = np.zeros(k)
+    if width and ok.any():
+        flat_rows = np.repeat(rows, lengths)
+        cols = np.arange(int(lengths.sum())) - np.repeat(np.cumsum(lengths) - lengths, lengths)
+        mz, weight, value = np.concatenate(top, axis=1)
+        expected = value * dilution[flat_rows]
+        found = dense[mz.astype(np.int64)]
+        partial = np.maximum(0.0, weight - DEVIATION_PENALTY * (
+            abundance[np.clip(expected.astype(np.int64), 1, 100)] - abundance[np.clip(found.astype(np.int64), 1, 100)]))
+        add = np.zeros((k, width))
+        add[flat_rows, cols] = np.where(found >= expected / WINDOW, weight, np.where(found > 0, partial, 0.0))
+        bits = np.add.accumulate(add, axis=1)[:, -1]          # left to right, as the scalar loop
+        at = np.flatnonzero(ok)
+        bits[at] -= np.array([math.log2(1 / d) for d in dilution[at].tolist()])
+        with np.errstate(divide="ignore", invalid="ignore"):
+            rev = np.where(ok, np.maximum(0.0, bits / np.where(ok, rattainable, 1.0)), 0.0)
+    # forward: the unknown's significant ions explained by the reference (compensated sum)
+    fwd = np.zeros(k)
+    if qattainable > 0 and qpeaks:
+        every = [side[5] for side in sel]
+        sizes = np.fromiter((e.shape[1] for e in every), np.int64, k)
+        masses, percents = np.concatenate(every, axis=1)
+        column = np.full(10002, -1, np.int64)                      # m/z -> position in qpeaks
+        column[np.asarray(qpeaks, dtype=np.int64)] = np.arange(len(qpeaks))
+        where = column[masses.astype(np.int64)]
+        inside = np.flatnonzero(where >= 0)
+        percent = np.full((k, len(qpeaks)), np.nan)              # nan: the reference lacks the m/z
+        percent[np.repeat(rows, sizes)[inside], where[inside]] = percents[inside]
+        limits = np.array([unknown[m] / FORWARD_WINDOW for m in qpeaks])
+        with np.errstate(invalid="ignore"):
+            counts = (percent >= MIN_ABUNDANCE) & (percent >= limits[None, :])
+        total, comp = np.zeros(k), np.zeros(k)
+        for j, m in enumerate(qpeaks):
+            x, c = qweights[m], counts[:, j]
+            t = total + x
+            step = np.where(total >= abs(x), (total - t) + x, (x - t) + total)   # total >= 0
+            comp = np.where(c, comp + step, comp)
+            total = np.where(c, t, total)
+        total = np.where((comp != 0) & np.isfinite(comp), total + comp, total)
+        fwd = total / qattainable
+    reverse[use], forward[use] = rev, fwd
+    confidence[use] = (rev + fwd) / 2
+    return confidence, reverse, forward

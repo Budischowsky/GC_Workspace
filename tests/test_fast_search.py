@@ -286,3 +286,62 @@ def test_spectra_of_different_ranges_share_one_screen(libraries, monkeypatch, ex
     results = service.analyze_many(libraries, settings, ranges=ranges)
     assert [_clean(r) for r in results] == [_clean(r) for r in standard]
     assert screens and max(screens) > len(libraries) // 2           # the ranges were screened together
+
+
+def test_pbm_of_many_candidates_is_the_scalar_pbm():
+    """``_pbm_many`` scores all candidates of a peak at once, to the last bit as ``_pbm`` does one
+    by one (also references whose base peak the unknown lacks, zero peaks, an empty side)."""
+    import struct
+    from gcws.libsearch import fast as FS
+    from pbm import PeakStatistics, _percent, _significant
+    rng = np.random.default_rng(11)
+    refs = []
+    for n in range(300):
+        sp = dict(_spectrum(rng, heavy=n % 2 == 0))
+        if n % 7 == 0:
+            sp[int(rng.integers(30, 60))] = 0                   # a zero-intensity peak
+        refs.append({m: 100.0 * i / max(sp.values()) for m, i in sorted(sp.items()) if 35 <= m <= 400})
+    refs.append({})                                               # nothing in the range: no side
+    stats = PeakStatistics.from_spectra(refs)
+    sides = FS._reference_sides(refs, stats)
+    assert sides[-1] is None
+    for n in range(12):
+        query = {m: float(i) * float(rng.uniform(0.5, 1.5)) for m, i in _spectrum(rng)}
+        unknown = _percent(query)
+        peaks, weights = _significant(unknown, stats)
+        side = (unknown, peaks, weights, sum(weights[m] for m in peaks))
+        got = FS._pbm_many(side, sides, stats)
+        for i, (ref, rside) in enumerate(zip(refs, sides)):
+            want = FS._pbm(side, ref, rside, stats)
+            assert [struct.pack("<d", float(v[i])) for v in got] == [struct.pack("<d", v) for v in want], (n, i)
+    none = FS._pbm_many(None, sides, stats)
+    assert not any(v.any() for v in none)
+
+
+def test_references_are_decoded_together_as_one_by_one(data):
+    """``_decode_many`` bins the candidates' peaks to nominal masses all at once: the same spectra
+    to the last bit as ``nominal_peaks`` per reference (fractional masses summed in peak order, a
+    mass below 0.5 dropped, the base over the whole spectrum, the m/z range applied after it)."""
+    import struct
+    from gcws.libsearch import fast, service, store
+    rng = np.random.default_rng(5)
+    records = []
+    for n in range(200):
+        peaks = [(float(m) + float(rng.uniform(-0.45, 0.45)), float(rng.uniform(0.1, 999)))
+                 for m in rng.choice(np.arange(20, 450), size=int(rng.integers(2, 40)), replace=False)]
+        peaks += [(p[0] + 0.3, p[1] / 3) for p in peaks[:3]]             # two peaks on one nominal mass
+        if n % 5 == 0:
+            peaks.append((0.2, 50.0))                                      # nominal mass 0: dropped
+        records.append(LE.new_record(f"R {n}", sorted(peaks), cas=""))
+    (data / "R.msp").write_text(LE.write_msp(records), encoding="cp1252", newline="")
+    store.save(store.add([], store.discover(data / "R.msp")))
+    eng = service.get_engine()
+    rows = list(range(eng.native_count + len(eng.custom)))[:200]
+    for lo, hi in ((35, 400), (1, 10000), (300, 320)):
+        got = fast._decode_many(eng, rows, lo, hi)
+        for row, (ref, positive) in zip(rows, got):
+            want = {m: i for m, i in fast.nominal_peaks(eng.peaks(row)).items() if lo <= m <= hi}
+            assert list(ref) == list(want)
+            assert [struct.pack("<d", v) for v in ref.values()] == [struct.pack("<d", v) for v in want.values()]
+            assert positive == (None if all(i > 0 for i in want.values()) else
+                                frozenset(m for m, i in want.items() if i > 0))
