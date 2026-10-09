@@ -109,8 +109,9 @@ class MainWindow(QMainWindow):
         central = QWidget()
         central.hide()
         self.setCentralWidget(central)
+        # no AnimatedDocks: the animation repaints every panel for each frame of a rearrangement
         self.setDockOptions(QMainWindow.AllowNestedDocks | QMainWindow.AllowTabbedDocks
-                            | QMainWindow.AnimatedDocks | QMainWindow.GroupedDragging)
+                            | QMainWindow.GroupedDragging)
         self.setDockNestingEnabled(True)
         self.setTabPosition(Qt.AllDockWidgetAreas, QTabWidgetNorth())
 
