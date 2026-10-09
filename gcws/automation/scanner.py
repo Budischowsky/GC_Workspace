@@ -133,8 +133,14 @@ def _walk(path: Path):
                     yield e
 
 
+#: folders inside a run that hold evaluations, not measurement data: a report or an analyst's workbook saved
+#: there must not make the run look changed (it would be processed again)
+EVALUATION_FOLDERS = ("auswertung", "gcws")
+
+
 def fingerprint(path: Path) -> tuple[str, float, bool, bool]:
-    """``(hash of names, sizes and times, newest time, marker present, busy)`` of a run."""
+    """``(hash of names, sizes and times, newest time, marker present, busy)`` of a run (its evaluation
+    folders left out)."""
     h = hashlib.sha1()
     newest, marker, busy = 0.0, False, False
     try:
@@ -150,6 +156,8 @@ def fingerprint(path: Path) -> tuple[str, float, bool, bool]:
                 busy = True
                 continue
             rel = os.path.relpath(e.path, path)
+            if rel.split(os.sep, 1)[0].lower() in EVALUATION_FOLDERS and os.sep in rel:
+                continue
             entries.append(f"{rel.lower()}:{st.st_size}:{st.st_mtime_ns}")
             newest = max(newest, st.st_mtime)
             if e.name.lower() in MARKERS:

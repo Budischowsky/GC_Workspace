@@ -48,8 +48,14 @@ def deliveries(wf: Workflow, method_id: str, ctx: dict, files: dict, tokens: Opt
 
 
 def target_dir(params: dict, tokens: dict, workflow_name: str = "") -> Path:
-    """The folder a file goes to: the target path plus the subfolder with its placeholders."""
-    base = Path(params.get("path") or "")
+    """The folder a file goes to: the target path (or, with ``target`` "source", the source folder: the batch
+    folder for a batch report, the folder of the sample's first determination for a sample report) plus the
+    subfolder with its placeholders."""
+    if params.get("target") == "source":
+        sample_report = bool(tokens.get("sample"))
+        base = Path((tokens.get("sample_dir") if sample_report else "") or tokens.get("batch_dir") or "")
+    else:
+        base = Path(params.get("path") or "")
     sub = params.get("subfolder") if "subfolder" in params else "{batch}"
     status = {"accepted_auto": "accepted", "accepted_manual": "accepted", "control": "control needed"}
     values = {"batch": tokens.get("batch", ""), "sample": tokens.get("sample", ""), "kind": tokens.get("kind", ""),

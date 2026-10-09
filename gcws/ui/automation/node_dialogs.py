@@ -157,8 +157,16 @@ class NodeDialog(QDialog):
             self.w["keep_middle"].setChecked(bool(p("keep_middle")))
             form.addRow("", self.w["keep_middle"])
         elif t == "folder":
+            self.w["target"] = _combo({"path": "A fixed folder",
+                                       "source": "Back into the source folder (batch report: the batch folder; "
+                                                 "sample report: its first determination's .D folder)"},
+                                      p("target") or "path")
+            form.addRow("Target", self.w["target"])
             self.w["path"] = QLineEdit(p("path") or "")
             form.addRow("Target folder", _folder_row(self.w["path"], self))
+            self.w["target"].currentIndexChanged.connect(
+                lambda *_: self.w["path"].setEnabled(self.w["target"].currentData() != "source"))
+            self.w["path"].setEnabled(self.w["target"].currentData() != "source")
             self.w["subfolder"] = QLineEdit(p("subfolder") or "")
             self.w["subfolder"].setToolTip("Placeholders: " + " ".join(W.SUBFOLDER_TOKENS))
             form.addRow("Subfolder", self.w["subfolder"])
@@ -168,7 +176,9 @@ class NodeDialog(QDialog):
             self.w["allow_inside_source"].setChecked(bool(p("allow_inside_source")))
             form.addRow("", self.w["allow_inside_source"])
             lay.addWidget(theme.hint("Placeholders in the subfolder: {batch} {sample} {kind} {status} {date} "
-                                     "{workflow}. Empty = directly into the target folder."))
+                                     "{workflow}. Empty = directly into the target folder. Back into the source "
+                                     "folder: e.g. 'Auswertung' (the watcher ignores Auswertung and GCWS inside a "
+                                     "run, so a report there does not start the processing again)."))
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)

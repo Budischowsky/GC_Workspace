@@ -77,7 +77,8 @@ DEFAULT_PARAMS = {
                "require_blank": "auto", "timeout_min": 30},
     "report2": {"rules": None, "auto_accept": True, "notify": True},
     "report": {"kind": "nias", "formats": ["xlsx", "docx"], "batch_when": "all_accepted", "keep_middle": False},
-    "folder": {"path": "", "subfolder": "{batch}", "overwrite": "version", "allow_inside_source": False},
+    "folder": {"path": "", "subfolder": "{batch}", "overwrite": "version", "allow_inside_source": False,
+               "target": "path"},
 }
 SUBFOLDER_TOKENS = ("{batch}", "{sample}", "{kind}", "{status}", "{date}", "{workflow}")
 
@@ -588,6 +589,14 @@ def validate(wf: Workflow, *, method_names: Optional[list] = None, check_paths: 
                      + ", ".join(FORMAT_SHORT.get(f, f) for f in sorted(set(want) - set(formats))))
     for f in wf.by_type("folder"):
         path = (f.p("path") or "").strip()
+        if f.p("target") == "source":
+            sub = f.p("subfolder") or ""
+            bad = [t for t in re.findall(r"\{[^}]*\}", sub) if t not in SUBFOLDER_TOKENS]
+            if bad:
+                err(f.id, "Unknown placeholder(s) in the subfolder: " + ", ".join(bad))
+            if not wf.incoming(f.id):
+                warn(f.id, "Nothing arrives in this folder.")
+            continue
         if not path:
             err(f.id, "Choose the target folder.")
             continue
