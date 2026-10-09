@@ -179,6 +179,7 @@ class ChromPanel(QWidget):
         self.plot.scene().sigMouseMoved.connect(self._mouse_moved)
         self._markers = None
         self._deconv_markers = None
+        self.deconv_trace = None        # TIC: the selected peak's deconvoluted chromatogram
         theme.register_plot(self.plot, self._theme_changed)
         self._fit = QTimer(self)
         self._fit.setSingleShot(True)
@@ -495,11 +496,55 @@ class ChromPanel(QWidget):
         if st is None or sig is None or res is None or st.id not in self.curves:
             self.peaks.set_data(np.zeros(0), np.zeros(0), [], "#000")
             self.labels.set_labels([])
+            self.refresh_deconv_trace()
             return
         muted = self.ws.blank_level_peaks(st.id, k)
         self.peaks.set_data(sig.rt, sig.y, res.peaks, st.color, self.selected_index(), self.vb.transform,
                             dx=self.shift(st), muted=muted)
         self.refresh_labels()
+        self.refresh_deconv_trace()
+
+    def refresh_deconv_trace(self):
+        """TIC: the deconvoluted chromatogram of the selected peak (its MS component's elution
+        profile) over the peak and 2 s either side, filled, as AMDIS draws a component. Kept as it is
+        while the run, the peak, the settings and the drawing do not change (a metadata edit)."""
+        st = self.ws.active
+        peak = self.ws.selected_peak()
+        shown = (base_key(self.key) == "TIC" and st is not None and peak is not None and st.run.ms is not None
+                 and st.id in self.curves)
+        from gcws.ms import deconv_cache as DC
+        settings = DC.settings_for(self.ws, st, self.ws.signal_key) if shown else None
+        ident = ((st.id, id(peak), peak.start, peak.end, self.ws.active_key, DC._skey(settings), st.delay_value,
+                  self.shift(st), tuple(self.vb.transform), theme.OK) if shown else None)
+        if ident is not None and ident == getattr(self, "_trace_ident", None):
+            return
+        self._trace_ident = ident
+        if self.deconv_trace is not None:
+            self.vb.removeItem(self.deconv_trace)
+            self.deconv_trace = None
+        if not shown:
+            return
+        key = self.ws.active_key
+        try:
+            got = DC.component_trace(st, peak, key, settings)
+        except Exception:  # noqa: BLE001 - a drawing aid must never break the chromatogram
+            import logging
+            logging.getLogger(__name__).exception("deconvoluted chromatogram of the selected peak")
+            return
+        if got is None:
+            return
+        t, y, comp = got
+        sc, off = self.vb.transform
+        color = theme.qcolor(theme.OK, 240)           # apart from the run colours and the markers
+        fill = theme.qcolor(theme.OK, 90)
+        item = pg.PlotDataItem(t + self.shift(st), y * sc + off, pen=pg.mkPen(color, width=1.6),
+                               fillLevel=off, brush=pg.mkBrush(fill))
+        item.setZValue(12)
+        what = f"model m/z {comp.model_mz}" if comp is not None else "its component"
+        item.setToolTip(f"Deconvoluted chromatogram of the selected peak ({what}), "
+                        f"{DC.TRACE_PAD * 60:g} s either side")
+        self.vb.addItem(item, ignoreBounds=True)
+        self.deconv_trace = item
 
     def refresh_labels(self, *_):
         st = self.ws.active

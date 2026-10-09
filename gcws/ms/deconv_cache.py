@@ -92,6 +92,34 @@ def for_peak(st, peak, key: str, settings: D.DeconvSettings):
     return D.component_for_peak(comps, t0, t1, ta)
 
 
+#: the deconvoluted chromatogram of a selected peak is drawn this far (min) either side of it
+TRACE_PAD = 2.0 / 60.0
+
+
+def component_trace(st, peak, key: str, settings: D.DeconvSettings, pad: float = TRACE_PAD):
+    """``(t, y, component)``: the deconvoluted chromatogram of ``peak`` of ``key`` (as AMDIS draws a
+    component), i.e. the elution profile of its MS component -- the component's reconstructed ion
+    current, in TIC counts and MS time -- over the peak and ``pad`` either side. A fragment of a
+    deconvolution split draws its own component's profile. None without a component or profile."""
+    import numpy as np
+    if st.run.ms is None or peak is None:
+        return None
+    comp = for_peak(st, peak, key, settings)
+    stored = ((getattr(peak, "extra", None) or {}).get("deconv_component") or {}).get("profile")
+    if stored:
+        points = np.asarray(stored, dtype=float)
+        t, y = points[:, 0], points[:, 1]
+    elif comp is not None and len(getattr(comp, "profile_rt", ())) > 1:
+        t, y = np.asarray(comp.profile_rt, dtype=float), np.asarray(comp.profile_y, dtype=float)
+    else:
+        return None
+    t0, t1, _ta = ms_times(peak, key, st.delay_value)
+    use = (t >= t0 - pad) & (t <= t1 + pad)
+    if int(use.sum()) < 2 or not y[use].max() > 0:
+        return None
+    return t[use], y[use], comp
+
+
 def hidden_components(ws, st, key: str, settings: D.DeconvSettings) -> list:
     """Whole-run components without an integrated peak of ``key`` at their time."""
     comps = whole_run(st, settings)

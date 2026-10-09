@@ -117,6 +117,10 @@ with processing methods and used by the automation.
 4. Each fragment keeps its component spectrum. The library search searches the fragments with these clean
    spectra, also when it searches the TIC peaks, so every FID peak gets its own name.
 
+When a peak is selected, the TIC shows its **deconvoluted chromatogram** in green, as AMDIS does: the elution
+profile of the peak's MS component (the ion current of that component alone), over the peak and 2 s either
+side. For a fragment of a split it is the fragment's own component; hover over it for its model ion.
+
 The panel shows how many peaks were split; the tooltip of that line lists the peaks left unsplit and why
 (for example a shoulder for which the closer look found only one component). The automatic splits are not listed among the manual events: they are
 made again at every integration from the present settings.

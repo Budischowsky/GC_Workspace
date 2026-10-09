@@ -748,3 +748,34 @@ def test_alpha_methylstyrene_in_the_butyl_methacrylate_tail_is_split_off(app, in
     assert bool(extended) == (integration == "method")             # the method's peak was extended
     if extended:
         assert extended[0].end == pytest.approx(7.44, abs=0.03)      # to the tail's lowest point
+
+
+def test_tic_shows_the_deconvoluted_chromatogram_of_the_selected_peak(win):
+    """As in AMDIS: the TIC draws the selected peak's deconvoluted component (its reconstructed ion
+    current) over the peak and 2 s either side; for a fragment of a split, its own component."""
+    from gcws.ms.deconv_cache import TRACE_PAD
+    from gcws.ms.spectra import ms_times
+    ws = win.ws
+    ws.deconv_background = False
+    ws.default_methods[FID] = ws.default_method(FID).copy(deconv_split="auto", timed_events=[])
+    st = load(ws, make_run("S_A"))
+    ws.set_active(st.id)
+    tic, fid = (p for p in sorted(win.chroms, key=lambda p: p.key != "TIC"))
+    assert tic.key == "TIC" and fid.key == FID
+    peaks = ws.result(st.id, FID).peaks
+    parts = fragments(ws, st)
+    from test_deconv import DT
+    alone = next(p for p in peaks if p.start < 10.0 + 120 * DT + DELAY < p.end)       # SPEC_C, not split
+    for peak, mz in [(p, p.extra["deconv_component"]["model_mz"]) for p in parts] + [(alone, None)]:
+        ws.select_peak(peaks.index(peak))
+        item = tic.deconv_trace
+        assert item is not None and fid.deconv_trace is None
+        x, y = item.getData()
+        t0, t1, _ = ms_times(peak, FID, st.delay_value)
+        shift = tic.shift(st)
+        assert x.min() >= t0 - TRACE_PAD + shift - 1e-9 and x.max() <= t1 + TRACE_PAD + shift + 1e-9
+        assert y.max() > 0 and x.size >= 3
+        if mz is not None:
+            assert f"m/z {mz}" in item.toolTip()
+    ws.select_peak(-1)
+    assert tic.deconv_trace is None
