@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-from gcws.learn.model import RawPeak
+from gcws.learn.model import AlkanePoint, EvalRow, Header, IstdEntry, RawPeak, normalise_cas
 
 
 def _num(v) -> Optional[float]:
@@ -78,3 +78,251 @@ def parse_rohdaten(rows: list[tuple]) -> list[RawPeak]:
             end=_num(get("END")) if "END" in cols else None,
             peak_type=ptype, manual="M" in ptype))
     return peaks
+
+
+# --- 'Auswertung' sheet -------------------------------------------------------------------------------------------
+
+ROW_CLASSES = ("istd", "named", "named_no_cas", "group", "unknown", "coelution", "derivative", "unnamed", "sum")
+
+_RE_ISTD = re.compile(r"^IS\d+$", re.IGNORECASE)
+_RE_UNKNOWN = re.compile(r"^unknown\b", re.IGNORECASE)
+_RE_COELUTION = re.compile(r"mehrere Verbindungen|several compounds|co-?elut", re.IGNORECASE)
+_RE_DERIVATIVE = re.compile(r"possible derivative|m[öo]gliche[sr]? Derivat", re.IGNORECASE)
+_RE_SUM = re.compile(r"^(sum|summe)\b", re.IGNORECASE)
+_RE_COORD = re.compile(r"^([A-Z]{1,3})(\d+)$")
+_RE_REF = re.compile(r"\$?([A-Z]{1,3})\$?(\d+)")
+
+
+def _col_index(col: str) -> int:
+    n = 0
+    for ch in col:
+        n = n * 26 + ord(ch) - 64
+    return n
+
+
+def _grid(cells: dict[str, object]) -> dict[int, dict[int, object]]:
+    """{row: {column index: value}} without empty cells."""
+    grid: dict[int, dict[int, object]] = {}
+    for coord, v in cells.items():
+        if v is None or (isinstance(v, str) and not v.strip()):
+            continue
+        m = _RE_COORD.match(coord)
+        if m:
+            grid.setdefault(int(m.group(2)), {})[_col_index(m.group(1))] = v
+    return grid
+
+
+def _plain(v) -> str:
+    """Cell value as text; whole floats without '.0'."""
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return _text(v)
+
+
+def _table_header_row(grid) -> Optional[int]:
+    for r in sorted(grid):
+        a, b = _text(grid[r].get(1)), _text(grid[r].get(2))
+        if a.upper().startswith("RT") and b.casefold() == "name":
+            return r
+    return None
+
+
+def _alkane_anchor(grid) -> Optional[tuple[int, int]]:
+    for r in sorted(grid):
+        for c, v in grid[r].items():
+            if _text(v).casefold() == "n-alkane" and _text(grid[r].get(c + 1)).upper().startswith("RT"):
+                return r, c
+    return None
+
+
+def detect_template(cells: dict[str, object]) -> str:
+    """'v2' = worksheet with an n-Alkane RT/RI block, 'v1' = without."""
+    return "v2" if _alkane_anchor(_grid(cells)) else "v1"
+
+
+_HEADER_LABELS = {
+    "probenname": "sample_name", "syn-proben-id": "syn_id", "syn-summary": "syn_summary",
+    "auswerter:": "evaluator", "gc-operator:": "operator", "datenfile": "data_file", "simulans:": "simulant",
+    "temperatur:": "temperature", "dauer:": "duration", "volumen:": "volume", "o/v-ratio": "sv_ratio",
+    "s/v-ratio": "sv_ratio", "gc-methode:": "gc_method", "inj-vol:": "inj_volume",
+}
+_NUMERIC_HEADER = {"temperature", "volume", "sv_ratio", "inj_volume"}
+
+
+def parse_header(cells: dict[str, object]) -> Header:
+    """Header values found by their label: the next non-empty cell to the right in the same row."""
+    grid = _grid(cells)
+    stop = _table_header_row(grid) or (max(grid) + 1 if grid else 0)
+    h = Header()
+    for r in sorted(grid):
+        if r >= stop:
+            break
+        row = grid[r]
+        for c in sorted(row):
+            key = _HEADER_LABELS.get(_text(row[c]).casefold())
+            if not key or getattr(h, key) not in ("", None):
+                continue
+            right = [row[k] for k in sorted(row) if k > c]
+            if right:
+                setattr(h, key, _num(right[0]) if key in _NUMERIC_HEADER else _plain(right[0]))
+    h.istd, h.istd_mean_area = _istd(grid, stop)
+    h.alkanes = _alkanes(grid)
+    h.conc_units = [unit for unit, _ in _table_columns(grid)["conc"]]
+    return h
+
+
+def _istd(grid, stop: int) -> tuple[list[IstdEntry], Optional[float]]:
+    """ISTD blocks: a 'Conc' header with 'Fläche' to its right; the ISTD name is left of the Conc column.
+    The mean area is the number below the first block's areas (the sheet's AVERAGE cell)."""
+    entries: list[IstdEntry] = []
+    mean: Optional[float] = None
+    for r in sorted(grid):
+        if r >= stop:
+            break
+        for c, v in sorted(grid[r].items()):
+            t = _text(v)
+            if not t.startswith("Conc") or t.startswith("Conc."):
+                continue
+            if not _text(grid[r].get(c + 1)).startswith("Fläche"):
+                continue
+            block: list[IstdEntry] = []
+            last = r
+            for rr in range(r + 1, stop):
+                row = grid.get(rr, {})
+                name = row.get(c - 1)
+                if name is None or _num(name) is not None:
+                    continue
+                block.append(IstdEntry(_text(name), _num(row.get(c)), _num(row.get(c + 1))))
+                last = rr
+            if block and mean is None:
+                below = _num(grid.get(last + 1, {}).get(c + 1))
+                areas = [e.area for e in block if e.area is not None]
+                mean = below if below is not None else (sum(areas) / len(areas) if areas else None)
+            entries.extend(block)
+    return entries, mean
+
+
+def _alkanes(grid) -> list[AlkanePoint]:
+    anchor = _alkane_anchor(grid)
+    if not anchor:
+        return []
+    r0, c = anchor
+    out: list[AlkanePoint] = []
+    for r in range(r0 + 1, max(grid) + 1):
+        row = grid.get(r, {})
+        name, ri = _text(row.get(c)), _num(row.get(c + 2))
+        if not re.fullmatch(r"C\d+", name) or ri is None:
+            break
+        out.append(AlkanePoint(name, _num(row.get(c + 1)), ri))
+    return out
+
+
+def _table_columns(grid) -> dict:
+    """Column indexes of the worksheet table, found by header text."""
+    hr = _table_header_row(grid)
+    cols: dict = {"conc": []}
+    if hr is None:
+        return cols
+    cols["row"] = hr
+    for c, v in sorted(grid[hr].items()):
+        t = _text(v)
+        tl = t.casefold()
+        if c == 1:
+            cols["rt"] = c
+        elif tl == "name":
+            cols["label"] = c
+        elif tl.startswith("cas"):
+            cols["cas"] = c
+        elif tl == "db":
+            cols["library"] = c
+        elif "match" in tl:
+            cols["match"] = c
+        elif tl in ("fläche", "area"):
+            cols["area"] = c
+        elif tl.startswith("conc."):
+            cols["conc"].append((t[5:].strip(), c))
+        elif tl == "sml":
+            cols["sml"] = c
+        elif tl.startswith("ref"):
+            cols["reference"] = c
+        elif tl.startswith("ri"):
+            cols["ri"] = c
+    return cols
+
+
+def _original_area(formula: str, row: int, area_col: int, grid) -> Optional[float]:
+    """The same-row cell an area formula starts from (e.g. L29 in '=L29-F30')."""
+    for col, r in _RE_REF.findall(formula):
+        ci = _col_index(col)
+        if int(r) == row and ci != area_col:
+            value = _num(grid.get(row, {}).get(ci))
+            if value is not None:
+                return value
+    return None
+
+
+def parse_eval_table(values: dict[str, object], formulas: dict[str, object]) -> list[EvalRow]:
+    """The worksheet table below the 'RT / min | Name | …' header, up to 'Ende'."""
+    grid = _grid(values)
+    fgrid = _grid({k: getattr(v, "text", v) for k, v in formulas.items()})
+    cols = _table_columns(grid)
+    if "row" not in cols:
+        return []
+    known = {c for k, c in cols.items() if isinstance(c, int) and k not in ("row", "ri")}
+    known |= {c for _, c in cols["conc"]}
+    area_col = cols.get("area", 0)
+    last = max([*grid, *fgrid])
+    rows: list[EvalRow] = []
+    for r in range(cols["row"] + 1, last + 1):
+        vrow, frow = grid.get(r, {}), fgrid.get(r, {})
+        first = vrow.get(1)
+        if _text(first).casefold() == "ende":
+            break
+        rt = _num(first)
+        label = _text(vrow.get(cols.get("label", 0)))
+        if rt is None and isinstance(first, str):
+            label = _text(first)
+        if rt is None and not label:
+            continue
+        formula = frow.get(area_col)
+        formula = formula if isinstance(formula, str) and formula.startswith("=") else ""
+        rows.append(EvalRow(
+            sheet_row=r, rt=rt, label=label, cas=normalise_cas(vrow.get(cols.get("cas", 0))),
+            library=_text(vrow.get(cols.get("library", 0))), match=_num(vrow.get(cols.get("match", 0))),
+            area=_num(vrow.get(area_col)), area_formula=formula,
+            area_original=_original_area(formula, r, area_col, grid) if formula else None,
+            conc={unit: _num(vrow.get(c)) for unit, c in cols["conc"]},
+            sml=_plain(vrow.get(cols["sml"])) if "sml" in cols else "",
+            reference=_plain(vrow.get(cols["reference"])) if "reference" in cols else "",
+            note=" ".join(_text(v) for c, v in sorted(vrow.items())
+                          if c not in known and c != 1 and isinstance(v, str))))
+    return rows
+
+
+def classify_rows(rows: list) -> None:
+    """Set row_class from what the analyst wrote (parsing only, no decision rules). A label without CAS
+    that the analyst used on two or more rows is a group label (e.g. an oligomer family)."""
+    no_cas: dict[str, int] = {}
+    for r in rows:
+        if r.label and not r.cas:
+            no_cas[r.label.casefold()] = no_cas.get(r.label.casefold(), 0) + 1
+    for r in rows:
+        label = r.label
+        if r.rt is None and _RE_SUM.match(label):
+            r.row_class = "sum"
+        elif _RE_ISTD.match(label):
+            r.row_class = "istd"
+        elif _RE_UNKNOWN.match(label):
+            r.row_class = "unknown"
+        elif _RE_COELUTION.search(label):
+            r.row_class = "coelution"
+        elif _RE_DERIVATIVE.search(label):
+            r.row_class = "derivative"
+        elif r.cas:
+            r.row_class = "named"
+        elif not label:
+            r.row_class = "unnamed"
+        elif no_cas.get(label.casefold(), 0) >= 2:
+            r.row_class = "group"
+        else:
+            r.row_class = "named_no_cas"
