@@ -97,7 +97,7 @@ You need a processing method first: set everything up for one batch by hand and 
 
 | Setting | Default | Meaning |
 |---|---|---|
-| **Target** | A fixed folder | **A fixed folder**, or **Back into the source folder**: a batch report goes into the batch folder, a sample report into the .D folder of the sample's first determination - each below the **Subfolder** (e.g. `Auswertung`). The target folder is then not needed, and writing into the watched folder is allowed. The watcher ignores the `Auswertung` and `GCWS` folders inside a run, so a report (or an analyst's workbook) saved there does not make the run look changed and processed again. |
+| **Target** | A fixed folder | **A fixed folder**, or **Back into the source folder**: batch and sample reports go into the batch folder the runs came from, below the **Subfolder** (e.g. `Auswertung`). The target folder is then not needed, and writing into the watched folder is allowed. The watcher ignores the `Auswertung` and `GCWS` folders inside a run, so a report (or an analyst's workbook) saved there does not make the run look changed and processed again. |
 | **Target folder** | | Where the files go (with **A fixed folder**). |
 | **Subfolder** | {batch} | A subfolder below it. Placeholders: `{batch}` `{sample}` `{kind}` `{status}` `{date}` `{workflow}`. Empty = directly into the target folder. |
 | **File exists** | Keep both (add _2, _3 ...) | Or **Replace**, or **Keep the existing file**. |

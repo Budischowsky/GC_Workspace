@@ -1,5 +1,5 @@
-"""Reports delivered back into the source: a batch report into the batch folder, a sample report into the folder
-of the sample's first determination; the watcher does not take the evaluation folders for new data."""
+"""Reports delivered back into the source: batch and sample reports into the batch folder; the watcher does not
+take the evaluation folders for new data."""
 import time
 from pathlib import Path
 
@@ -28,9 +28,10 @@ def test_fingerprint_ignores_the_evaluation_folders(tmp_path):
 def test_target_dir_source():
     from gcws.automation.routing import target_dir
     p = {"target": "source", "subfolder": "Auswertung"}
-    tokens = {"batch_dir": r"C:\x\B1", "sample_dir": r"C:\x\B1\05_X_A.D", "sample": "X", "batch": "B1"}
-    assert target_dir(p, tokens) == Path(r"C:\x\B1\05_X_A.D\Auswertung")
-    assert target_dir(p, dict(tokens, sample="", sample_dir="")) == Path(r"C:\x\B1\Auswertung")
+    tokens = {"batch_dir": r"C:\x\B1", "sample": "X", "batch": "B1"}
+    assert target_dir(p, tokens) == Path(r"C:\x\B1\Auswertung")
+    assert target_dir(p, dict(tokens, sample="")) == Path(r"C:\x\B1\Auswertung")
+    assert target_dir(dict(p, subfolder="Auswertung/{sample}"), tokens) == Path(r"C:\x\B1\Auswertung\X")
     assert target_dir({"target": "source", "subfolder": ""}, dict(tokens, sample="")) == Path(r"C:\x\B1")
     assert target_dir({"path": r"D:\out", "subfolder": "{batch}"}, tokens) == Path(r"D:\out\B1")
 
@@ -41,13 +42,13 @@ def _to_source(wf, subfolder="Auswertung"):
     return folder
 
 
-def test_sample_report_delivered_into_its_run_folder(env):
+def test_sample_report_delivered_into_the_batch_folder(env):
     from gcws.automation import export
     _to_source(env["wf"])
     job, folder = _accepted_with_files(env)
     _run(folder / "26016606_x_A.D")
     lines = export.deliver(env["journal"], env["wf"], job)
-    target = folder / "26016606_x_A.D" / "Auswertung" / "26016606_x_NIAS_Report.xlsx"
+    target = folder / "Auswertung" / "26016606_x_NIAS_Report.xlsx"
     assert target.is_file(), lines
     assert env["journal"].job(job.id).export_state == "done"
 

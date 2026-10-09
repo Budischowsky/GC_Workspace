@@ -43,11 +43,8 @@ def deliver(journal: J.Journal, wf, job: J.Job, force: bool = False) -> list[str
     batch = journal.batch_by_id(job.batch_id)
     src_root = (wf.source.p("folder") if wf.source else "") or ""
     ctx = {"status": job.state, "name": None if job.is_batch else job.group_name, "batch": batch.get("name", "")}
-    batch_dir = batch.get("folder", "") or ""
-    members = list(job.members or [])
     tokens = {"batch": batch.get("name", ""), "sample": "" if job.is_batch else job.group_name,
-              "date": datetime.now().strftime("%Y-%m-%d"), "batch_dir": batch_dir,
-              "sample_dir": str(Path(batch_dir) / members[0]) if batch_dir and members and not job.is_batch else ""}
+              "date": datetime.now().strftime("%Y-%m-%d"), "batch_dir": batch.get("folder", "") or ""}
     done = journal.delivered(job.id, job.revision)
     lines, errors = [], 0
     for d in routing.deliveries(wf, job.method_node, ctx, job.files or {}, tokens):

@@ -158,8 +158,7 @@ class NodeDialog(QDialog):
             form.addRow("", self.w["keep_middle"])
         elif t == "folder":
             self.w["target"] = _combo({"path": "A fixed folder",
-                                       "source": "Back into the source folder (batch report: the batch folder; "
-                                                 "sample report: its first determination's .D folder)"},
+                                       "source": "Back into the source folder (the batch folder the runs came from)"},
                                       p("target") or "path")
             form.addRow("Target", self.w["target"])
             self.w["path"] = QLineEdit(p("path") or "")
