@@ -76,3 +76,11 @@ def test_unreported_group_rows_count_for_the_family():
             it.row_class = "group"
     (fam,) = learn_families(runs, min_peaks=5)
     assert fam["names"] == ["Hydrocarbon"] and fam["support"] == 8
+
+
+def test_row_name_is_the_analysts_most_frequent_label():
+    from gcws.learn.families import learn_families
+    lower = ("reported_group", "hydrocarbon", "Hydrocarbon", "Alkane (n- or branched)")
+    runs = [_run("B1", [HC] * 2 + [lower]), _run("B2", [HC] * 2 + [lower])]
+    (fam,) = learn_families(runs, min_peaks=5)
+    assert fam["row_name"] == "Hydrocarbon"

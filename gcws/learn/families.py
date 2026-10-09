@@ -30,6 +30,7 @@ def learn_families(runs: list, *, min_peaks: int = 5, min_share: float = 0.6,
     support: Counter = Counter()
     batches: dict[str, set] = defaultdict(set)
     texts: Counter = Counter()
+    spellings: dict[str, Counter] = defaultdict(Counter)
     for run in runs:
         texts.update(t for t in getattr(run, "footnotes", []) if t.casefold().startswith("sum of"))
         for p in run.pairs:
@@ -44,6 +45,7 @@ def learn_families(runs: list, *, min_peaks: int = 5, min_share: float = 0.6,
                 label = _words(it.label)
                 by_label[label].update(ev)
                 support[label] += 1
+                spellings[label][it.label.strip()] += 1
                 batches[label].add(run.batch)
     families = []
     for label in sorted(by_label):
@@ -56,7 +58,8 @@ def learn_families(runs: list, *, min_peaks: int = 5, min_share: float = 0.6,
         if not members["names"] and not members["hints"]:
             continue
         wording = [t for t, _ in texts.most_common() if same_family(label, t)]
-        families.append({"label": label, "sum_text": wording[0] if wording else f"Sum of {label}", **members,
+        families.append({"label": label, "row_name": spellings[label].most_common(1)[0][0],
+                         "sum_text": wording[0] if wording else f"Sum of {label}", **members,
                          "support": support[label], "batches": len(batches[label])})
     return families
 
