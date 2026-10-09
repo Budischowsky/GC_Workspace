@@ -166,6 +166,10 @@ def compute(ws) -> QuantResult:
             sample = NB.build_sample(st, det, result, settings, istd_defs=defs, istd_options=options,
                                      cas_lookup=lookup, istd_bindings=bindings)
             sample.meta["detector"] = key
+            families = (quant.get("learned_rules") or {}).get("families")
+            if families:                     # learned rules approved into the method (gcws.learn)
+                from gcws.learn.apply import apply_families, row_evidence
+                apply_families(sample, row_evidence(ws, st, det, key, sample), families)
             ladder = {int(k): float(v) for k, v in ((quant.get("ri") or {}).get("ladder") or {}).items()}
             if ladder:
                 import gc_qc
