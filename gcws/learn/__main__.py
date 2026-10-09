@@ -2,7 +2,8 @@
 python -m gcws.learn baseline <root> [--out DIR] [--method NIAS] [--limit N] [--force]
 python -m gcws.learn fit {detection,background,report,naming} <root> [--out DIR] [--method NIAS]
 python -m gcws.learn apply-families <proposal.json> --method NAME
-python -m gcws.learn review <root> [--out DIR] [--method NIAS]"""
+python -m gcws.learn review <root> [--out DIR] [--method NIAS]
+python -m gcws.learn consistency <root> [--out DIR]"""
 from __future__ import annotations
 
 import argparse
@@ -45,6 +46,9 @@ def main(argv=None) -> int:
     rev.add_argument("root", type=Path)
     rev.add_argument("--out", type=Path, default=None, help="output folder (default: <data>/learn)")
     rev.add_argument("--method", default="NIAS", help="processing method name (default: NIAS)")
+    con = sub.add_parser("consistency", help="compare the runs two analysts evaluated")
+    con.add_argument("root", type=Path)
+    con.add_argument("--out", type=Path, default=None, help="output folder (default: <data>/learn)")
     args = parser.parse_args(argv)
     from gcws import paths
     out = getattr(args, "out", None) or paths.DATA / "learn"
@@ -63,6 +67,10 @@ def main(argv=None) -> int:
         from gcws.learn.propose import apply_families_to_method
         path = apply_families_to_method(args.proposal, args.method)
         print(f"learned families written into method '{args.method}' -> {path}")
+    elif args.command == "consistency":
+        from gcws.learn.consistency import run_consistency
+        t = run_consistency(args.root, out)["totals"]
+        print(f"{t['pairs']} analyst pairs -> {out / 'consistency.md'}")
     elif args.command == "review":
         from gcws.learn import review
         _ensure_app()
