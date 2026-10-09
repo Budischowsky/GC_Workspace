@@ -82,3 +82,15 @@ def test_unexpected_parse_error_is_a_problem_not_a_crash(corpus_root, tmp_path, 
     s = run_check(corpus_root, tmp_path / "out")
     assert s["workbooks"] == 3
     assert sum("parse error: ValueError: odd sheet" in "; ".join(p) for p in s["problems"].values()) == 2
+
+
+def test_draft_client_report_is_a_problem(tmp_path):
+    from learn_fixtures import make_workbook
+    from gcws.learn.check import run_check
+    root = tmp_path / "root"
+    (root / "B" / "10_EtOH.D").mkdir(parents=True)
+    make_workbook(root / "B/05_X_A.D/Auswertung/NIAS-Screening-SYN1_BDa_ 05_X_A.xlsx",
+                  report_rows=[{"A": 7.0, "F": 1}, {"A": 8.0, "F": 1}, {"A": 9.0, "B": "X", "F": 1}])
+    s = run_check(root, tmp_path / "out")
+    (problems,) = s["problems"].values()
+    assert "client report looks like a draft (2 of 3 lines without a name)" in problems

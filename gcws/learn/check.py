@@ -11,7 +11,7 @@ from pathlib import Path
 
 from gcws.learn.corpus import CorpusEntry, scan
 from gcws.learn.model import (AlkanePoint, EvalRow, Header, HumanEvaluation, IstdEntry, RawPeak, ReportRow)
-from gcws.learn.workbook import parse_workbook, removed_peaks
+from gcws.learn.workbook import parse_workbook, removed_peaks, report_is_draft
 
 
 def entry_id(entry: CorpusEntry, root: Path) -> str:
@@ -62,6 +62,9 @@ def run_check(root: Path, out_dir: Path) -> dict:
             summary["area_formulas"] += sum(bool(r.area_formula) for r in ev.final)
             summary["removed_peaks"] += len(removed_peaks(ev))
         problems = entry.problems + ev.problems
+        if report_is_draft(ev):
+            unnamed = sum(1 for r in ev.report if not r.label)
+            problems = problems + [f"client report looks like a draft ({unnamed} of {len(ev.report)} lines without a name)"]
         if problems:
             summary["problems"][eid] = problems
         if not entry.blanks:

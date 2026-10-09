@@ -470,6 +470,14 @@ def _parse_workbook(path: Path) -> HumanEvaluation:
     return ev
 
 
+def report_is_draft(ev: HumanEvaluation, share: float = 0.3) -> bool:
+    """A client report where more than ``share`` of the lines have no name: a draft (every peak above the limit
+    copied over), not the analyst's decisions about what to report and how to name it."""
+    if not ev.report:
+        return False
+    return sum(1 for r in ev.report if not r.label) / len(ev.report) > share
+
+
 def removed_peaks(ev: HumanEvaluation, rt_tol: float = 0.01) -> list[RawPeak]:
     """FID peaks of the raw integration that have no row in the final worksheet: what the analyst removed."""
     kept = [r.rt for r in ev.final if r.rt is not None]

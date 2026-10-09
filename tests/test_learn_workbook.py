@@ -224,3 +224,15 @@ def test_migration_from_berechnungen(tmp_path):
     h = parse_workbook(path).header
     assert (h.cell_area_dm2, h.occupancy_factor) == (0.51, 1)
     assert parse_workbook(make_workbook(tmp_path / "v.xlsx")).header.cell_area_dm2 is None
+
+
+def test_report_is_draft():
+    from gcws.learn.model import HumanEvaluation, ReportRow
+    from gcws.learn.workbook import report_is_draft
+
+    def ev(labels):
+        return HumanEvaluation(path="x", report=[ReportRow(rt=float(i), label=l) for i, l in enumerate(labels)])
+
+    assert report_is_draft(ev(["a", "", "b", ""]))
+    assert not report_is_draft(ev(["a", "b", "c", "d", ""]))
+    assert not report_is_draft(ev([]))
