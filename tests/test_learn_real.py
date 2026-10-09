@@ -69,3 +69,21 @@ def test_process_gio_run(tmp_path, monkeypatch):
     assert prog.state in ("accepted_auto", "control"), prog.reason
     assert len(prog.peaks) > 50 and prog.reported
     assert _snapshot(Path(entry.batch_dir)) == before
+
+
+def test_detection_current_settings(tmp_path, monkeypatch):
+    from gcws import paths
+    from gcws.core import proc_method as PM
+    from gcws.learn.detection import detection_score, integrate_peaks, load_detection_runs
+    _gio_workbook()
+    if not (ROOT / "data" / "processing_methods").is_dir():
+        pytest.skip("the app's data folder (methods) is not available")
+    monkeypatch.setattr(paths, "DATA", ROOT / "data")
+    root = LEARN_ROOT / "25011662_GIO_Diary"
+    before = _snapshot(root)
+    runs, skipped = load_detection_runs(root, tmp_path / "learn")
+    assert len(runs) == 1 and Path(runs[0].signal).is_file()
+    method = PM.load("NIAS")
+    score = detection_score(runs[0], integrate_peaks(runs[0], method, {}))
+    assert score is not None and 0 < score <= 1
+    assert _snapshot(root) == before

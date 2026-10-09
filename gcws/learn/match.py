@@ -26,6 +26,7 @@ class HumanItem:
     row_class: str
     decision: str
     source: str                 # "final" (worksheet row) | "removed" (raw FID peak the analyst left out)
+    conc_mgkg: Optional[float] = None   # the worksheet's mg/kg value (None without a mg/kg column)
 
 
 @dataclass
@@ -41,6 +42,7 @@ def human_items(ev: HumanEvaluation, report_rt_tol: float = 0.005) -> list[Human
     """The analyst's decisions per peak: worksheet rows with an RT (sum lines excluded), then the FID peaks
     the analyst removed (provisionally "removed_other"; match_run tells blank from other)."""
     reported_rts = [r.rt for r in ev.report if r.rt is not None]
+    unit = next((u for u in ev.header.conc_units if "mg/kg" in u.casefold()), None)
     items = []
     for r in ev.final:
         if r.rt is None or r.row_class == "sum":
@@ -51,7 +53,8 @@ def human_items(ev: HumanEvaluation, report_rt_tol: float = 0.005) -> list[Human
             decision = "reported_" + _REPORTED_CLASS.get(r.row_class, "unknown")
         else:
             decision = "kept_unreported"
-        items.append(HumanItem(r.rt, r.area, r.label, r.cas, r.row_class, decision, "final"))
+        items.append(HumanItem(r.rt, r.area, r.label, r.cas, r.row_class, decision, "final",
+                               r.conc.get(unit) if unit else None))
     for p in removed_peaks(ev):
         items.append(HumanItem(p.rt, p.area, "", "", "", "removed_other", "removed"))
     return items
