@@ -11,6 +11,32 @@ from gcws.core.ident import Identification
 from gcws.core.keys import method_kind
 
 
+def _plain_copy(value):
+    """``copy.deepcopy`` for plain data (dicts, lists and tuples of numbers and text, as the hit
+    lists of identifications hold): the same independent containers, without the memo
+    bookkeeping that makes deepcopy slow on thousands of small peak lists."""
+    kind = type(value)
+    if kind in (str, int, float, bool, type(None)):
+        return value
+    if kind is list:
+        return [_plain_copy(v) for v in value]
+    if kind is dict:
+        return {k: _plain_copy(v) for k, v in value.items()}
+    if kind is tuple:
+        return tuple(_plain_copy(v) for v in value)
+    return copy.deepcopy(value)
+
+
+def _copy_idents(items) -> list:
+    """Independent copies of identifications (their other fields are text and numbers)."""
+    out = []
+    for item in items:
+        twin = copy.copy(item)
+        twin.hits = _plain_copy(item.hits)
+        out.append(twin)
+    return out
+
+
 def _summary(res) -> str:
     if res is None:
         return ""
@@ -87,8 +113,8 @@ class IdentCommand(QUndoCommand):
         super().__init__(text)
         self.ws, self.run_id, self.key = ws, run_id, key
         st = ws.runs[run_id]
-        self.old_items = copy.deepcopy(st.ident_set(key).items)
-        items = copy.deepcopy(st.ident_set(key).items)
+        self.old_items = _copy_idents(st.ident_set(key).items)
+        items = _copy_idents(st.ident_set(key).items)
         from gcws.core.ident import IdentificationSet
         from gcws.ms.assignment import fragment_id
         tmp = IdentificationSet(items)
@@ -99,7 +125,7 @@ class IdentCommand(QUndoCommand):
             if ident is None:
                 tmp.remove_at(rt, peak_id=identity)
             else:
-                ident = copy.deepcopy(ident)
+                ident = _copy_idents([ident])[0]
                 # A search already bound to a fragment must not migrate after re-integration.
                 ident.peak_id = ident.peak_id or identity
                 tmp.set(ident)
@@ -110,7 +136,7 @@ class IdentCommand(QUndoCommand):
         st = self.ws.runs.get(self.run_id)
         if st is None:
             return
-        st.ident_set(self.key).items = copy.deepcopy(items)
+        st.ident_set(self.key).items = _copy_idents(items)
         self.ws.log(label, st.name, f"{self.key}: {self.text()}")
         self.ws.identsChanged.emit(self.run_id, self.key)
 

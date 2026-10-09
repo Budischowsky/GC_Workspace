@@ -140,3 +140,17 @@ def test_suggest_groups_real_batch_names():
     alone = [{"id": "x", "name": "07 alone", "members": ["07"], "policy": "all"}]
     groups, _ = suggest_groups({k: names[k] for k in ("07", "11")}, {}, roles, ["07", "11"], alone)
     assert [g["members"] for g in groups] == [["07", "11"]]
+
+
+def test_identification_copies_of_undo_are_deep_and_equal():
+    """IdentCommand copies identifications with a plain-data copier: equal to deepcopy, nothing shared."""
+    import copy
+    from gcws.core.ident import Identification
+    from gcws.ui.undo import _copy_idents
+    hits = [{"name": "A", "score": 55, "peaks": [[73, 9.2], [165, 3.2]], "pair": (1, 2.5), "meta": {"x": [1]}}]
+    items = [Identification(10.0, "A", "1-2-3", 80, hits=hits), Identification(11.0, "B")]
+    copies = _copy_idents(items)
+    assert copies == copy.deepcopy(items) and all(a is not b for a, b in zip(copies, items))
+    copies[0].hits[0]["peaks"][0][1] = 0.0
+    copies[0].hits[0]["meta"]["x"].append(2)
+    assert hits[0]["peaks"][0][1] == 9.2 and hits[0]["meta"]["x"] == [1]
