@@ -63,7 +63,7 @@ def read_metadata(folder) -> RunMetadata:
             root = ET.parse(contents).getroot()
             meta.acquired = _text(root.find("AcquiredTime")) or meta.acquired
             meta.instrument = _text(root.find("InstrumentName"))
-        except ET.ParseError:
+        except (OSError, ET.ParseError):         # locked or unreachable: the metadata is optional
             pass
     if not meta.method:
         methods = sorted(acq.glob("*.M")) if acq.is_dir() else []

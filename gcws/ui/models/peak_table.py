@@ -197,7 +197,8 @@ class PeakTableModel(QAbstractTableModel):
                 if st.startswith("unknown"):
                     return theme.status_brush("neutral")
             if col.key == "in_blank":
-                m = _bm(row, self.ws)
+                m = PV.blank_match(row, self.ws, getattr(self.ws, "active_id", None),
+                                   getattr(self.ws, "signal_key", None))
                 if m is not None:
                     return theme.status_brush(m.level)
             if "M" in row.peak.flags and col.key in ("num", "type", "area"):

@@ -311,14 +311,31 @@ def load(path) -> Workflow:
     return Workflow.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
 
 
+def _settle(f: Path, wf: Workflow) -> Workflow:
+    """A workflow file whose name is not its id (copied or renamed by hand): :func:`find`, the
+    watcher and :meth:`Workflow.save` go by ``<id>.json``, so the file is renamed to it, or, when
+    that id is taken by another file, the workflow takes the file name as its id."""
+    target = f.with_name(f"{wf.id}.json")
+    try:
+        if not target.exists():
+            f.replace(target)
+        else:
+            wf.id = f.stem
+            store.atomic_write_json(f, wf.to_dict())
+    except OSError:
+        pass
+    return wf
+
+
 def list_workflows() -> list[Workflow]:
     out = []
     folder = store.workflows_dir()
     for f in sorted(folder.glob("*.json")) if folder.is_dir() else []:
         try:
-            out.append(load(f))
+            wf = load(f)
         except (OSError, ValueError, TypeError):
             continue
+        out.append(wf if f.stem == wf.id else _settle(f, wf))
     return sorted(out, key=lambda w: w.name.casefold())
 
 
@@ -327,7 +344,8 @@ def find(workflow_id: str) -> Optional[Workflow]:
     try:
         return load(p)
     except (OSError, ValueError, TypeError):
-        return None
+        pass
+    return next((w for w in list_workflows() if w.id == workflow_id), None) if not p.exists() else None
 
 
 def delete(workflow_id: str) -> None:

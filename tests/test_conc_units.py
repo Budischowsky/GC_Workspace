@@ -83,6 +83,24 @@ def test_peak_table_lists_the_unit_columns_hidden_with_their_calculation(qapp):
     assert model.data(model.index(0, col), Qt.ToolTipRole) == "µg/L = ... = 510"
 
 
+def test_peak_table_colours_a_peak_found_in_the_blank(qapp):
+    """The In blank cell is coloured by the blank match's level (it raised NameError before)."""
+    from PySide6.QtCore import Qt
+    from gcws.quant.blank_match import BlankMatch
+    from gcws.ui import theme
+    from gcws.ui.models.peak_table import COLUMN_KEYS, PeakTableModel, Row
+    match = BlankMatch(0, "b1", 3, 0.001, 900.0, 800.0, 1.1, 0.95, "blank")
+    ws = SimpleNamespace(selected=-1, active_id="s1", signal_key="FID", runs={"s1": object()},
+                         blank_matches=lambda run_id, key: {0: match} if (run_id, key) == ("s1", "FID") else {})
+    model = PeakTableModel(ws)
+    peak = SimpleNamespace(number=1, apex_rt=10.0, flags="", negative=False, extra={})
+    model.rows = [Row(0, peak, None, {}), Row(1, peak, None, {})]
+    col = COLUMN_KEYS.index("in_blank")
+    assert model.data(model.index(0, col)) == match.text
+    assert model.data(model.index(0, col), Qt.BackgroundRole).color() == theme.status_brush("bad").color()
+    assert model.data(model.index(1, col), Qt.BackgroundRole) is None
+
+
 def test_a_value_in_the_mode_unit_converts_like_the_peak_rows():
     """The double determination converts its values (mg/kg, analyst edits included) the same way."""
     s = _settings(cell_area_dm2=0.51, coverage=1.0, extract_volume_ml=10.0, ov_ratio=6.0)

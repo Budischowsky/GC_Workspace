@@ -590,7 +590,7 @@ class ChromPanel(QWidget):
                f"{data.model_mz}, purity {data.purity:.2f}\nclick: its spectrum")
         self._markers = pg.ScatterPlotItem(spots=spots, hoverable=True, tip=tip)
         self._markers.setZValue(30)
-        self._markers.sigClicked.connect(lambda _item, pts, _ev: pts and self.componentClicked.emit(
+        self._markers.sigClicked.connect(lambda _item, pts, _ev: len(pts) and self.componentClicked.emit(
             st.id, pts[0].data()))
         self.vb.addItem(self._markers, ignoreBounds=True)
 
@@ -629,7 +629,7 @@ class ChromPanel(QWidget):
                f"model m/z {data.model_mz}\nclick: its spectrum")
         self._deconv_markers = pg.ScatterPlotItem(spots=spots, hoverable=True, tip=tip)
         self._deconv_markers.setZValue(31)
-        self._deconv_markers.sigClicked.connect(lambda _item, pts, _ev: pts and self.componentClicked.emit(
+        self._deconv_markers.sigClicked.connect(lambda _item, pts, _ev: len(pts) and self.componentClicked.emit(
             st.id, pts[0].data()))
         self.vb.addItem(self._deconv_markers, ignoreBounds=True)
 

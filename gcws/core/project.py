@@ -115,9 +115,10 @@ def read(path) -> dict:
 
 
 def resolve_run_path(entry: dict, project_path: Path) -> Path | None:
-    for cand in (project_path.parent / entry.get("path_rel", ""), Path(entry.get("path_abs", ""))):
-        try:
-            if cand and (cand.is_dir() or (cand.suffix.lower() == ".qgd" and cand.is_file())):
+    rel, absolute = entry.get("path_rel") or "", entry.get("path_abs") or ""
+    for cand in ([project_path.parent / rel] if rel else []) + ([Path(absolute)] if absolute else []):
+        try:                     # (an empty path would be the project folder or the current folder)
+            if (cand.is_dir() or (cand.suffix.lower() == ".qgd" and cand.is_file())):
                 return cand.resolve()
         except OSError:
             continue

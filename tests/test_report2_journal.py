@@ -127,8 +127,10 @@ def test_undo_review_until_delivered(tmp_path):
     # reject, then undo
     assert jr.review(job.id, False, "Bad chromatography", user="analyst")
     assert jr.undo_review(job.id, before) and jr.job(job.id).state == J.CONTROL
-    # delivered meanwhile: no undo any more
+    # the grace time is over: the watcher may be delivering, no undo any more
     assert jr.review(job.id, True, user="analyst")
+    assert not jr.undo_review(job.id, before) and jr.job(job.id).state == J.ACCEPTED_MANUAL
+    # delivered meanwhile: no undo any more
     jr.add_export(job.id, job.revision, "f", "r", "docx", "a", "b")
     assert not jr.undo_review(job.id, before) and jr.job(job.id).state == J.ACCEPTED_MANUAL
     # processed again meanwhile: the old snapshot no longer applies

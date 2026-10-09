@@ -685,6 +685,8 @@ class Journal:
             if any(e["revision"] == j.revision and float(e["ts"] or 0) >= float(j.reviewed_at or 0)
                    for e in self.exports(job_id)):
                 return False                                # already delivered: reject it instead
+            if j.export_pending and float(j.deliver_after or 0) <= time.time():
+                return False                                # the watcher may be delivering it right now
             fields = {k: before.get(k) for k in self.REVIEW_FIELDS}
             sets = ", ".join(f"{k}=?" for k in fields)
             cur = self.con.execute(f"UPDATE jobs SET {sets} WHERE id=? AND state=? AND revision=?",

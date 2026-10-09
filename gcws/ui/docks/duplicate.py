@@ -1629,7 +1629,7 @@ class DuplicatePage(QWidget):
 
     def _dot_clicked(self, _item, points, *_):
         """A dot of the mirror plot selects its substance in the list (all rows shown if it was filtered out)."""
-        if not points:
+        if points is None or not len(points):        # pyqtgraph passes an array: two dots under the mouse
             return
         data = points[0].data()
         k = data[0] if isinstance(data, tuple) else None

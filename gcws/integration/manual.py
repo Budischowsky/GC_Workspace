@@ -356,7 +356,8 @@ def _apply_one(peaks: list[WP], sig: WorkSignal, e: ManualEvent, tol: float, wid
                     child.add_flag("X")
             if res is None:
                 res = SK.tangent_tail(sig, child.t0, child.ta, child.t1)
-                child.add_flag("T")
+                if res is not None:
+                    child.add_flag("T")
             if res is None:
                 peaks.append(child)
                 return "skim not possible"

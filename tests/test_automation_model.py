@@ -37,6 +37,23 @@ def test_workflow_json_round_trip(data):
     assert W.list_workflows() == []
 
 
+def test_workflow_file_named_otherwise(data):
+    """A workflow file copied or renamed by hand is found by its id (the watcher, save, delete)."""
+    import shutil
+    from gcws.automation import workflow as W
+    wf = _example(data)
+    path = wf.save()
+    renamed = path.with_name("my copy.json")
+    path.replace(renamed)
+    assert [w.id for w in W.list_workflows()] == [wf.id]
+    assert path.is_file() and not renamed.exists() and W.find(wf.id) is not None
+    shutil.copy(path, renamed)                    # a second file with the same id
+    ids = sorted(w.id for w in W.list_workflows())
+    assert ids == sorted([wf.id, "my copy"]) and W.find("my copy").name == wf.name
+    W.delete("my copy")
+    assert [w.id for w in W.list_workflows()] == [wf.id]
+
+
 def test_validation(data):
     from gcws.automation import workflow as W
     wf = _example(data)

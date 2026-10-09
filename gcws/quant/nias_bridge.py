@@ -28,16 +28,25 @@ def engine():
     return gc_fid.engine()
 
 
+def _coerce(default, value):
+    """``value`` in the type of the default: numbers from text too, an integer setting rounded
+    (as ``gc_fid.set_parameter`` does), anything unparsable kept as given."""
+    if value is None or isinstance(default, bool) or not isinstance(default, (int, float)):
+        return value
+    try:
+        f = float(str(value).strip().replace(",", ".")) if isinstance(value, str) else float(value)
+    except (TypeError, ValueError):
+        return value
+    return int(round(f)) if isinstance(default, int) else f
+
+
 def make_settings(values: dict | None = None):
     """AutoLib ``Settings`` (with the NIAS extras) from a plain dict."""
     import gc_fid
     s = gc_fid.default_settings()
     for key, value in (values or {}).items():
         if hasattr(s, key) or key in gc_fid.PARAMETER_BOUNDS:
-            try:
-                setattr(s, key, type(getattr(s, key, value))(value) if value is not None else value)
-            except (TypeError, ValueError):
-                setattr(s, key, value)
+            setattr(s, key, _coerce(getattr(s, key, value), value))
     return s
 
 
