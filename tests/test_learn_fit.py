@@ -70,3 +70,15 @@ def test_test_set_not_used_for_choice():
     test = _split().test
     r = fit("toy", {"x": [1, 2, 3, 4]}, {"x": 1}, _batches(overrides={b: 4 for b in test}), toy)
     assert r.best == {"x": 3} and r.test_best == 0
+
+
+def test_batch_no_candidate_can_score_is_left_out():
+    from gcws.learn.fit import fit
+    dead = next(b for b in BATCHES if b not in _split().test)
+
+    def partial(params, runs):
+        return None if runs[0].optimum is None else toy(params, runs)
+
+    r = fit("toy", {"x": [1, 2, 3, 4]}, {"x": 1}, _batches(overrides={dead: None}), partial)
+    assert r.best == {"x": 3} and r.cv_best is not None
+    assert any(dead in n and "not scorable" in n for n in r.notes)

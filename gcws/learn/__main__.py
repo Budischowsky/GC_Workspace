@@ -1,5 +1,6 @@
 """python -m gcws.learn check <root> [--out DIR]
-python -m gcws.learn baseline <root> [--out DIR] [--method NIAS] [--limit N] [--force]"""
+python -m gcws.learn baseline <root> [--out DIR] [--method NIAS] [--limit N] [--force]
+python -m gcws.learn fit {detection,background,report} <root> [--out DIR] [--method NIAS]"""
 from __future__ import annotations
 
 import argparse
@@ -30,6 +31,11 @@ def main(argv=None) -> int:
     base.add_argument("--method", default="NIAS", help="processing method name (default: NIAS)")
     base.add_argument("--limit", type=int, default=None, help="only the first N workbooks")
     base.add_argument("--force", action="store_true", help="process again instead of using the cache")
+    fitp = sub.add_parser("fit", help="fit settings on the corpus and write a proposal (nothing is applied)")
+    fitp.add_argument("target", choices=("detection", "background", "report"))
+    fitp.add_argument("root", type=Path)
+    fitp.add_argument("--out", type=Path, default=None, help="output folder (default: <data>/learn)")
+    fitp.add_argument("--method", default="NIAS", help="processing method name (default: NIAS)")
     args = parser.parse_args(argv)
     from gcws import paths
     out = args.out or paths.DATA / "learn"
@@ -44,6 +50,12 @@ def main(argv=None) -> int:
         result = BL.run_baseline(args.root, out, args.method, force=args.force, limit=args.limit)
         agg = result["aggregate"]
         print(f"{agg['scored']} runs scored, {agg['failed']} failed -> {out / 'baseline.md'}")
+    elif args.command == "fit":
+        from gcws.learn import propose
+        _ensure_app()
+        r = propose.run_fit(args.target, args.root, out, args.method)
+        print(f"{r.target}: current {r.current} -> proposed {r.best}; CV {r.cv_current} -> {r.cv_best}; "
+              f"accept recommended: {r.accept_recommended} -> {out / 'proposals' / (r.target + '.md')}")
     return 0
 
 

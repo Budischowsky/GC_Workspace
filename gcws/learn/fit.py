@@ -57,10 +57,15 @@ def fit(target: str, space: dict[str, list], current: dict, batches: dict[str, l
                 scores[b] = None
         per.append(scores)
 
+    # a batch no candidate can score (e.g. no mg/kg values) is left out; a candidate that fails on a batch
+    # the others can score is never chosen
+    dead = [b for b in cv_batches if all(s.get(b) is None for s in per)]
+    live = [b for b in cv_batches if b not in dead]
+
     def cv(scores) -> Optional[float]:
-        folds = [_weighted(scores, sizes, f) for f in split.folds]
+        folds = [_weighted(scores, sizes, [b for b in f if b in live]) for f in split.folds]
         folds = [f for f in folds if f is not None]
-        if not folds or any(scores.get(b) is None for b in cv_batches):
+        if not folds or any(scores.get(b) is None for b in live):
             return None
         return sum(folds) / len(folds)
 
@@ -68,6 +73,8 @@ def fit(target: str, space: dict[str, list], current: dict, batches: dict[str, l
     table = [{"params": p, "cv": c} for p, c in zip(candidates, cvs)]
     scored = [c for c in cvs if c is not None]
     result = FitResult(target, current, current, table=table)
+    for b in dead:
+        result.notes.append(f"batch {b} not scorable for {target}: left out")
     if not split.test:
         result.notes.append("only one batch: there is nothing to hold out, the scores are not a test")
     if len(split.folds) < 3:
