@@ -336,3 +336,90 @@ def test_fit_cache_is_thread_safe():
     assert len(results) == 48
     for s, fit in results:
         _assert_same_fit(fit, reference[s])
+
+
+def _fit_point_by_point(t, y, shapes, shift0, scan_dt=None, mask=None):
+    """The grid search as it was before the grid points were evaluated together (Oct 2026): one
+    design matrix and one NNLS of the NIAS engine per point. The reference for the batched fit."""
+    t, y = np.asarray(t, dtype=float), np.asarray(y, dtype=float)
+    use = np.ones(t.size, dtype=bool) if mask is None else np.asarray(mask, dtype=bool)
+    tu, yu = t[use], y[use]
+    dt = scan_dt or min(s.scan_dt for s in shapes)
+    lo, hi = F.STRETCH_RANGE
+
+    def search(ss_of):
+        logs = np.log(lo) + np.log(hi / lo) / 12 * np.arange(13)
+        best, profile = None, []
+        for shift in F._grid(shift0, dt * F.SHIFT_SPAN_SCANS / 4, 4):
+            row = None
+            for log_k in logs:
+                ss = ss_of(shift, log_k)
+                if row is None or ss < row[0]:
+                    row = (ss, float(shift), float(log_k))
+            profile.append(row)
+            if best is None or row[0] < best[0]:
+                best = row
+        return best, profile
+
+    def refine(ss_of, best):
+        shift_step, log_step = dt * F.SHIFT_SPAN_SCANS / 4, np.log(hi / lo) / 12
+        for _level in range(2):
+            shift_step /= 3
+            log_step /= 3
+            shifts = F._grid(best[1], shift_step, 2)
+            logs = np.clip(F._grid(best[2], log_step, 2), np.log(lo), np.log(hi))
+            for shift in shifts:
+                for log_k in logs:
+                    ss = ss_of(shift, log_k)
+                    if ss < best[0]:
+                        best = (ss, float(shift), float(log_k))
+        return best
+
+    def ss_of(shift, log_k):
+        return F._residual(F._design(shapes, tu, shift, float(np.exp(log_k))), yu)[0]
+
+    best, profile = search(ss_of)
+    found = [refine(ss_of, best)]
+    if len(shapes) > 1:
+        found += [refine(ss_of, start) for start in F._other_minima(profile, best, yu)]
+    fits = [F.solve(t, y, shapes, shift, float(np.exp(log_k)), use) for _ss, shift, log_k in found]
+    top = max(f.r2 for f in fits)
+    tied = [f for f in fits if f.r2 >= top - F.ALIGN_TIE_R2]
+    if len(tied) == 1:
+        return tied[0]
+
+    def ms_ss(shift, log_k):
+        return F._residual(F._design(shapes, tu, shift, float(np.exp(log_k))).sum(axis=1)[:, None], yu)[0]
+
+    ms_shift = refine(ms_ss, search(ms_ss)[0])[1]
+    return min(tied, key=lambda f: abs(f.shift - ms_shift))
+
+
+def _same_fit(a, b):
+    assert (a.shift, a.stretch, a.r2, a.residual, a.collinear) == (b.shift, b.stretch, b.r2, b.residual, b.collinear)
+    for name in ("amplitudes", "curves", "areas"):
+        assert getattr(a, name).tobytes() == getattr(b, name).tobytes(), name
+
+
+@pytest.mark.parametrize("case", ["one", "two", "three", "tie", "masked", "outside", "negative"])
+def test_batched_grid_search_is_the_point_by_point_one(case):
+    """The grid points are evaluated together (stacked pseudo-inverses for one component), with
+    the same result to the last bit as one NNLS per point."""
+    mask = None
+    if case == "tie":
+        shapes = [F.Shape.of(c) for c in standard_and_isotopologue()]
+        t, y = trace([(10.0, 400.)], 0.0068, 0.93, sigma=0.0095, noise=1.0)
+    else:
+        rts = {"one": [10.0], "two": [10.0, 10.02], "three": [9.98, 10.0, 10.03], "masked": [10.0, 10.02],
+               "outside": [10.0], "negative": [10.0]}[case]
+        shapes = [F.Shape.of(component(rt)) for rt in rts]
+        t, y = trace([(rt, 300. + 100 * i) for i, rt in enumerate(rts)], 0.006, 0.9, noise=2.0)
+        if case == "masked":
+            mask = ~((t > 10.05) & (t < 10.06))
+        if case == "outside":                 # the shape never reaches the window: empty designs
+            t, y = t + 5.0, y
+        if case == "negative":                # no positive amplitude fits: x = 0
+            y = -y
+    for shift0 in (0.0, 0.006, 0.0071):
+        _same_fit(F.fit_trace_uncached(t, y, shapes, shift0, mask=mask),
+                  _fit_point_by_point(t, y, shapes, shift0, mask=mask))

@@ -288,16 +288,69 @@ def fit_trace(t, y, shapes: Sequence[Shape], shift0: float, scan_dt: Optional[fl
     return _copy(fit)
 
 
-def _search(ss_of, shift0: float, dt: float) -> tuple[tuple, list[tuple]]:
+def _curves(shape: Shape, t: np.ndarray, pairs) -> np.ndarray:
+    """:func:`curve` of ``shape`` on ``t`` for many (shift, log_k) grid points, one row per point:
+    the same element-wise operations, the width factor ``float(np.exp(log_k))`` as in the search."""
+    stretches = np.array([float(np.exp(log_k)) for _shift, log_k in pairs])
+    shifts = np.array([float(shift) for shift, _log_k in pairs])
+    src = shape.rt + (t[None, :] - shifts[:, None] - shape.rt) / stretches[:, None]
+    out = np.zeros(src.shape)
+    inside = (src > shape.t[0]) & (src < shape.t[-1])
+    if inside.any():
+        out[inside] = np.maximum(pchip_eval(shape.t, shape.y, shape.d, src[inside]), 0.0)
+    return out
+
+
+def _ss_column(columns: np.ndarray, y: np.ndarray) -> list:
+    """``_residual(column[:, None], y)[0]`` for each row of ``columns``, value for value.
+
+    With one column the Lawson-Hanson NNLS of the NIAS engine comes down to one pseudo-inverse
+    product: x = pinv(a) @ y when both a.T @ y and that product exceed the engine's tolerance,
+    else 0. The pseudo-inverses are taken in one stacked call (LAPACK factors each matrix on its
+    own); every product, tolerance and residual is the engine's own operation."""
+    out = [0.0] * len(columns)
+    pending = []
+    m = y.size
+    eps = np.finfo(float).eps
+    ymax = None
+    for i in range(len(columns)):
+        a = columns[i].reshape(-1, 1)
+        if not a.any():
+            out[i] = float(y @ y)
+            continue
+        if ymax is None:
+            ymax = float(max(np.abs(y).max(), 1.0))
+        tol = max(m, 1) * eps * (float(max(np.abs(a).max(), 1.0)) * ymax)
+        if (a.T @ y)[0] <= tol:
+            r = y - a @ np.zeros(1)
+            out[i] = float(r @ r)
+        else:
+            pending.append((i, a, tol))
+    if pending:
+        inverse = np.linalg.pinv(np.stack([a for _i, a, _tol in pending]))
+        for (i, a, tol), pinv in zip(pending, inverse):
+            s = np.zeros(1)
+            s[[0]] = pinv @ y
+            x = s if s[0] > tol else np.zeros(1)
+            x[x < 0.0] = 0.0
+            r = y - a @ x
+            out[i] = float(r @ r)
+    return out
+
+
+def _search(ss_many, shift0: float, dt: float) -> tuple[tuple, list[tuple]]:
     """The coarse grid around ``shift0``: its best point ``(ss, shift, log_k)`` (the first minimum)
-    and, per shift, the best point over the width factors (the shift profile)."""
+    and, per shift, the best point over the width factors (the shift profile). ``ss_many`` gives
+    the residuals of a list of (shift, log_k) points."""
     lo, hi = STRETCH_RANGE
     logs = np.log(lo) + np.log(hi / lo) / 12 * np.arange(13)
+    shifts = _grid(shift0, dt * SHIFT_SPAN_SCANS / 4, 4)
+    values = iter(ss_many([(shift, log_k) for shift in shifts for log_k in logs]))
     best, profile = None, []
-    for shift in _grid(shift0, dt * SHIFT_SPAN_SCANS / 4, 4):
+    for shift in shifts:
         row = None
         for log_k in logs:
-            ss = ss_of(shift, log_k)
+            ss = next(values)
             if row is None or ss < row[0]:
                 row = (ss, float(shift), float(log_k))
         profile.append(row)
@@ -306,8 +359,9 @@ def _search(ss_of, shift0: float, dt: float) -> tuple[tuple, list[tuple]]:
     return best, profile
 
 
-def _refine(ss_of, start: tuple, dt: float) -> tuple:
-    """Two finer grid levels around ``start``, each with a third of the previous step."""
+def _refine(ss_many, start: tuple, dt: float) -> tuple:
+    """Two finer grid levels around ``start``, each with a third of the previous step (the points
+    of a level evaluated together)."""
     lo, hi = STRETCH_RANGE
     best = start
     shift_step, log_step = dt * SHIFT_SPAN_SCANS / 4, np.log(hi / lo) / 12
@@ -316,9 +370,10 @@ def _refine(ss_of, start: tuple, dt: float) -> tuple:
         log_step /= 3
         shifts = _grid(best[1], shift_step, 2)
         logs = np.clip(_grid(best[2], log_step, 2), np.log(lo), np.log(hi))
+        values = iter(ss_many([(shift, log_k) for shift in shifts for log_k in logs]))
         for shift in shifts:
             for log_k in logs:
-                ss = ss_of(shift, log_k)
+                ss = next(values)
                 if ss < best[0]:
                     best = (ss, float(shift), float(log_k))
     return best
@@ -349,6 +404,10 @@ def fit_trace_uncached(t, y, shapes: Sequence[Shape], shift0: float, scan_dt: Op
     the trace equally well (R² within ALIGN_TIE_R2 of the best), the one nearest the shift that lines
     the MS signal as a whole (the sum of the profiles) up with the trace is taken: the coarse grid
     alone would take whichever of them it happens to sample better, which depends on ``shift0``.
+
+    The grid points of a level are evaluated together (:func:`_curves`; one component:
+    :func:`_ss_column`), with the same residuals to the last bit as one design matrix and one NNLS
+    per point.
     """
     if not shapes:
         raise ValueError("no component shapes to fit")
@@ -358,23 +417,29 @@ def fit_trace_uncached(t, y, shapes: Sequence[Shape], shift0: float, scan_dt: Op
     tu, yu = t[use], y[use]
     dt = scan_dt or min(s.scan_dt for s in shapes)
 
-    def ss_of(shift, log_k):
-        return _residual(_design(shapes, tu, shift, float(np.exp(log_k))), yu)[0]
+    def designs(pairs):
+        """The design matrices of the grid points: (points, trace points, shapes)."""
+        return np.stack([_curves(s, tu, pairs) for s in shapes], axis=2)
 
-    best, profile = _search(ss_of, shift0, dt)
-    found = [_refine(ss_of, best, dt)]
+    def ss_many(pairs):
+        if len(shapes) == 1:
+            return _ss_column(_curves(shapes[0], tu, pairs), yu)
+        return [_residual(a, yu)[0] for a in designs(pairs)]
+
+    best, profile = _search(ss_many, shift0, dt)
+    found = [_refine(ss_many, best, dt)]
     if len(shapes) > 1:
-        found += [_refine(ss_of, start, dt) for start in _other_minima(profile, best, yu)]
+        found += [_refine(ss_many, start, dt) for start in _other_minima(profile, best, yu)]
     fits = [solve(t, y, shapes, shift, float(np.exp(log_k)), use) for _ss, shift, log_k in found]
     top = max(f.r2 for f in fits)
     tied = [f for f in fits if f.r2 >= top - ALIGN_TIE_R2]
     if len(tied) == 1:
         return tied[0]
 
-    def ms_ss(shift, log_k):
-        return _residual(_design(shapes, tu, shift, float(np.exp(log_k))).sum(axis=1)[:, None], yu)[0]
+    def ms_many(pairs):
+        return _ss_column(designs(pairs).sum(axis=2), yu)
 
-    ms_shift = _refine(ms_ss, _search(ms_ss, shift0, dt)[0], dt)[1]
+    ms_shift = _refine(ms_many, _search(ms_many, shift0, dt)[0], dt)[1]
     return min(tied, key=lambda f: abs(f.shift - ms_shift))
 
 

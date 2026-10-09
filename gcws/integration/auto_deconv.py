@@ -170,18 +170,25 @@ def suspect(signal, peak, key: str, delay: float, cands, riders, method) -> str:
     explain it (fit R² below the method's limit)."""
     if not getattr(method, "deconv_probe", False):
         return ""
+    from gcws.core.keys import base_key
     from gcws.ms.deconv_probe import trace_shoulders
-    from gcws.ms.peak_split import plan_split
-    plan = plan_split(signal, peak, key, delay, cands, riders=riders)
-    if plan.t.size < 3:
-        return ""
+    from gcws.ms.peak_split import plan_split, trace_window
+    if base_key(key) not in ("FID", "TIC") or getattr(peak, "negative", False) or not peak.area > 0:
+        return ""                                    # plan_split refuses these before any fit
     if not riders:
+        # the shoulder test needs the trace only: the fit below is made when it finds none
+        t, y, _mask = trace_window(signal, peak, riders)
+        if t.size < 3:
+            return ""
         level = max(1, min(5, int(getattr(method, "deconv_level", 3))))
         depth, prominence = ((0.04, 0.02) if level == 5 else
                              (0.06, 0.03) if level == 4 else (0.08, 0.04))
-        found = trace_shoulders(plan.t, plan.y, depth, prominence)
+        found = trace_shoulders(t, y, depth, prominence)
         if found:
             return "shoulder at " + ", ".join(f"{t:.3f}" for t in found)
+    plan = plan_split(signal, peak, key, delay, cands, riders=riders)
+    if plan.t.size < 3:
+        return ""
     from gcws.integration.method import deconv_value
     limit = deconv_value(method, "deconv_probe_r2")
     if plan.first is not None and plan.first.r2 < limit:
