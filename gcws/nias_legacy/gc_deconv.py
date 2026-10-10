@@ -25,6 +25,7 @@ search, promotion to a grid row and register writes are out of scope (§VI.20).
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Callable, Optional, Sequence
@@ -36,7 +37,13 @@ import extract_ms_spectra as ex
 # The nominal-mass binning must be *identical* to the one behind the raw
 # spectrum shown in the panel, otherwise a deconvoluted spectrum and the mixed
 # apex spectrum would disagree about m/z labels for the same ion.
-_nominal = ex._nominal
+# GCWS-PATCH: the panel's spectra come from gcws.io.ms_matrix.nominal (mass defect taken off), so
+# bin the same way here instead of ex._nominal.
+from gcws.io.ms_matrix import MASS_DEFECT as _MASS_DEFECT  # noqa: E402
+
+
+def _nominal(x: float) -> int:
+    return math.ceil(x * (1.0 - _MASS_DEFECT) - 0.5)
 
 # --------------------------------------------------------------------------
 # Tuning constants that are not user parameters

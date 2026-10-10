@@ -15,9 +15,21 @@ import numpy as np
 _U16 = struct.Struct(">H")
 
 
+#: mass defect per m/z the nominal-mass bins are shifted by (0.2 at m/z 500)
+MASS_DEFECT = 0.0004
+
+
 def nominal(mz: np.ndarray) -> np.ndarray:
-    """Nominal mass with exact halves rounded down (the NIAS/PBM convention)."""
-    return np.ceil(np.asarray(mz, dtype=float) - 0.5).astype(np.int64)
+    """Nominal mass, with exact halves rounded down (the NIAS/PBM convention), after taking off the
+    typical mass defect of organic ions.
+
+    Hydrogen-rich ions weigh more than their nominal mass and the quadrupole reports them a little
+    high again: Irganox 1076's M+ (530.47) comes as 530.55-530.6, which plain rounding put on 531.
+    Shifting the bins by 0.0004 per m/z keeps those ions on their nominal mass, while bromine and
+    iodine compounds (negative defect) still round correctly up to about m/z 500 and whole masses
+    map to themselves up to m/z 1250."""
+    mz = np.asarray(mz, dtype=float)
+    return np.ceil(mz * (1.0 - MASS_DEFECT) - 0.5).astype(np.int64)
 
 
 @dataclass
