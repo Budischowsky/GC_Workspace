@@ -128,6 +128,7 @@ Columns marked * are shown unless you change it.
 | **Integration** | How the peak came about: automatic, manual, gap fill ... |
 | **Class hint** | The substance class suggested by the interpretation of the spectrum. |
 | **Learned rule** | The learned report rule that changed the peak's report row, with its evidence and the former name. |
+| **Flags** | **new**: the substance is in none of the lab's references - not in a learned analyst evaluation, not in the register of substances GC Workspace reported and not in CASINFO.xlsx (by CAS, without a CAS by name). Element symbols (e.g. **Si**, **Cl**, **P**, **S**): the formula of its library hit has elements other than C, H, O and N. Hover a cell for the details. |
 
 ## Mass spectrum
 
@@ -268,6 +269,7 @@ columns...** on a right-click on a column header) chooses and orders the columns
 mg/dm², µg/dm², µg/L, mg/L and mg/mL (with a quant method also mg/g, mg/kg, µg/g and µg/kg, each determination
 converted with its own sample amount); a right-click on a column header shows or hides one column. **Diff. %**
 is a bar against the limit.
+**Flags** (after the CAS) marks a substance as **new** to the lab or with elements other than C, H, O, N, as in the Peaks table.
 
 Below the list: the two chromatograms of the selected substance, A upwards and B downwards, with its
 integrated peak shaded in each, and the two spectra, mirrored the same way (feature pairing only). Clicking a

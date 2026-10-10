@@ -56,6 +56,9 @@ _FIELDS = [
        tip="RT ÷ RT of the NIAS reference ISTD"),
     _f("class_hint", "Class hint", S, kind="text", agg="first", needs="ms", width=16,
        tip="Substance-class clue from the MS interpreter"),
+    _f("flags", "Flags", S, kind="text", per_det=False, width=12,
+       tip="new: in none of the learned evaluations, the register of reported substances and CASINFO.xlsx; "
+           "element symbols: the formula has elements other than C, H, O, N"),
     # -- peak ---------------------------------------------------------------------------------
     _f("num", "Peak #", P, "#", decimals=0, agg="first", width=5),
     _f("ms_rt", "RT MS", P, "RT MS (min)", decimals=3, needs="fid", width=7,

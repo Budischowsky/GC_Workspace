@@ -75,6 +75,11 @@ UNIT_OF = {C_UNIT0 + i: key.rsplit("_", 1)[0] for i, key in enumerate(COLUMN_KEY
 #: columns that cannot be hidden, and the columns hidden until the analyst shows them
 FIXED_COLUMNS = {C_ICON, C_REPORT, C_NAME}
 HIDDEN_BY_DEFAULT = (C_A1, C_A2, C_NOTES, C_HIT_A, C_HIT_B) + tuple(range(C_UNIT0, len(COLUMN_KEYS)))
+#: the substance's flags (new to the lab, elements other than CHON): appended after the unit columns, shown
+#: after the CAS
+C_FLAGS = len(COLUMN_KEYS)
+COLUMN_KEYS = COLUMN_KEYS + ["flags"]
+PLACE_AFTER = {"flags": "cas"}
 COLUMNS_SETTING = "replicates/columns"
 #: the filter chips: key -> (label, level, tooltip)
 FILTERS = {"all": ("All", "info", "Every substance"),
@@ -1025,7 +1030,17 @@ class DuplicatePage(QWidget):
                "Comment", "Feature", "Similarity", f"Hit {labels[0]}", f"Hit {labels[1]}"]
         for other in QS.CONC_UNITS.values():
             out += [f"{labels[0]} [{other}]", f"{labels[1]} [{other}]", f"Mean [{other}]"]
-        return out
+        return out + ["Flags"]
+
+    @staticmethod
+    def _flags(row: dict, findex: dict) -> tuple[str, str]:
+        """``(text, tooltip)`` of the row's substance (:mod:`gcws.quant.substance_flags`); none for an ISTD."""
+        from gcws.quant import substance_flags as SF
+        sources = [s for s in (row.get("source1"), row.get("source2")) if s]
+        if any(s.get("istd") for s in sources):
+            return "", ""
+        name, cas = row.get("name", ""), row.get("cas", "")
+        return SF.flags(name, cas, SF.formula_from(findex, name, cas))
 
     def _unit_cells(self, row: dict, units: list[str], settings) -> list[tuple]:
         """``(value, calculation)`` of the further-unit columns of ``row``: its A, B and mean
@@ -1054,12 +1069,14 @@ class DuplicatePage(QWidget):
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         for i, n in enumerate(names[:2]):
-            for c in (C_A1 + i, C_C1 + i) + tuple(range(C_UNIT0 + i, len(COLUMN_KEYS), len(UNIT_SIDES))):
+            for c in (C_A1 + i, C_C1 + i) + tuple(range(C_UNIT0 + i, C_FLAGS, len(UNIT_SIDES))):
                 self.table.horizontalHeaderItem(c).setToolTip(n)
         self.table.horizontalHeaderItem(C_REPORT).setToolTip("Goes into the report (default: not for artefacts and "
                                                              "values below the reporting limit)")
         self.table.setRowCount(0)
         editable = set(FIELD_OF) - {C_REPORT}
+        from gcws.quant import substance_flags as SF
+        findex = SF.formula_index(self.ws)
         for k, (row, v) in enumerate(zip(self.rows, self.verdicts)):
             if not self._passes(self.filter, row, v):
                 continue
@@ -1077,6 +1094,8 @@ class DuplicatePage(QWidget):
                 vals += [None] * len(FEATURE_COLUMNS)
             unit_cells = self._unit_cells(row, units, settings)
             vals += [v for v, _calc in unit_cells]
+            flag, flag_tip = self._flags(row, findex)
+            vals.append(flag)
             edited = row.get("edited") or {}
             level, tip = v.level, v.detail
             if v.level == "bad" and row.get("decided"):
@@ -1091,7 +1110,7 @@ class DuplicatePage(QWidget):
             gone = row.get("dismissed") or 0
             # the dismissed determination's cells: area, concentration and its further units
             dismissed = ({C_A1 + gone - 1, C_C1 + gone - 1}
-                         | set(range(C_UNIT0 + gone - 1, len(COLUMN_KEYS), len(UNIT_SIDES)))) if gone else set()
+                         | set(range(C_UNIT0 + gone - 1, C_FLAGS, len(UNIT_SIDES)))) if gone else set()
             for c, val in enumerate(vals):
                 it = _SeverityItem() if c in (C_ICON, C_REPORT) else QTableWidgetItem()
                 if c == C_REPORT and deleted:
@@ -1125,6 +1144,9 @@ class DuplicatePage(QWidget):
                     it.setData(Qt.DecorationRole, self.style().standardIcon(QStyle.SP_MessageBoxWarning))
                     it.setToolTip(f"The hits differ - {labels[0]}: {n1}  /  {labels[1]}: {n2}. Right-click for "
                                   "the candidate names.")
+                if c == C_FLAGS and flag:
+                    it.setToolTip(flag_tip)
+                    it.setBackground(theme.status_brush("warn"))
                 if c in (C_ICON, C_VERDICT):
                     it.setBackground(theme.status_brush(level))
                     it.setForeground(QBrush(theme.status_color(level)))
@@ -1202,7 +1224,12 @@ class DuplicatePage(QWidget):
         # columns that choice has never seen (new in this version) follow their default
         hidden += [COLUMN_KEYS[c] for c in HIDDEN_BY_DEFAULT if COLUMN_KEYS[c] not in order + hidden
                    and (order or c >= C_UNIT0)]
-        return {"order": order + [k for k in COLUMN_KEYS if k not in order], "hidden": hidden}
+        order = order + [k for k in COLUMN_KEYS if k not in order]
+        for key, after in PLACE_AFTER.items():           # a new column not at the end of a remembered order
+            if key not in (state.get("order") or []) and after in order:
+                order.remove(key)
+                order.insert(order.index(after) + 1, key)
+        return {"order": order, "hidden": hidden}
 
     @staticmethod
     def _save_layout(state: dict) -> None:

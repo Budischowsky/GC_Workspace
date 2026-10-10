@@ -22,7 +22,7 @@ def test_every_double_determination_column_is_offered():
     concept = {"rt": "rt", "name": "name", "cas": "cas", "area_a": "corr_area", "area_b": "corr_area",
                "conc_a": "conc", "conc_b": "conc", "mean": "conc", "diff": "reldiff", "verdict": "verdict",
                "notes": "notes", "comment": "comment", "feature": "feature", "similarity": "similarity",
-               "hit_a": "name", "hit_b": "name"}
+               "hit_a": "name", "hit_b": "name", "flags": "flags"}
     for key in COLUMN_KEYS:
         if key in ("icon", "report"):
             continue

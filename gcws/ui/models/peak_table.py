@@ -118,6 +118,9 @@ COLUMNS: list[Column] = [
            tip="Concentration in the unit of the quantification mode"),
     Column("sml", "SML", _v("sml"), numeric=False, default=False),
     Column("qstatus", "Status", _v("qstatus"), numeric=False),
+    Column("flags", "Flags", _v("flags"), numeric=False,
+           tip="new: in none of the learned evaluations, the register of reported substances and CASINFO.xlsx; "
+               "element symbols: the formula has elements other than C, H, O, N. Hover a cell for details"),
     Column("learned", "Learned rule", _v("learned"), numeric=False, default=False,
            tip="The learned report rule that changed this peak's report row, with its evidence"),
     Column("origin", "Integration", _v("origin"), numeric=False, default=False),
@@ -219,6 +222,11 @@ class PeakTableModel(QAbstractTableModel):
             return row.quant.get("rrt_status", col.tip)
         if role == Qt.ToolTipRole and col.key in CALC_KEYS:
             return (row.quant.get("calc") or {}).get(col.key)
+        if col.key == "flags" and role in (Qt.ToolTipRole, Qt.BackgroundRole):
+            text, tip = PV.substance_flags(row)
+            if not text:
+                return None
+            return tip if role == Qt.ToolTipRole else theme.status_brush("warn")
         if role == Qt.ToolTipRole and col.key == "class_hint":
             cache = getattr(self.ws, "hints", None)
             v = cache.get(self.ws.active, self.ws.signal_key, row.peak) if cache is not None else None

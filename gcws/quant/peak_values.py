@@ -136,6 +136,16 @@ def _ident(name, default=""):
     return lambda r, ws, rid, key: getattr(r.ident, name) if r.ident else default
 
 
+def substance_flags(r: Row, ws=None, rid=None, key=None) -> tuple[str, str]:
+    """``(text, tooltip)`` of the peak's substance: new to the lab, elements other than CHON
+    (:mod:`gcws.quant.substance_flags`); none for an internal standard."""
+    i = r.ident
+    if i is None or i.istd:
+        return "", ""
+    from gcws.quant import substance_flags as SF
+    return SF.flags(i.name, i.cas, SF.formula_of(i))
+
+
 #: every peak-table column key -> ``getter(row, ws, run_id, signal_key)``
 VALUES: dict[str, Callable] = {
     "num": lambda r, ws, rid, key: r.peak.number,
@@ -168,6 +178,7 @@ VALUES: dict[str, Callable] = {
     "sml": _q("sml", ""),
     "qstatus": _q("status", ""),
     "learned": _q("learned", ""),
+    "flags": lambda r, ws, rid, key: substance_flags(r)[0],
     "origin": lambda r, ws, rid, key: r.peak.origin,
     "class_hint": lambda r, ws, rid, key: class_hint(ws, rid, key, r.peak)[0],
 }

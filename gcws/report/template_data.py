@@ -274,6 +274,8 @@ def collect(ws, members: list, group: Optional[dict], *, fields=(), method_name:
     except Exception as exc:  # noqa: BLE001 - no SML / Ref.
         warnings.append(f"CASINFO.xlsx not read: {exc}")
     out_rows = []
+    from gcws.quant import substance_flags as SF
+    findex = SF.formula_index(ws)
     for i, (r, v) in enumerate(zip(rows, verdicts)):
         # an unknown is reported without CAS and match quality, also where a determination named it
         r = RS.without_id(r)
@@ -320,6 +322,7 @@ def collect(ws, members: list, group: Optional[dict], *, fields=(), method_name:
             "edited": ", ".join(sorted(r.get("edited") or {})), "feature": r.get("feature_id") or "",
             "similarity": r.get("sim"), "sml": match.get("sml"), "ref": match.get("reference") or "",
             "footnote": main.clean_footnote(match.get("footnote")) if main is not None and match else "",
+            "flags": SF.flags(name, cas, SF.formula_from(findex, name, cas))[0],
         })
         istd_codes = vals.get("istd", {}).get("each", []) if isinstance(vals.get("istd"), dict) else []
         out_rows.append({
