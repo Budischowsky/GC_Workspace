@@ -1,0 +1,19 @@
+[package]
+name = "gcws_rust"
+version = "0.1.0"
+edition = "2021"
+description = "Rust kernels of the GC Workspace library search (exact prefilter, decoding, PBM scoring)"
+
+[lib]
+name = "gcws_rust"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.27", features = ["extension-module"] }
+numpy = "0.27"
+rayon = "1.12"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1

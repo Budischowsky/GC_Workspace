@@ -1042,3 +1042,10 @@ def _pbm_many(unknown_side, sides: list, stats):
     reverse[use], forward[use] = rev, fwd
     confidence[use] = (rev + fwd) / 2
     return confidence, reverse, forward
+
+
+# Rust kernels (rust/gcws_rust, tools/build_rust.ps1) take over stages 1 and 2 when the extension is
+# built: the same results, bit for bit. GCWS_RUST_SEARCH=off keeps the Python search.
+from gcws.libsearch import rust_search as _rust_search  # noqa: E402
+
+_rust_search.install()
