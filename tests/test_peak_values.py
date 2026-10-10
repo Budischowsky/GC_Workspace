@@ -48,3 +48,28 @@ def test_class_hint_uses_and_fills_the_workspace_cache():
     ws.hints.d["p"] = ("alkane (high)", "details")
     assert PV.class_hint(ws, "r", "FID", "p") == ("alkane (high)", "details") and not calls
     assert PV.class_hint(ws, "missing", "FID", "p") == ("", "")
+
+
+def test_hint_memo_is_keyed_by_spectrum_content_and_rules(monkeypatch):
+    import numpy as np
+    from gcws.ms import interpret as IP
+    from gcws.ms.knowledge import FINGERPRINTS, RULES
+    calls = []
+    real = IP.interpret
+
+    def counted(*a, **k):
+        calls.append(1)
+        return real(*a, **k)
+
+    monkeypatch.setattr(IP, "interpret", counted)
+    monkeypatch.setattr(PV, "_HINT_MEMO", type(PV._HINT_MEMO)())
+    mz = np.array([41, 43, 57, 71, 85, 99, 142]); ab = np.array([5e4, 9e4, 2e5, 1.2e5, 6e4, 2e4, 3e3])
+    knowledge = (list(RULES), list(FINGERPRINTS))
+    first = PV._hint_of(mz, ab, (35, 700), 150.0, knowledge)
+    expected = PV._hint_text(mz, ab, (35, 700), 150.0, knowledge)
+    assert first == expected and first[0] != "" and len(calls) == 2
+    assert PV._hint_of(mz.copy(), ab.copy(), (35, 700), 150.0, knowledge) == first and len(calls) == 2
+    PV._hint_of(mz, ab * 1.5, (35, 700), 150.0, knowledge)                  # another spectrum
+    PV._hint_of(mz, ab, (50, 700), 150.0, knowledge)                        # another scan range
+    PV._hint_of(mz, ab, (35, 700), 150.0, (list(RULES), list(FINGERPRINTS)))  # the rules file changed
+    assert len(calls) == 5

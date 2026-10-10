@@ -4,6 +4,8 @@ The peak table shows them for the active run; the template report asks for them 
 so each getter takes the run and the signal explicitly: ``VALUES[key](row, ws, run_id, signal_key)``."""
 from __future__ import annotations
 
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -52,19 +54,56 @@ def area_minus_blank(r: Row, ws, run_id, key):
     return max(0.0, r.peak.area - ws.blank_options().scale * m.blank_area)
 
 
+#: hints by spectrum content: a re-integration drops a run's hints, but most of its peaks keep their spectra
+HINT_MEMO_SIZE = 4096
+_HINT_MEMO: "OrderedDict[tuple, tuple[str, str]]" = OrderedDict()
+_HINT_LOCK = threading.Lock()
+
+
 def compute_hint(st, key, peak) -> tuple[str, str]:
     """``(short text, details)`` of the MS interpreter for ``peak``'s spectrum ("", "" without MS data)."""
     if st is None or st.run.ms is None:
         return ("", "")
     from gcws.ms.assignment import override_for
-    from gcws.ms.interpret import Context, interpret
+    from gcws.ms.knowledge import load
     from gcws.ms.spectra import extract
     try:
         spec = extract(st.run, peak, key, st.delay_value, "average_bg", override=override_for(st, key, peak))
         ms = st.run.ms
-        r = interpret(spec.mz, spec.ab, Context(mass_range=ms.mass_range(), min_abundance=ms.min_abundance()))
+        return _hint_of(spec.mz, spec.ab, ms.mass_range(), ms.min_abundance(), load())
     except Exception:  # noqa: BLE001 - a hint is optional
         return ("", "")
+
+
+def _hint_of(mz, ab, mass_range, min_abundance, knowledge) -> tuple[str, str]:
+    """The hint of one spectrum, memoised by its content (``knowledge``: the rules and fingerprints of
+    :func:`gcws.ms.knowledge.load`, a new object when the user's rules file changes)."""
+    import hashlib
+
+    import numpy as np
+    h = hashlib.blake2b(digest_size=16)
+    for a in (mz, ab):
+        a = np.ascontiguousarray(a)
+        h.update(repr((a.dtype.str, a.shape)).encode())
+        h.update(a.tobytes())
+    memo_key = (h.digest(), repr(mass_range), repr(min_abundance), id(knowledge))
+    with _HINT_LOCK:
+        hit = _HINT_MEMO.get(memo_key)
+        if hit is not None:
+            _HINT_MEMO.move_to_end(memo_key)
+            return hit
+    hit = _hint_text(mz, ab, mass_range, min_abundance, knowledge)
+    with _HINT_LOCK:
+        _HINT_MEMO[memo_key] = hit
+        while len(_HINT_MEMO) > HINT_MEMO_SIZE:
+            _HINT_MEMO.popitem(last=False)
+    return hit
+
+
+def _hint_text(mz, ab, mass_range, min_abundance, knowledge) -> tuple[str, str]:
+    from gcws.ms.interpret import Context, interpret
+    rules, fingerprints = knowledge
+    r = interpret(mz, ab, Context(mass_range=mass_range, min_abundance=min_abundance), rules, fingerprints)
     if r.classes:
         c = r.classes[0]
         text = f"{c.label} ({c.level})"
