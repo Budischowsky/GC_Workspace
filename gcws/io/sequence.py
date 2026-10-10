@@ -30,7 +30,8 @@ BATCH_SOLVENT_TOKENS = {
     "dcm", "dichlormethan", "dichloromethan", "dichloromethane",
     "methylenchlorid", "methylenechloride",
     "hex", "hexan", "hexane", "nhexan", "nhexane",
-    "hep", "heptan", "heptane", "nheptan", "nheptane",
+    "hep", "hept", "heptan", "heptane", "nheptan", "nheptane",
+    "isoo", "isooctan", "isooctane", "cyclohex", "cyclohexan", "cyclohexane", "etoaccyclohex",
     "acn", "mecn", "acetonitril", "acetonitrile", "thf", "tetrahydrofuran",
     "tenax", "essigsaure", "essigsaeure", "aceticacid", "hac",
 }
@@ -38,6 +39,7 @@ BATCH_BLANK_TOKENS = {"blank", "blanc", "blind", "leerwert"}
 BATCH_ISTD_MARKERS = ("istd", "internalstandard")
 LADDER_TOKENS = {"alkane", "alkanes", "alkan", "alkanes", "ladder", "alkanreihe", "c7c40", "c8c40", "c10c40"}
 SYNERIS_FOLDER_NUMBER = re.compile(r"(?<!\d)(\d{8})(?!\d)")
+MATERIAL_NUMBER = re.compile(r"(?<!\d)\d{9,}(?!\d)")    # a raw material number, e.g. 14783000002
 LEADING_NUMBER = re.compile(r"^\s*(\d+)")
 _UMLAUTS = str.maketrans({"ä": "a", "ö": "o", "ü": "u", "ß": "ss", "Ä": "a", "Ö": "o", "Ü": "u"})
 
@@ -54,6 +56,22 @@ def _parts(value) -> tuple[set[str], str]:
     return tokens, re.sub(r"[^a-z0-9]+", "", name.casefold())
 
 
+def _leading_solvent(name) -> Optional[bool]:
+    """A solvent run named solvent first (after the injection number), not followed directly by a sample's
+    own folder number: '01_EtOH_2_24005318' (2024 names carry the batch number) -> False, 'EtOH_STD_…' (the
+    ISTD-spiked solvent) -> True; '06_EtOH_24019114_Lidfoil_1' (a sample) or no leading solvent -> None."""
+    stem = re.sub(r"\.(?:d|qgd)$", "", _fold(name), flags=re.IGNORECASE)
+    parts = [p.casefold() for p in re.split(r"[^0-9A-Za-z]+", stem) if p]
+    while parts and parts[0].isdigit() and len(parts[0]) < 8:
+        parts.pop(0)
+    if parts and parts[0] == "std" and all(p.isdigit() and len(p) < 8 for p in parts[1:]):
+        return True                                 # '01_STD', '02_STD_2': the ISTD-spiked solvent
+    if len(parts) < 2 or parts[0].rstrip("0123456789") not in BATCH_SOLVENT_TOKENS \
+            or (parts[1].isdigit() and len(parts[1]) >= 8):
+        return None
+    return parts[1] == "std"
+
+
 def classify_role(name) -> str:
     tokens, normalized = _parts(name)
     if tokens & LADDER_TOKENS:
@@ -67,7 +85,10 @@ def classify_role(name) -> str:
     has_blank = bool(tokens & BATCH_BLANK_TOKENS) or any(t in normalized for t in BATCH_BLANK_TOKENS)
     if has_blank:
         return BLANK_ISTD if has_istd else BLANK
-    if SYNERIS_FOLDER_NUMBER.search(_fold(name)):
+    lead = _leading_solvent(name)
+    if lead is not None:
+        return BLANK_ISTD if has_istd or lead else BLANK
+    if SYNERIS_FOLDER_NUMBER.search(_fold(name)) or MATERIAL_NUMBER.search(_fold(name)):
         return SAMPLE
     if has_solvent or has_istd:
         return BLANK_ISTD if has_istd else BLANK
