@@ -598,3 +598,8 @@ def _finalise(sig: WorkSignal, peaks: list[WP], res: Resolved, method: Integrati
         h.update(f"{pk.start:.5f}|{pk.end:.5f}|{pk.apex_rt:.5f}|{pk.area:.6g}|{pk.type_code};".encode())
     return IntegrationResult(peaks=out, resolved=res, unresolved=unresolved,
                              digest=h.hexdigest()[:16], method_name=method.name)
+
+
+# Rust kernels (detector, peak width, measurement) when the extension is built; see rust_integration.
+from gcws.integration import rust_integration as _rust_integration  # noqa: E402
+_rust_integration.install()

@@ -4,9 +4,11 @@
 //!   (variants "sparse" and "tiled").
 //! * `Refs`: stage 2, reference spectra decoded from the library files (cached), their PBM side
 //!   and the PBM scores of one peak against its candidates.
+//! * `integ`: kernels of the chromatogram integrator (`gcws.integration.rust_integration`).
 //!
 //! Both reproduce the Python results bit for bit (see the module docs).
 
+mod integ;
 mod kernel;
 mod refs;
 
@@ -440,5 +442,12 @@ fn gcws_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(prefilter, m)?)?;
     m.add_function(wrap_pyfunction!(prefilter_dense, m)?)?;
     m.add_class::<Refs>()?;
+    m.add_function(wrap_pyfunction!(integ::detect, m)?)?;
+    m.add_function(wrap_pyfunction!(integ::width_candidates, m)?)?;
+    m.add_function(wrap_pyfunction!(integ::raw_area, m)?)?;
+    m.add_function(wrap_pyfunction!(integ::shape, m)?)?;
+    m.add_function(wrap_pyfunction!(integ::nearest_index, m)?)?;
+    m.add_function(wrap_pyfunction!(integ::np_interp, m)?)?;
+    m.add_function(wrap_pyfunction!(integ::np_sum_f64, m)?)?;
     Ok(())
 }
