@@ -7,7 +7,8 @@ painted synchronously, as a mouse drag does. Prints the time per step (median / 
     .venv/Scripts/python tools/ui_benchmark.py --data <copy of data> --samples <batch folder>
         [--runs 8] [--no-process] [--freeze] [--profile] [--theme light|dark|neon]
 
-Never point --data at the live data folder: the window writes its settings on close.
+Never point --data at the live data folder. The settings file is put back after the run, so
+every run starts from the same layout (closing panels with --close would otherwise stick).
 """
 from __future__ import annotations
 
@@ -45,6 +46,16 @@ def main():
     ap.add_argument("--close", default="", help="comma-separated panels to close first (attribution)")
     args = ap.parse_args()
     os.environ["GCWS_DATA"] = str(Path(args.data).resolve())
+    ini = Path(args.data) / "GCWorkspace" / "GC Workspace.ini"
+    saved_ini = ini.read_bytes() if ini.exists() else None
+    try:
+        _run(args)
+    finally:
+        if saved_ini is not None:
+            ini.write_bytes(saved_ini)
+
+
+def _run(args):
 
     import gcws  # noqa: F401
     from gcws import paths

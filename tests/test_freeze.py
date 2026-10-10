@@ -22,7 +22,8 @@ def test_a_plot_resized_during_a_gesture_is_laid_out_once_on_release(qtbot, froz
     w.show()
     qtbot.waitExposed(w)
     w.plot([0, 1, 2], [0, 1, 0])
-    qtbot.wait(50)                             # the axes have their labels
+    w.viewport().grab()                        # the axes measure their labels on the first paint
+    qtbot.wait(50)
     before = w.plotItem.vb.width()
 
     freeze._native = True                      # as while the window border is dragged
