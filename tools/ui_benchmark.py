@@ -7,6 +7,10 @@ painted synchronously, as a mouse drag does. Prints the time per step (median / 
     .venv/Scripts/python tools/ui_benchmark.py --data <copy of data> --samples <batch folder>
         [--runs 8] [--no-process] [--freeze] [--profile] [--theme light|dark|neon]
 
+Environment switches: IDLE_SECONDS=150 records event-loop stalls > 30 ms with the data loaded
+(timers, autosave, garbage collection) instead of dragging; PAINT_EACH=1 times one full repaint
+of every visible panel and its largest children.
+
 Never point --data at the live data folder. The settings file is put back after the run, so
 every run starts from the same layout (closing panels with --close would otherwise stick).
 """
@@ -104,6 +108,64 @@ def _run(args):
         win.docks[key].close()
     for _ in range(5):
         app.processEvents()
+
+    if os.environ.get("IDLE_SECONDS"):
+        import gc
+        from PySide6.QtCore import QTimer
+        secs = float(os.environ["IDLE_SECONDS"])
+        stalls, last = [], [time.perf_counter()]
+        gcs = []
+        def gc_cb(phase, info):
+            if phase == "start":
+                gcs.append([time.perf_counter(), info["generation"], 0])
+            elif gcs:
+                gcs[-1][2] = time.perf_counter() - gcs[-1][0]
+        gc.callbacks.append(gc_cb)
+        def tick():
+            now = time.perf_counter()
+            if now - last[0] > 0.03:
+                stalls.append((now - t0, (now - last[0]) * 1000))
+            last[0] = now
+        tm = QTimer(); tm.setInterval(5); tm.timeout.connect(tick); tm.start()
+        prof = cProfile.Profile(); prof.enable()
+        t0 = time.perf_counter()
+        while time.perf_counter() - t0 < secs:
+            app.processEvents()
+            time.sleep(0.002)
+        prof.disable()
+        print(f"stalls > 30 ms in {secs:.0f} s: {len(stalls)}")
+        for at, ms in stalls[:40]:
+            print(f"  at {at:6.1f} s: {ms:6.0f} ms")
+        big = [g for g in gcs if g[2] > 0.01]
+        print(f"gc runs: {len(gcs)}, > 10 ms: {[(g[1], round(g[2]*1000)) for g in big][:20]}")
+        out = io.StringIO()
+        pstats.Stats(prof, stream=out).sort_stats("cumulative").print_stats(35)
+        print(out.getvalue())
+        return
+
+    if os.environ.get("PAINT_EACH"):
+        def walk(w, depth=0, out=None):
+            out = [] if out is None else out
+            for c in w.findChildren(QWidget, options=Qt.FindDirectChildrenOnly):
+                if c.isVisible() and c.width() > 30 and c.height() > 30:
+                    t = time.perf_counter()
+                    for _ in range(5):
+                        c.repaint()
+                    out.append(((time.perf_counter() - t) / 5 * 1000, depth, type(c).__name__, c.objectName(), c.width(), c.height()))
+                    if depth < 4:
+                        walk(c, depth + 1, out)
+            return out
+        from PySide6.QtWidgets import QWidget
+        for key, d in win.docks.items():
+            if d.isVisible():
+                rows = walk(d)
+                t = time.perf_counter()
+                for _ in range(5):
+                    d.repaint()
+                print(f"DOCK {key:<12} {(time.perf_counter() - t) / 5 * 1000:7.1f} ms")
+                for ms, depth, name, obj, w, h in sorted(rows, reverse=True)[:6]:
+                    print(f"    {ms:7.1f} ms  {'  ' * depth}{name} {obj} {w}x{h}")
+        return
 
     freeze = None
     if args.freeze:
