@@ -486,3 +486,7 @@ def cut_points(t, curves: np.ndarray, apexes: Sequence[float]) -> list[float]:
                     point = float(t[inside[k]])
         out.append(point if point is not None else (a + b) / 2)
     return out
+
+
+# The grid search in Rust when the extension is built; see rust_fit.
+from gcws.ms import rust_fit as _rust_fit  # noqa: E402,F401

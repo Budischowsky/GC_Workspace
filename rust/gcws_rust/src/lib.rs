@@ -5,9 +5,12 @@
 //! * `Refs`: stage 2, reference spectra decoded from the library files (cached), their PBM side
 //!   and the PBM scores of one peak against its candidates.
 //! * `integ`: kernels of the chromatogram integrator (`gcws.integration.rust_integration`).
+//! * `fit`: the grid search of the component fit (`gcws.ms.rust_fit`).
 //!
-//! Both reproduce the Python results bit for bit (see the module docs).
+//! They reproduce the Python results bit for bit, except `fit`, whose residuals agree to about
+//! 1e-15 relative (its own SVD; see the module docs).
 
+mod fit;
 mod integ;
 mod kernel;
 mod refs;
@@ -449,5 +452,6 @@ fn gcws_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(integ::nearest_index, m)?)?;
     m.add_function(wrap_pyfunction!(integ::np_interp, m)?)?;
     m.add_function(wrap_pyfunction!(integ::np_sum_f64, m)?)?;
+    m.add_function(wrap_pyfunction!(fit::grid_residuals, m)?)?;
     Ok(())
 }

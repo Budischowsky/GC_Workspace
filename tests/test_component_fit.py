@@ -257,6 +257,9 @@ def _assert_same_fit(a, b):
 
 
 def _count_residuals(monkeypatch):
+    # counts the Python grid search's residuals (the Rust one of gcws.ms.rust_fit does not call _residual)
+    from gcws.ms import rust_fit
+    monkeypatch.setattr(F, "fit_trace_uncached", rust_fit._installed.get("fit_trace_uncached", F.fit_trace_uncached))
     calls = []
     original = F._residual
 
