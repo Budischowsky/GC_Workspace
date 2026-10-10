@@ -29,27 +29,33 @@ def _run_info(path: str, mtime: float) -> tuple[str, str]:
         return Path(path).stem, ""
 
 
-def _is_run(path: str) -> bool:
-    return path.lower().endswith((".d", ".qgd")) and folders.is_run_dir(path)
+def _is_run(path: str, mtime: float | None = None) -> bool:
+    """``mtime`` (the folder's, as the tree model last saw it) lets a repaint answer from the cache."""
+    if not path.lower().endswith((".d", ".qgd")):
+        return False
+    return folders.is_run_dir(path) if mtime is None else _is_run_cached(path, mtime)
+
+
+@lru_cache(maxsize=4096)
+def _is_run_cached(path: str, mtime: float) -> bool:
+    return folders.is_run_dir(path)
 
 
 class GCFileModel(QFileSystemModel):
     def data(self, index, role=Qt.DisplayRole):
         if index.column() == 0 and role in (Qt.DecorationRole, Qt.ToolTipRole):
             path = self.filePath(index)
-            if _is_run(path):
+            # the model's cached modification time: painting the tree touches no disk (or network)
+            mtime = self.lastModified(index).toMSecsSinceEpoch() / 1000.0
+            if _is_run(path, mtime):
                 if role == Qt.DecorationRole:
                     r = classify_role(Path(path).name)
                     return icon("run", ROLE_COLORS.get(r, "#1F6F8B"))
-                try:
-                    mtime = os.path.getmtime(path)
-                except OSError:
-                    mtime = 0
                 name, src = _run_info(path, mtime)
                 role_name = ROLE_LABELS.get(classify_role(Path(path).name), "")
                 return f"{name}\nRole: {role_name}\n{src}\n{path}"
             if role == Qt.DecorationRole and self.isDir(index):
-                return icon("analysis") if _has_runs(path) else icon("folder")
+                return icon("analysis") if _has_runs(path, mtime) else icon("folder")
         return super().data(index, role)
 
     def hasChildren(self, parent=QModelIndex()):
@@ -63,9 +69,9 @@ def _has_runs_cached(path: str, mtime: float) -> bool:
     return folders.is_analysis_folder(path)
 
 
-def _has_runs(path: str) -> bool:
+def _has_runs(path: str, mtime: float | None = None) -> bool:
     try:
-        return _has_runs_cached(path, os.path.getmtime(path))
+        return _has_runs_cached(path, os.path.getmtime(path) if mtime is None else mtime)
     except OSError:
         return False
 

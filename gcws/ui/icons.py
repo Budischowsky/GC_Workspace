@@ -55,16 +55,9 @@ class _ThemedIcon(QIconEngine):
         return _render(self.name, color, INK, PAPER)
 
     def pixmap(self, size, mode, state):
-        pm = self._pixmap().scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        if mode == QIcon.Disabled:
-            faded = QPixmap(pm.size())
-            faded.fill(Qt.transparent)
-            qp = QPainter(faded)
-            qp.setOpacity(0.35)
-            qp.drawPixmap(0, 0, pm)
-            qp.end()
-            return faded
-        return pm
+        # every repaint of a toolbar, tree or tab asks again: scaled once per size and theme
+        color = CURRENT_ACCENT if self.color in (None, ACCENT) else self.color
+        return _scaled(self.name, color, INK, PAPER, size.width(), size.height(), mode == QIcon.Disabled)
 
     def paint(self, painter, rect, mode, state):
         painter.drawPixmap(rect, self.pixmap(rect.size(), mode, state))
@@ -77,6 +70,20 @@ class _ThemedIcon(QIconEngine):
 def icon(name: str, color: str | None = None) -> QIcon:
     """The icon ``name``; ``color`` is its accent (default: the theme's accent)."""
     return QIcon(_ThemedIcon(name, color))
+
+
+@lru_cache(maxsize=4096)
+def _scaled(name: str, color: str, ink: str, paper: str, w: int, h: int, disabled: bool) -> QPixmap:
+    pm = _render(name, color, ink, paper).scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+    if disabled:
+        faded = QPixmap(pm.size())
+        faded.fill(Qt.transparent)
+        qp = QPainter(faded)
+        qp.setOpacity(0.35)
+        qp.drawPixmap(0, 0, pm)
+        qp.end()
+        return faded
+    return pm
 
 
 @lru_cache(maxsize=None)
