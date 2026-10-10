@@ -511,3 +511,7 @@ def _components(p: _Peaks, groups, a, contrib, tic, mzs, win_rt, lo) -> list:
         ))
     out.sort(key=lambda comp: (comp.rt, -comp.area, comp.model_mz))
     return out
+
+
+# Ion perception and shape links in Rust when the extension is built; see rust_deconv.
+from gcws.ms import rust_deconv as _rust_deconv  # noqa: E402,F401

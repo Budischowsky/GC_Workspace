@@ -6,12 +6,14 @@
 //!   and the PBM scores of one peak against its candidates.
 //! * `integ`: kernels of the chromatogram integrator (`gcws.integration.rust_integration`).
 //! * `fit`: the grid search of the component fit (`gcws.ms.rust_fit`).
+//! * `ions`: ion perception and shape links of the array deconvolution (`gcws.ms.rust_deconv`).
 //!
 //! They reproduce the Python results bit for bit, except `fit`, whose residuals agree to about
 //! 1e-15 relative (its own SVD; see the module docs).
 
 mod fit;
 mod integ;
+mod ions;
 mod kernel;
 mod refs;
 
@@ -453,5 +455,9 @@ fn gcws_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(integ::np_interp, m)?)?;
     m.add_function(wrap_pyfunction!(integ::np_sum_f64, m)?)?;
     m.add_function(wrap_pyfunction!(fit::grid_residuals, m)?)?;
+    m.add_function(wrap_pyfunction!(ions::perceive_ions, m)?)?;
+    m.add_function(wrap_pyfunction!(ions::link_r, m)?)?;
+    m.add_function(wrap_pyfunction!(ions::perceive_components, m)?)?;
+    m.add_function(wrap_pyfunction!(ions::np_einsum_dot, m)?)?;
     Ok(())
 }
