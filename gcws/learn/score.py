@@ -41,8 +41,15 @@ def _words(text: str) -> str:
 
 def same_family(label: str, sum_line: str) -> bool:
     """Whether a program 'Sum of …' line names the analyst's group label (scoring only)."""
-    a = _words(label)
-    return bool(a) and a in _words(sum_line)
+    a, words = _words(label).split(), _words(sum_line).split()
+    if not a:
+        return False
+
+    def same(x: str, y: str) -> bool:      # 'oligomere'/'oligomeren' (German plural) = 'oligomer'
+        short, long_ = sorted((x, y), key=len)
+        return long_.startswith(short) and len(long_) - len(short) <= 2 and len(short) > 3 or x == y
+
+    return any(all(same(x, y) for x, y in zip(a, words[i:i + len(a)])) for i in range(len(words) - len(a) + 1))
 
 
 def client_lines(prog: ProgramResult) -> list[tuple]:
