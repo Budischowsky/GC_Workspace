@@ -151,6 +151,9 @@ class MainWindow(QMainWindow):
                    "quant": self.quant, "replicates": self.replicates, "automation": self.automation,
                    "report2": self.report2}
         self.overlay = DropOverlay(self)
+        from gcws.ui import freeze
+        freeze.install()                 # plots stand still while panels are dragged or resized
+        freeze.watch(self)
         self._tab_sync = QTimer(self)
         self._tab_sync.setSingleShot(True)
         self._tab_sync.setInterval(0)
@@ -180,6 +183,7 @@ class MainWindow(QMainWindow):
                                          self.restore_view_preferences("window")))
         else:
             self.restore_view_preferences("window")
+        freeze.watch_splitters(self)
 
     # -- construction ----------------------------------------------------------
 
@@ -204,6 +208,11 @@ class MainWindow(QMainWindow):
             d.setWidget(widget)
             d.setTitleBarWidget(DockTitleBar(d, self.toggle_maximize))
         self.overlay.watch(d)
+        from gcws.ui import freeze
+        from gcws.ui.layout.title_bar import title_bar
+        freeze.watch(d)
+        if title_bar(d) is not None:
+            freeze.watch(title_bar(d))
         for sig in (d.dockLocationChanged, d.topLevelChanged, d.visibilityChanged):
             sig.connect(lambda *_: self._tab_sync.start())
         self.docks[key] = d
