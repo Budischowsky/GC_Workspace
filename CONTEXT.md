@@ -36,6 +36,16 @@ these terms lives in the module named after it.
 - **Double determination (DD)**: two runs of one sample compared row by row, kept as a replicate group
   in the project (`ws.replicate_groups`). Its changes live in `gcws/quant/double_determination.py`;
   the rows and verdicts in `gcws/quant/duplicate_view.py`.
+- **Single determination (SD)**: a sample reported from one run. A run without a replicate suffix
+  (`_A`/`_B`, `_1`/`_2`) is always one. With **Single determination only** ticked in the Quantification
+  panel, a pair is an SD too: only its **reported determination** goes into the report. Its report looks
+  like a double determination's, labelled single determination.
+- **Reported determination**: the run of an SD pair that is reported, A (`_A`/`_1`) unless the analyst
+  switches to B in the Replicates panel (or only B came).
+- **Control determination**: the other run of an SD pair. It is processed and compared with the reported
+  one in the Replicates panel; their differences are information, not a reason for control.
+- **Incomplete double determination**: a run with a replicate suffix whose partner never came, while
+  Single determination only is off. It is processed alone but is not an SD: it needs control.
 - **Edits**: the analyst's changes of a row (values, Report box, comment, deleted, outlier dismissed),
   kept per quantification mode and unit in the group.
 - **Accepted / signoff**: who accepted the pair, when, and how many red rows were left to the default

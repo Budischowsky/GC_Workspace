@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QFileDialog,
                                QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 
 from gcws.core.model import FID
+from gcws.quant import determination as DT
 from gcws.quant import double_determination as DD
 from gcws.quant import duplicate_view as DV
 from gcws.quant import modes as QM
@@ -407,6 +408,10 @@ class DuplicatePage(QWidget):
             if [m for m in g["members"] if m in self.ws.runs] == want:
                 return g
         return None
+
+    def determination(self):
+        """Which determination the chosen runs are (``gcws.quant.determination``)."""
+        return DT.of_workspace(self.ws, self.group() or {"members": self.members})
 
     def _sync_group(self, members):
         if not members or self.group() is not None:
@@ -808,7 +813,7 @@ class DuplicatePage(QWidget):
         live, verdicts = self._live()
         s = DV.summarize(live, verdicts, DV.limits(self.ws)[0], labels)
         self._update_chips()
-        if len(self.members) != 2:
+        if not self.determination().compared:
             self.banner.setText("Single determination: choose a partner B to compare.")
             self.banner.setProperty("level", "neutral")
             return
@@ -858,7 +863,7 @@ class DuplicatePage(QWidget):
         g = self.group()
         signoff = (g or {}).get("signoff") or {}
         n_open = self.decision_counts()[0]
-        ready = len(self.members) == 2 and bool(self.rows)
+        ready = self.determination().compared and bool(self.rows)
         if DD.is_accepted(g):
             left = signoff.get("open") or 0
             self.b_accept.setText(f"Accepted by {signoff.get('by', '?')} ✔")
@@ -889,7 +894,7 @@ class DuplicatePage(QWidget):
         and the audit trail; ``acceptRequested`` lets Report² accept its report too."""
         from datetime import datetime
         from gcws.core.audit import current_user
-        if len(self.members) != 2 or not self.rows:
+        if not self.determination().compared or not self.rows:
             return False
         self._sync_group(self.members)
         g = self.group()

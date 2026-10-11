@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Optional
 
 from gcws.automation import store
+from gcws.quant import determination as DT
 from gcws.quant import limits as QL
 
 ACCEPTED_AUTO = "accepted_auto"
@@ -358,13 +359,21 @@ def _feature_review(rule: Rule, ev: dict) -> list[Finding]:
     return out
 
 
+def _determination(dd: dict) -> str:
+    """The job's determination kind (``gcws.quant.determination``); evidence older than that: a job with one
+    run (pairing "single") was an incomplete double determination."""
+    if dd.get("determination"):
+        return dd["determination"]
+    return DT.INCOMPLETE if dd.get("pairing") == "single" else DT.DOUBLE
+
+
 def _double_determination(rule: Rule, ev: dict) -> list[Finding]:
     dd = ev.get("double_determination")
     if not dd:
         return []
     out = []
     members = ", ".join(dd.get("members") or [])
-    if dd.get("pairing") == "single" and rule.p("single"):
+    if _determination(dd) in (DT.SINGLE, DT.INCOMPLETE) and rule.p("single"):
         out.append(Finding(rule.id, rule.level, f"one determination only ({members}); no double determination",
                            member=members))
     elif dd.get("pairing") == "failed":
