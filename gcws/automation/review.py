@@ -5,10 +5,15 @@ answers the questions every view asks of them - which filter chip a report count
 it is delivered, whether it is done, whether its batch is closed (Report²'s Archive) - and which actions the
 analyst may take on it (:func:`allowed`; the journal's verbs refuse the same). Report², the automation
 overview, the Automation panel and the main window all ask here, so they always agree.
+
+:class:`Review` takes the analyst's decisions (accept, reject) and deletes, each with an :class:`Undo`
+token: plain data the panel keeps while it offers "Undo", and gives back to :meth:`Review.undo`.
 """
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
+from typing import Callable, Iterable, Optional
 
 from gcws.automation import journal as J
 
@@ -106,3 +111,97 @@ def batch_closed(batch: dict, jobs: list) -> bool:
         return False
     reopened = float(batch.get("reopened") or 0)
     return not reopened or max(float(j.reviewed_at or j.finished or 0) for j in live) > reopened
+
+
+# -- decisions and deletes, with undo -------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Undo:
+    """What a decision or a delete changed, to take it back with :meth:`Review.undo`."""
+    kind: str                           # "review" or "delete"
+    before: tuple                       # review: (job id, review fields + revision); delete: (job id, state, reason)
+    restore: tuple = ()                 # delete: the job ids it hid
+    batch_id: Optional[int] = None      # a batch delete: the batch shown again
+    until: float = 0.0                  # when Undo ends (an accept is delivered then); 0: after the undo time
+
+
+@dataclass
+class Decision:
+    decided: list = field(default_factory=list)       # the reports accepted or rejected (as they were)
+    regenerated: list = field(default_factory=list)   # edited reports accepted: queued to be made again first
+    undo: Optional[Undo] = None                       # takes the decided ones back
+
+
+@dataclass
+class Undone:
+    ok: bool
+    text: str                           # what to tell the analyst
+    ids: list = field(default_factory=list)   # the reports taken back
+
+
+class Review:
+    """The analyst's decisions and deletes in Report², on a journal."""
+
+    def __init__(self, journal: J.Journal, grace: float = J.UNDO_GRACE):
+        self.journal = journal
+        self.grace = grace
+
+    def decide(self, job_ids: Iterable[str], accept: bool, comment: str = "",
+               prepare: Optional[Callable[[str], bool]] = None) -> Decision:
+        """Accept or reject the reports :func:`allowed` to be. An edited report accepted is made again first
+        (it comes back as control needed: :meth:`Journal.update_edited`); an accept is delivered once the
+        undo time is over. ``prepare(job_id)``, if given, runs first (the main window saves an open project)
+        and False skips that report."""
+        out, before, until = Decision(), [], []
+        for jid in job_ids:
+            job = self.journal.job(jid)
+            if job is None or not allowed(job, "accept" if accept else "reject"):
+                continue
+            if prepare is not None and not prepare(jid):
+                continue
+            job = self.journal.job(jid)
+            if accept and job.edited:
+                if self.journal.update_edited(jid, comment):
+                    out.regenerated.append(job)
+                continue
+            snap = {k: job.row.get(k) for k in J.Journal.REVIEW_FIELDS} | {"revision": job.revision}
+            if self.journal.review(jid, accept, comment, grace=self.grace if accept else 0):
+                out.decided.append(job)
+                before.append((jid, snap))
+                after = self.journal.job(jid)
+                if after is not None and after.deliver_after:
+                    until.append(float(after.deliver_after))
+        if before:
+            out.undo = Undo("review", tuple(before), until=min(until) if until else 0.0)
+        return out
+
+    def delete(self, job_ids: Iterable[str]) -> Optional[Undo]:
+        """Hide reports in Report² (one still in the queue is removed from it)."""
+        jobs = [j for j in (self.journal.job(i) for i in job_ids) if j is not None and not j.deleted]
+        ids = self.journal.delete([j.id for j in jobs])
+        if not ids:
+            return None
+        return Undo("delete", tuple((j.id, j.state, j.reason) for j in jobs if j.id in ids), tuple(ids))
+
+    def delete_batch(self, batch_id: int) -> Optional[Undo]:
+        """Hide a batch folder with all its reports."""
+        jobs = [j for j in self.journal.jobs(batch_id=batch_id) if not j.deleted]
+        if not self.journal.delete_batch(batch_id):
+            return None
+        return Undo("delete", tuple((j.id, j.state, j.reason) for j in jobs), batch_id=batch_id)
+
+    def undo(self, token: Undo) -> Undone:
+        """Take a decision or a delete back. A decision only while its report is as the decision left it
+        and not delivered yet; a delete shows the reports again, back in the queue as they were."""
+        if token.kind == "review":
+            ids = [jid for jid, snap in token.before if self.journal.undo_review(jid, snap)]
+            if ids:
+                return Undone(True, f"Undone: {len(ids)} report(s) back as before.", ids)
+            return Undone(False, "Not undone: the report was delivered meanwhile; reject it instead.")
+        if token.batch_id is not None:
+            self.journal.restore_batch(token.batch_id)
+        else:
+            self.journal.restore(token.restore)
+        for jid, state, reason in token.before:
+            self.journal.unremove(jid, state, reason)
+        return Undone(True, "Restored.", [jid for jid, _, _ in token.before])

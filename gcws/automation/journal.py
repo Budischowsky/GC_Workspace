@@ -739,6 +739,16 @@ class Journal:
                        workflow_id=j.workflow_id, batch_id=j.batch_id, user=user)
         return done
 
+    def unremove(self, job_id: str, state: str, reason: str = "") -> bool:
+        """Undo of a delete: a job the delete took out of the queue (:data:`REMOVED`) is back in it in
+        ``state`` (one of :data:`REMOVABLE`, the state it had), once it is shown again. Nothing else ever
+        leaves REMOVED this way (TRANSITIONS: only "Process again" queues it)."""
+        if state not in REMOVABLE:
+            return False
+        cur = self.con.execute("UPDATE jobs SET state=?, reason=? WHERE id=? AND state=? AND deleted=0",
+                               (state, reason, job_id, REMOVED))
+        return cur.rowcount == 1
+
     def delete_batch(self, batch_id: int, user: Optional[str] = None) -> bool:
         """Hide a batch folder with all its reports; the watcher no longer looks at it."""
         user = user or _user()

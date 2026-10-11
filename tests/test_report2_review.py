@@ -112,3 +112,79 @@ def test_allowed_actions_and_the_journal_refuses_the_same(tmp_path):
     import pytest
     with pytest.raises(ValueError):
         R.allowed(a, "fly")
+
+
+# -- decisions and deletes, with undo ----------------------------------------------------------------------
+
+def test_accept_and_undo_without_qt(tmp_path):
+    J, jr, b = _journal(tmp_path)
+    c = _done(J, jr, b, "C", J.CONTROL)
+    a = _done(J, jr, b, "A", J.ACCEPTED_AUTO)
+    rv = R.Review(jr)
+    out = rv.decide([c.id, a.id], True, "fine")                    # A is accepted already: left as it is
+    assert [j.id for j in out.decided] == [c.id] and not out.regenerated
+    assert jr.job(c.id).state == J.ACCEPTED_MANUAL and jr.job(c.id).export_pending
+    assert out.undo.kind == "review" and out.undo.until == jr.job(c.id).deliver_after > time.time()
+    done = rv.undo(out.undo)
+    assert done.ok and done.ids == [c.id] and jr.job(c.id).state == J.CONTROL and not jr.job(c.id).export_pending
+    assert not rv.decide([a.id], True).decided and rv.decide([a.id], True).undo is None
+
+
+def test_an_accept_delivered_meanwhile_is_not_undone(tmp_path):
+    J, jr, b = _journal(tmp_path)
+    c = _done(J, jr, b, "C", J.CONTROL)
+    rv = R.Review(jr, grace=0)
+    out = rv.decide([c.id], True)
+    assert out.undo.until == 0                                      # no undo time: the watcher may deliver now
+    done = rv.undo(out.undo)
+    assert not done.ok and "Not undone" in done.text and jr.job(c.id).state == J.ACCEPTED_MANUAL
+
+
+def test_an_edited_report_accepted_is_made_again_first(tmp_path):
+    J, jr, b = _journal(tmp_path)
+    c = _done(J, jr, b, "C", J.CONTROL, project_path=str(tmp_path / "p.gcws"), edited=1)
+    out = R.Review(jr).decide([c.id], True)
+    assert not out.decided and [j.id for j in out.regenerated] == [c.id] and out.undo is None
+    assert jr.job(c.id).state == J.QUEUED and jr.job(c.id).review_pending
+
+
+def test_prepare_can_skip_a_report(tmp_path):
+    J, jr, b = _journal(tmp_path)
+    c = _done(J, jr, b, "C", J.CONTROL)
+    seen = []
+    out = R.Review(jr).decide([c.id], False, "bad", prepare=lambda jid: seen.append(jid) and False)
+    assert seen == [c.id] and not out.decided and jr.job(c.id).state == J.CONTROL
+
+
+def test_undo_of_a_delete_puts_queued_samples_back_through_the_journal(tmp_path):
+    """The delete took a waiting sample out of the queue (REMOVED); undo shows it again and puts it back
+    as it was - REMOVED is left only this way or by "Process again"."""
+    J, jr, b = _journal(tmp_path)
+    w = jr.ensure_job("wf", "m", b["id"], "W", "W", ["W.D"], {}, "fp")
+    c = _done(J, jr, b, "C", J.CONTROL)
+    rv = R.Review(jr)
+    token = rv.delete([w.id, c.id])
+    assert jr.job(w.id).state == J.REMOVED and jr.job(w.id).deleted and jr.job(c.id).deleted
+    assert rv.delete([w.id]) is None                               # already deleted
+    done = rv.undo(token)
+    assert done.ok and sorted(done.ids) == sorted([w.id, c.id])
+    assert (jr.job(w.id).state, jr.job(w.id).reason, jr.job(w.id).deleted) == (w.state, w.reason, 0)
+    assert jr.job(c.id).state == J.CONTROL and not jr.job(c.id).deleted
+    # the journal's own step: only back from REMOVED, only into a queue state, only when shown
+    assert not jr.unremove(c.id, J.WAITING)
+    jr.delete([w.id])
+    assert not jr.unremove(w.id, J.WAITING) and not jr.unremove(w.id, J.ACCEPTED_MANUAL)
+
+
+def test_undo_of_a_batch_delete(tmp_path):
+    J, jr, b = _journal(tmp_path)
+    w = jr.ensure_job("wf", "m", b["id"], "W", "W", ["W.D"], {}, "fp")
+    single = _done(J, jr, b, "S", J.CONTROL)
+    jr.delete([single.id])                                         # deleted on its own before
+    rv = R.Review(jr)
+    token = rv.delete_batch(b["id"])
+    assert jr.batch_by_id(b["id"])["deleted"] and jr.job(w.id).state == J.REMOVED
+    assert rv.delete_batch(b["id"]) is None
+    rv.undo(token)
+    assert not jr.batch_by_id(b["id"])["deleted"] and jr.job(w.id).state == J.WAITING
+    assert jr.job(single.id).deleted                               # stays deleted

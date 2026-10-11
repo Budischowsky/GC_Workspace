@@ -478,23 +478,17 @@ def test_delete_hides_and_show_deleted_restores(qtbot, data, tmp_path, monkeypat
 
 
 def test_undo_of_a_delete_puts_queued_samples_back_in_the_queue(qtbot, data, tmp_path, monkeypatch):
-    """Delete takes a sample still in the queue out of it; Undo brings it back as it was (not "Removed"),
-    for one sample and for a whole batch."""
+    """The panel's Undo after a delete (the rules: test_report2_review)."""
     from gcws.automation import journal as J
     wf, jr, ids, batch = _seed(data, tmp_path)
     dock = _dock(jr, monkeypatch, qtbot)
     dock.select(ids["S-wait"])
     assert dock.delete_selected(confirm=False) == [ids["S-wait"]]
-    assert jr.job(ids["S-wait"]).state == J.REMOVED
+    assert jr.job(ids["S-wait"]).state == J.REMOVED and dock.b_undo.isVisibleTo(dock)
     assert dock.undo()
     back = jr.job(ids["S-wait"])
     assert back.state == J.WAITING and back.reason == "waiting for B" and not back.deleted
-    bid = jr.batch(wf.id, batch)["id"]
-    assert dock.delete_batch(bid, confirm=False)
-    assert jr.job(ids["S-wait"]).state == J.REMOVED and jr.job(ids["S-failed"]).state == J.REMOVED
-    assert dock.undo()
-    assert jr.job(ids["S-wait"]).state == J.WAITING and jr.job(ids["S-failed"]).state == J.FAILED
-    assert jr.job(ids["S-control"]).state == J.CONTROL and not any(j.deleted for j in jr.jobs())
+    assert not dock.undo()                                         # offered once
 
 
 def test_archive_and_reopen(qtbot, data, tmp_path, monkeypatch):

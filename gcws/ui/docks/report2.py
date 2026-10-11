@@ -122,7 +122,7 @@ class Report2Dock(QWidget):
         self.prepare_review = None               # optional main-window callback: save current job first
         self.mode = "todo"
         self.filter = "all"
-        self._undo_fn: Optional[Callable[[], str]] = None
+        self._undo: Optional[R.Undo] = None           # what the message bar offers to undo
         self._local = None                       # LocalJobs, made when first needed
         self._deliver: set = set()               # accepted here without a watcher: delivered after the undo time
         self._building = False
@@ -1213,7 +1213,7 @@ class Report2Dock(QWidget):
         if mods == Qt.ControlModifier:
             if key == Qt.Key_O and self.b_project.isEnabled():
                 return self.open_project
-            if key == Qt.Key_Z and self._undo_fn is not None:
+            if key == Qt.Key_Z and self._undo is not None:
                 return self.undo
         return None
 
@@ -1334,32 +1334,40 @@ class Report2Dock(QWidget):
 
     # -- messages and undo ---------------------------------------------------------------------------
 
-    def notify(self, text: str, undo: Optional[Callable[[], str]] = None, level: str = "info"):
-        """A message under the list for a few seconds, with "Undo" when ``undo`` is given."""
-        self._undo_fn = undo
+    def notify(self, text: str, undo: Optional[R.Undo] = None, level: str = "info"):
+        """A message under the list for a few seconds, with "Undo" when ``undo`` is given (until the
+        watcher may deliver the accept it takes back, however long the list took to refresh meanwhile)."""
+        self._undo = undo
         self.bar_text.setText(text)
         self.bar.setProperty("level", level)
         self.bar.style().unpolish(self.bar)
         self.bar.style().polish(self.bar)
         self.b_undo.setVisible(undo is not None)
         self.bar.show()
-        self._bar_timer.start(int(J.UNDO_GRACE * 1000))       # start(ms) of an accept changed the interval
+        if undo is not None and undo.until:
+            self._bar_timer.start(max(0, int((undo.until - time.time()) * 1000)))
+        else:
+            self._bar_timer.start(int(J.UNDO_GRACE * 1000))
 
     def dismiss_message(self):
         """The message ends: what it offered to undo is final now (and delivered)."""
         self._bar_timer.stop()
         self.bar.hide()
-        self._undo_fn = None
+        self._undo = None
         self.deliver_due()
 
     def undo(self) -> bool:
-        fn, self._undo_fn = self._undo_fn, None
-        if fn is None:
+        token, self._undo = self._undo, None
+        if token is None:
             return False
-        text = fn()
+        done = R.Review(self.journal).undo(token)
+        if token.kind == "review":
+            self._deliver.difference_update(done.ids)
+            if done.ids:
+                self.current = done.ids[0]
         self.refresh()
-        self.notify(text or "Undone.")
-        return bool(text) and not text.startswith("Not undone")
+        self.notify(done.text)
+        return done.ok
 
     def deliver_due(self):
         """Deliver what was accepted here while no watcher runs (once it can no longer be undone)."""
@@ -1394,52 +1402,25 @@ class Report2Dock(QWidget):
         Undo is offered for a few seconds; then the next report needing control is selected."""
         ids = list(job_ids) if job_ids is not None else [j.id for j in self.selected_jobs()]
         self.dismiss_message()                    # the previous decision is final now
-        action = "accept" if accept else "reject"
-        done, before, regenerated = [], [], []
-        for jid in ids:
-            job = self.journal.job(jid)
-            if job is None or not R.allowed(job, action):
-                continue
-            if self.prepare_review is not None and not self.prepare_review(jid):
-                continue
-            job = self.journal.job(jid)
-            snap = {k: job.row.get(k) for k in J.Journal.REVIEW_FIELDS} | {"revision": job.revision}
-            if accept and job.edited:                # made again first: it comes back as control needed
-                ok = self.journal.update_edited(jid, comment)
-                if ok:
-                    regenerated.append(jid)
-            else:
-                ok = self.journal.review(jid, accept, comment, grace=J.UNDO_GRACE if accept else 0)
-                if ok:
-                    before.append((jid, snap))
-            if ok:
-                done.append(job)
-        if not done:
+        out = R.Review(self.journal).decide(ids, accept, comment, self.prepare_review)
+        if not out.decided and not out.regenerated:
             self.refresh()
             self.notify("The report changed meanwhile (processed again?); look at it once more.", level="warn")
             return False
         if accept and not self._watcher_running():
-            self._deliver.update(jid for jid, _ in before)
-        for jid in regenerated:                   # made again here at once, not left to the watcher
-            self.local.run(jid)
+            self._deliver.update(j.id for j in out.decided)
+        for job in out.regenerated:               # made again here at once, not left to the watcher
+            self.local.run(job.id)
         nxt = self._next_control(ids[-1]) if len(ids) == 1 else None
         self.refresh()
         if nxt and nxt in self.jobs:
             self.select(nxt)
         verb = "Accepted" if accept else "Rejected"
-        decided = [j for j in done if j.id not in regenerated]
-        parts = [f"{verb} {self._names(decided)}" + (f" ({comment})" if comment and not accept else "")] \
-            if decided else []
-        if regenerated:
-            parts.append(f"{self._names([j for j in done if j.id in regenerated])}: the edited report is made "
-                         "again now - check it, then accept it")
-        self.notify("; ".join(parts) + ".", self._undo_review(before) if before else None)
-        # the watcher delivers an accept once its undo time from the accept on is over: Undo ends then too,
-        # however long the list took to refresh meanwhile
-        due = [float(j.deliver_after) for j in (self.journal.job(jid) for jid, _ in before)
-               if j is not None and j.deliver_after]
-        if due:
-            self._bar_timer.start(max(0, int((min(due) - time.time()) * 1000)))
+        parts = [f"{verb} {self._names(out.decided)}" + (f" ({comment})" if comment and not accept else "")]             if out.decided else []
+        if out.regenerated:
+            parts.append(f"{self._names(out.regenerated)}: the edited report is made again now - check it, "
+                         "then accept it")
+        self.notify("; ".join(parts) + ".", out.undo)
         return True
 
     def update_report(self, job_id: str) -> bool:
@@ -1499,16 +1480,6 @@ class Report2Dock(QWidget):
     def _stop_local(self):
         if self._local is not None:
             self._local.stop()
-
-    def _undo_review(self, before: list) -> Callable[[], str]:
-        def undo() -> str:
-            ok = [jid for jid, snap in before if self.journal.undo_review(jid, snap)]
-            self._deliver.difference_update(ok)
-            if ok:
-                self.current = ok[0]
-                return f"Undone: {len(ok)} report(s) back as before."
-            return "Not undone: the report was delivered meanwhile; reject it instead."
-        return undo
 
     def accept_with_comment(self) -> bool:
         from gcws.ui.dialogs.report2 import ReviewDialog
@@ -1581,12 +1552,13 @@ class Report2Dock(QWidget):
                 "deleted: the reports, the project and the delivered files stay. A sample still in the queue is "
                 "removed from it. View > Show deleted reports brings it back.") != QMessageBox.Yes:
             return []
-        before = {j.id: (j.state, j.reason) for j in jobs}
-        ids = self.journal.delete([j.id for j in jobs])
+        undo = R.Review(self.journal).delete([j.id for j in jobs])
         self.current = None
         self.refresh()
-        self.notify(f"Deleted {self._names(jobs)}.", self._undo_delete(before, lambda: self.journal.restore(ids)))
-        return ids
+        if undo is None:
+            return []
+        self.notify(f"Deleted {self._names(jobs)}.", undo)
+        return list(undo.restore)
 
     def restore_selected(self) -> list:
         ids = self.journal.restore([j.id for j in self.selected_jobs() if j.deleted])
@@ -1640,25 +1612,11 @@ class Report2Dock(QWidget):
                 "Nothing on disk is deleted. The watcher no longer looks at this folder. View > Show deleted "
                 "reports brings it back.") != QMessageBox.Yes:
             return False
-        before = {j.id: (j.state, j.reason) for j in self.journal.jobs(batch_id=bid) if not j.deleted}
-        ok = self.journal.delete_batch(bid)
+        undo = R.Review(self.journal).delete_batch(bid)
         self.refresh()
-        if ok:
-            self.notify(f"Deleted the batch {name}.",
-                        self._undo_delete(before, lambda: self.journal.restore_batch(bid)))
-        return ok
-
-    def _undo_delete(self, before: dict, restore: Callable) -> Callable[[], str]:
-        """Undo of a delete: shown again, and a sample the delete took out of the queue is back in it as it
-        was (``before``: job id -> (state, reason) before the delete)."""
-        def undo() -> str:
-            restore()
-            for jid, (state, reason) in before.items():
-                j = self.journal.job(jid)
-                if j is not None and not j.deleted and j.state == J.REMOVED and state in J.REMOVABLE:
-                    self.journal.update_job(jid, state=state, reason=reason)
-            return "Restored."
-        return undo
+        if undo is not None:
+            self.notify(f"Deleted the batch {name}.", undo)
+        return undo is not None
 
     def restore_batch(self, bid) -> bool:
         ok = self.journal.restore_batch(bid)
