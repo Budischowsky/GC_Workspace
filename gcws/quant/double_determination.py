@@ -1,7 +1,8 @@
 """A double determination: one replicate group of two runs, as the analyst reviews and accepts it.
 
 The group is a plain dict saved with the project (``ws.replicate_groups``): ``id``, ``name``, ``members``,
-``policy``, ``single`` (made a single determination by hand), the analyst's edits under the key of the quantification mode and unit
+``policy``, ``single`` (made a single determination by hand), ``reported`` (the run reported of a pair under
+Single determination only, when the analyst switched it), the analyst's edits under the key of the quantification mode and unit
 (:func:`gcws.quant.duplicate_view.edits_key`) and the ``signoff`` (who accepted, when, how many red rows
 were left open). This module owns the changes to it, and the one rule that binds them: any change of
 what was accepted (an edit, a reset, other members, another validity rule, a name of a substance)
@@ -95,6 +96,8 @@ def pair(groups: list, members: list, name: str) -> list:
     out = [g for g in out if g["members"] or g is target]
     if list(target["members"]) != list(members) or target.get("policy", "all") != "all" or target.get("single"):
         _stale(target)
+    if list(target["members"]) != list(members):
+        target.pop("reported", None)
     target["members"] = list(members)
     target["policy"] = "all"
     target.pop("single", None)
@@ -113,6 +116,18 @@ def make_single(groups: list, run: str, name: str) -> list:
     if was is not None and list(was["members"]) == [run]:
         _stale(g)                                # an incomplete double determination signed off before
     g["single"] = True
+    return out
+
+
+def set_reported(groups: list, group_id: str, run: str) -> list:
+    """``run`` is the reported determination of the pair (Single determination only), the other one the
+    control: another run in the report, so an acceptance no longer holds."""
+    out, g = _copy(groups, group_id)
+    if run not in g["members"]:
+        raise ValueError(f"{run} is not a determination of {g['name']}")
+    if g.get("reported") != run:
+        g["reported"] = run
+        _stale(g)
     return out
 
 
@@ -167,6 +182,7 @@ def set_members(groups: list, group_id: str, members: list) -> list:
     out, g = _copy(groups, group_id)
     if list(g["members"]) != list(members):
         g["members"] = list(members)
+        g.pop("reported", None)
         _stale(g)
     return out
 

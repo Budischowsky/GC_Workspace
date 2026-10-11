@@ -204,6 +204,17 @@ In Report² the information line names the control determination. Red substances
 **Control needed also in a single determination** in that rule to have them checked anyway. Ticking or
 clearing the box changes what an accepted double determination means: it has to be accepted again.
 
+### Switching the reported determination
+
+With **Single determination only** the Replicates panel shows, next to **A** and **B**, which run is reported
+and which is the control (*Reported: … · control: …*). When the control is the better run - A was
+mis-injected, for example - click **Switch reported determination**: the other run goes into the report and the
+first one becomes the control. The choice is saved with the pair in the project; `Ctrl+Z` takes it back, and the
+audit trail notes *Reported determination switched* with the run reported before and after. A pair accepted
+before has to be accepted again (**Accept again**). In a report opened with **Edit in GC Workspace** the switch
+is a change of the report: saving sends it back to control in Report² with a new revision, and **Update
+report** makes it from the run you chose.
+
 ## Three or more determinations
 
 Select a group of three or more in the list **Determinations** on the left: its worksheet shows the means.

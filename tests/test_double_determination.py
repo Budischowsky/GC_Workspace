@@ -1,5 +1,6 @@
 """The double determination's group changes (gcws.quant.double_determination): no GUI, no workspace."""
 import copy
+import pytest
 
 from gcws.quant import double_determination as DD
 
@@ -131,3 +132,23 @@ def test_toggling_single_determination_only_stales_an_accepted_pair():
     lone = [{"id": "g2", "name": "single", "members": ["c"], "signoff": {"by": "anna", "at": AT, "open": 0}}]
     assert DD.is_accepted(DD.method_changed(lone, {}, SD, NAMES)[0])
     assert gs == groups()                                        # the list passed in is untouched
+
+
+def test_switching_the_reported_determination_of_a_single_determination_pair():
+    """Issue 05: the analyst reports B instead of A; the choice is kept with the group and stales an acceptance."""
+    from gcws.quant import determination as DT
+    pair_ab = {"id": "g1", "name": "x", "members": ["a", "b"]}
+    assert DT.of(SD, pair_ab, NAMES).reported == ("a",)                     # the default: A
+    gs = DD.set_reported(groups(), "g1", "b")
+    assert g1(gs)["reported"] == "b" and g1(gs)["signoff"]["stale"] and g1(gs)["signoff"]["by"] == "anna"
+    assert (DT.of(SD, g1(gs), NAMES).reported, DT.of(SD, g1(gs), NAMES).control) == (("b",), "a")
+    assert DT.of({}, g1(gs), NAMES).reported == ("a", "b")                  # flag off: both reported
+    accepted = DD.accept(gs, "g1", "bob", AT, 0)
+    assert DD.is_accepted(g1(DD.set_reported(accepted, "g1", "b")))          # the same run again: no change
+    assert g1(DD.set_reported(accepted, "g1", "a"))["signoff"]["stale"]
+    with pytest.raises(ValueError):
+        DD.set_reported(gs, "g1", "c")
+    # other members: the choice no longer applies
+    assert "reported" not in g1(DD.set_members(gs, "g1", ["a", "c"]))
+    assert "reported" not in g1(DD.pair(gs, ["a", "c"], "new"))
+    assert groups() == groups() and "reported" not in g1(groups())

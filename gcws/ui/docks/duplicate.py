@@ -164,8 +164,16 @@ class DuplicatePage(QWidget):
         menu.setToolTipsVisible(True)
         more.setMenu(menu)
         # Compare and Report² first: they stay in view in a narrow dock (choosing A or B compares anyway)
+        # Single determination only: which run of the pair is reported, which is the control
+        self.reported_note = theme.chip("", "info")
+        self.reported_note.setVisible(False)
+        self.b_switch = QPushButton("Switch reported determination")
+        self.b_switch.setToolTip("Report the other run of the pair; this one becomes the control determination")
+        self.b_switch.clicked.connect(self.switch_reported)
+        self.b_switch.setVisible(False)
         pick = QHBoxLayout()
-        for w in (self.b_compare, self.b_report2, QLabel("A"), self.a, swap, QLabel("B"), self.b):
+        for w in (self.b_compare, self.b_report2, QLabel("A"), self.a, swap, QLabel("B"), self.b,
+                  self.reported_note, self.b_switch):
             pick.addWidget(w)
         pick.addStretch(1)
         pick.addWidget(more)
@@ -449,6 +457,34 @@ class DuplicatePage(QWidget):
             self.ws.log("Single determination made by hand", self.ws.runs[a].name, "",
                         f"pair {before}" if before and len(was["members"]) == 2 else "", "single determination")
         self.compare(sync=False)
+
+    def switch_reported(self) -> None:
+        """Single determination only: report the control determination of the pair instead (undoable, in the
+        audit trail; an accepted pair has to be accepted again)."""
+        det = self.determination()
+        if det.control is None or det.control not in self.ws.runs:
+            return
+        self._sync_group(self.members)
+        g = self.group()
+        if g is None:
+            return
+        before, after = self.ws.runs[det.reported[0]].name, self.ws.runs[det.control].name
+        self.set_groups(DD.set_reported(self.ws.replicate_groups, g["id"], det.control),
+                        f"reported determination {after}")
+        self.ws.log("Reported determination switched", self._names(), "", before, after)
+        self._update_accept()
+
+    def _update_reported(self) -> None:
+        """The chip and button of the reported / control determination (a pair under Single determination only)."""
+        det = self.determination()
+        show = det.control is not None and all(m in self.ws.runs for m in det.members)
+        self.reported_note.setVisible(show)
+        self.b_switch.setVisible(show)
+        if show:
+            rep, ctl = self.ws.runs[det.reported[0]].name, self.ws.runs[det.control].name
+            theme.set_chip(self.reported_note, f"Reported: {rep} · control: {ctl}", "info")
+            self.reported_note.setToolTip(f"Single determination only: {rep} goes into the report, {ctl} is only "
+                                          "the control determination (compared, not reported)")
 
     # -- compute ---------------------------------------------------------------------------
 
@@ -891,6 +927,7 @@ class DuplicatePage(QWidget):
 
     def _update_accept(self) -> None:
         """Accept: possible once two determinations are compared; red rows still open keep their default."""
+        self._update_reported()
         g = self.group()
         signoff = (g or {}).get("signoff") or {}
         n_open = self.decision_counts()[0]

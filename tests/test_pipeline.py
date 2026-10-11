@@ -377,3 +377,22 @@ def test_single_determination_only_job(qapp, samples, data, tmp_path):
     sheet = " | ".join(str(c.value) for ws in load_workbook(sd.files["r1"]["xlsx"]).worksheets
                       for row in ws.iter_rows() for c in row if c.value is not None)
     assert Path(A).stem in sheet and Path(B).stem not in sheet
+    # issue 05: the analyst reports B instead (Replicates), and the report made again has B's values
+    from gcws.automation import headless as H
+    from gcws.core import project as P
+    from gcws.quant import double_determination as DD
+    ws = H.new_workspace()
+    H.open_project(ws, sd.project)
+    g = ws.replicate_groups[0]
+    b = next(m for m in g["members"] if ws.runs[m].run.path.name == B)
+    ws.replicate_groups = DD.set_reported(ws.replicate_groups, g["id"], b)
+    P.save(ws, sd.project)
+    again = PL.run_job(spec(batch, tmp_path / "sd2", mode="rereport", project_path=sd.project,
+                            reports=[{"node": "r1", "kind": "nias", "formats": ["xlsx"]}]))
+    assert again.state in (PL.ACCEPTED_AUTO, PL.CONTROL), again.reason
+    dd = again.evidence["double_determination"]
+    assert dd["reported"] == [Path(B).stem] and dd["control"] == Path(A).stem
+    sheet = " | ".join(str(c.value) for ws in load_workbook(again.files["r1"]["xlsx"]).worksheets
+                      for row in ws.iter_rows() for c in row if c.value is not None)
+    assert Path(B).stem in sheet and Path(A).stem not in sheet
+    assert label_of(again.files["r1"]["xlsx"]) == "PA 26.007, single determination"

@@ -9,7 +9,8 @@
   more runs, all reported) or :data:`INCOMPLETE` (a run with a suffix whose partner never came: processed
   alone, but it needs control);
 - ``reported``: the runs whose values go into the report; ``control``: the run compared with the reported
-  one but not reported (a single determination of a pair), else None;
+  one but not reported (a single determination of a pair), else None. The reported run of such a pair is
+  A unless the analyst switched it (``reported`` in the group, :func:`gcws.quant.double_determination.set_reported`);
 - ``label``: how the report names it (``{determination}`` of a template).
 
 The automation job, its Report² evidence, the reports and the Replicates panel ask this module instead
@@ -79,7 +80,8 @@ def of(quant: Optional[dict], group: Optional[dict], names: dict) -> Determinati
     """The determination of ``group`` (see the module text); runs missing from ``names`` do not count."""
     members = tuple(m for m in (group or {}).get("members") or [] if m in names)
     if len(members) == 2 and single_only(quant):
-        rep = _reported(members, names)
+        chosen = (group or {}).get("reported")
+        rep = chosen if chosen in members else _reported(members, names)
         return Determination(SINGLE, members, (rep,), next(m for m in members if m != rep))
     if len(members) >= 2:
         return Determination(DOUBLE, members, members)

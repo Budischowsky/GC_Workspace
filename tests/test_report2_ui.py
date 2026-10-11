@@ -1212,3 +1212,39 @@ def test_single_determination_by_hand_is_accepted_and_listed_in_report2(qtbot, w
     page._stack().undo()                                                     # the sign-off undone
     assert not page.group().get("signoff")
     ws.dirty = False
+
+
+def test_switching_the_reported_determination_in_replicates(qtbot, win, samples):
+    """Issue 05: under Single determination only the Replicates panel marks the reported and the control
+    determination; Switch reported determination reports B (undoable, in the audit trail, stales an accept)."""
+    from gcws.quant import double_determination as DD
+    from test_pipeline import MIGRATION, lib_oracle
+    _load(qtbot, win, samples, ["07_", "08_", "11_"])
+    ws = win.ws
+    lib_oracle(ws, [s.id for s in ws.states() if s.role == "sample"])
+    ws.quant["migration"] = dict(MIGRATION)
+    ws.quant["single_only"] = True
+    ws.recompute_quant()
+    a = next(s.id for s in ws.states() if s.name.startswith("07_"))
+    b = next(s.id for s in ws.states() if s.name.startswith("11_"))
+    win.loaded_samples.pairRequested.emit(a, b)
+    page = win.replicates.duplicate
+    assert page.determination().reported == (a,) and page.determination().control == b
+    assert not page.b_switch.isHidden() and not page.reported_note.isHidden()
+    assert page.reported_note.text().startswith(f"Reported: {ws.runs[a].name}")
+    g = page.group()
+    ws.replicate_groups = DD.accept(ws.replicate_groups, g["id"], "anna", "2026-10-11T12:00:00", 0)
+    page.b_switch.click()
+    assert page.determination().reported == (b,) and page.determination().control == a
+    assert page.group()["reported"] == b and page.group()["signoff"]["stale"]
+    assert page.reported_note.text().startswith(f"Reported: {ws.runs[b].name}")
+    assert page.b_accept.text() == "Accept again"
+    rec = next(r for r in ws.audit.records if r.action == "Reported determination switched")
+    assert (rec.before, rec.after) == (ws.runs[a].name, ws.runs[b].name)
+    page._stack().undo()
+    assert page.determination().reported == (a,)
+    ws.quant["single_only"] = False
+    ws.quantChanged.emit()
+    page._update_accept()
+    assert page.b_switch.isHidden()                                          # a double determination: both reported
+    ws.dirty = False

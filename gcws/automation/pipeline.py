@@ -197,8 +197,10 @@ def run_job(spec: dict, *, progress: Callable[[str], None] = log.info,
                                   for c, k in res.best.items()}
             if any(found.values()):
                 ws.push_quant("Automation: ISTDs detected", ID.with_bindings(ws, found), "ISTD bindings")
-    ws.replicate_groups = [{"id": group.get("key") or "g", "name": group["name"], "members": members,
-                            "policy": group.get("policy", "all")}]
+    # a report again keeps the analyst's group (edits, the reported determination), else a new one
+    kept = next((g for g in ws.replicate_groups if sorted(g.get("members") or []) == sorted(members)), None)         if mode == "rereport" else None
+    ws.replicate_groups = [kept or {"id": group.get("key") or "g", "name": group["name"], "members": members,
+                                    "policy": group.get("policy", "all")}]
     det = DT.of_workspace(ws, ws.replicate_groups[0])
     dd: dict = {"members": [ws.runs[m].name for m in members], "planned": list(group.get("members") or []),
                 "pairing": "" if det.compared else "single", **determination_evidence(ws, det)}

@@ -250,6 +250,7 @@ The double-determination page:
 | Control | What it does |
 |---|---|
 | **A**, **B** boxes | The two determinations. **— single determination —** as **B** reports A alone (taken out of its pair; see [Making a single determination by hand](wf-double.md#making-a-single-determination-by-hand)). |
+| **Reported: … · control: …**, **Switch reported determination** | Only with **Single determination only**: which run of the pair goes into the report and which is the control. The button reports the other run (`Ctrl+Z`, audit trail; an accepted pair is accepted again). See [Switching the reported determination](wf-double.md#switching-the-reported-determination). |
 | **⇄** | Swaps A and B. |
 | **Compare** | Pairs the two determinations and fills the list. |
 | **More** | **Settings…** (pairing, gap filling, consensus name), **3+ determinations…** (the worksheet of the first group of three or more) and **Reset all** (undoes every change made in this double determination). |
