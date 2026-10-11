@@ -246,6 +246,12 @@ def test_single_determination_rule():
     ev = {"double_determination": {"members": ["a", "b"], "pairing": "features", "text": "a + b: 3 features"}}
     res = RU.evaluate(RU.default_rules(), ev)
     assert res.status == RU.ACCEPTED_AUTO and res.findings[0].level == "info"
+    # a single determination is information, an incomplete double determination needs control
+    sd = {"members": ["07_x"], "pairing": "single", "determination": "single", "reported": ["07_x"]}
+    res = RU.evaluate(RU.default_rules(), {"double_determination": sd})
+    assert res.status == RU.ACCEPTED_AUTO and [(f.level, f.text) for f in res.findings] ==         [("info", "single determination")]
+    res = RU.evaluate(RU.default_rules(), {"double_determination": dict(sd, determination="incomplete")})
+    assert res.status == RU.CONTROL
 
 
 def test_template_report_in_the_automation(qapp, samples, data, tmp_path):
@@ -272,3 +278,60 @@ def test_template_report_in_the_automation(qapp, samples, data, tmp_path):
     again = PL.run_job(spec(batch, tmp_path / "job2", mode="rereport", project_path=res.project,
                             reports=[{"node": "r1", "kind": "template", "formats": ["xlsx"]}]))
     assert Path(again.files["r1"]["xlsx"]).name.endswith("_Customer_A_Report.xlsx")
+
+
+PLAIN = "07_26016606_130m_min_GIOSUN1635.D"
+
+
+def label_of(xlsx) -> str:
+    """The determination line of a NIAS report (the second header line of its first sheet)."""
+    from openpyxl import load_workbook
+    return str(load_workbook(xlsx).worksheets[0]["A2"].value)
+
+
+def test_a_run_without_a_suffix_is_a_single_determination(qapp, samples, data, tmp_path):
+    """Issue 02: a lone run without a replicate suffix is a single determination, reported in the double
+    determination layout; Report² gets an information line, not "Double determination incomplete". The
+    batch report lists it with a double determination."""
+    from gcws.automation import batch as BA
+    from gcws.automation import pipeline as PL
+    batch = copy_batch(samples, tmp_path / "watch", ["06_", "07_", "08_", "11_", "13_"])
+    shutil.move(str(batch / A), str(batch / PLAIN))
+    shutil.copytree(batch / PLAIN, batch / A)
+    blanks = {"blank": ["08_EtOH.D"], "blank_istd": ["06_EtOH_ISTD.D"]}
+    import copy
+    from gcws.report import template as TP
+    method = copy.deepcopy(METHOD)
+    method["sections"]["report_template"] = TP.stamped(TP.preset("NIAS"), "Customer A")
+    sd = PL.run_job(spec(batch, tmp_path / "sd", group={"key": "k", "name": "07", "members": [PLAIN]},
+                         blanks=blanks, method=method,
+                         reports=[{"node": "r1", "kind": "nias", "formats": ["xlsx"]},
+                                  {"node": "r2", "kind": "template", "formats": ["xlsx"]}]), identify=lib_oracle)
+    assert sd.state in (PL.ACCEPTED_AUTO, PL.CONTROL), sd.reason
+    assert label_of(sd.files["r1"]["xlsx"]) == "PA 26.007, single determination"
+    from openpyxl import load_workbook
+    head = [str(c.value) for row in load_workbook(sd.files["r2"]["xlsx"]).worksheets[0].iter_rows(max_row=6)
+            for c in row if c.value]
+    assert any("single determination" in v for v in head), head            # {determination} of the template
+    dd = sd.evidence["double_determination"]
+    assert dd["determination"] == "single" and dd["reported"] == dd["members"] and len(dd["members"]) == 1
+    found = [f for f in sd.findings if f["rule"] == "double_determination"]
+    assert [(f["level"], f["text"]) for f in found] == [("info", "single determination")]
+    # a lone _A whose partner never came stays an incomplete double determination
+    inc = PL.run_job(spec(batch, tmp_path / "inc", group={"key": "k", "name": "07", "members": [A]},
+                          blanks=blanks, reports=[]), identify=lib_oracle)
+    assert inc.evidence["double_determination"]["determination"] == "incomplete"
+    found = [f for f in inc.findings if f["rule"] == "double_determination"]
+    assert [f["level"] for f in found] == ["control"] and "one determination only" in found[0]["text"]
+    # the batch report lists the single and the double determination together
+    pair = PL.run_job(spec(batch, tmp_path / "dd", reports=[{"node": "r1", "kind": "nias", "formats": ["xlsx"]}]),
+                      identify=lib_oracle)
+    assert label_of(pair.files["r1"]["xlsx"]) == "PA 26.007, double determination"
+    entries = [{"name": "07", "state": sd.state, "xlsx": sd.files["r1"]["xlsx"], "findings": sd.findings},
+               {"name": "26016606", "state": pair.state, "xlsx": pair.files["r1"]["xlsx"], "findings": []}]
+    files, warnings = BA.batch_report("26016605_GIOSUN1635", entries, tmp_path / "batch",
+                                      ["batch_docx", "batch_xlsx"])
+    assert not warnings and Path(files["batch_docx"]).is_file()
+    from openpyxl import load_workbook
+    sh = load_workbook(files["batch_xlsx"]).active
+    assert [sh.cell(4, 1).value, sh.cell(5, 1).value] == ["07", "26016606"]

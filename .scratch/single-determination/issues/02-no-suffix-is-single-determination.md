@@ -11,11 +11,21 @@ A lone suffixed run whose partner never came stays an incomplete double determin
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Automation job (seam S1): a lone run without a suffix gives a report labelled single determination in the double determination layout with one value column
-- [ ] Its Report² findings: an info line, no "Double determination incomplete"
-- [ ] A lone `_A` (partner missing) still gets "Double determination incomplete" at control level
-- [ ] A batch report with one single and one double determination lists both
-- [ ] Template report: `{determination}` reads "single determination"
-- [ ] The manual (F1) explains single vs incomplete double determination; the manual coverage test passes
+- [x] Automation job (seam S1): a lone run without a suffix gives a report labelled single determination in the double determination layout with one value column
+- [x] Its Report² findings: an info line, no "Double determination incomplete"
+- [x] A lone `_A` (partner missing) still gets "Double determination incomplete" at control level
+- [x] A batch report with one single and one double determination lists both
+- [x] Template report: `{determination}` reads "single determination"
+- [x] The manual (F1) explains single vs incomplete double determination; the manual coverage test passes
+
+## Comments
+
+- 2026-10-11: rule "Double determination incomplete" fires only for an incomplete double determination; a
+  single determination gets an info finding "single determination". The classic NIAS report written from one
+  run was labelled "double determination" (only an Einzelbestimmung workbook got "single"): GCWS-PATCH in
+  `NIAS Reporting v27.py` labels a Doppelbestimmung sheet from one determination "single determination".
+  Manual: wf-double.md "Single determination", rule table in wf-automation.md. Test:
+  `test_a_run_without_a_suffix_is_a_single_determination` (S1: NIAS + template label, info line, lone `_A`
+  control, batch report with SD + DD). VENDORED.md hashes were already stale before; not regenerated.

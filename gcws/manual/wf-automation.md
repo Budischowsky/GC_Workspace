@@ -334,7 +334,7 @@ double determination. A report accepted by mistake goes back with right-click > 
 | **Processing problems** | yes | the report could not be made completely. |
 | **Processed without a blank** | yes | you allowed a sample to be processed without a blank. |
 | **Double determination: substances to decide** | yes | the double determination marked a substance red. Yellow ones can be listed too. |
-| **Double determination incomplete** | yes | the sample has one determination only, or the two could not be paired. |
+| **Double determination incomplete** | yes | a run with a replicate suffix has no partner (an incomplete double determination), or the two could not be paired. A single determination (a run without a suffix) is only listed as information. |
 | **No SML above the reporting limit** | no | a substance at or above the reporting limit has no SML. |
 | **Substance above a concentration** | no | any substance, or those matching a name or CAS pattern, is above a concentration you set. |
 | **Many unidentified substances** | no | there are more unidentified substances than allowed. |

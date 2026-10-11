@@ -156,6 +156,21 @@ also in the **Report** menu.
 in [How the double determination works](double-determination.md#settings). **Pairing: Classic** switches back
 to the pairing by name and retention time of earlier versions.
 
+## Single determination
+
+A sample can also be reported from one run: a **single determination**.
+
+- A run **without a replicate suffix** (`_A`/`_B`, `_1`/`_2`, `rep1`) is always a single determination. Its
+  report looks like a double determination's - the same layout and header - with one value column, and is
+  labelled *single determination* (the template field `{determination}` too). A batch report lists single
+  and double determinations together.
+- A run **with** a suffix whose partner never came (an `_A` without its `_B`) is an **incomplete double
+  determination**: it is processed and reported alone, but Report² flags it with **Double determination
+  incomplete** so that the missing run is noticed.
+
+In Report² a single determination gets the information line *single determination* and is not flagged as
+incomplete.
+
 ## Three or more determinations
 
 Select a group of three or more in the list **Determinations** on the left: its worksheet shows the means.

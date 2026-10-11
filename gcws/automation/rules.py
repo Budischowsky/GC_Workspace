@@ -55,9 +55,10 @@ RULES = {
                        "(made consistent automatically: gap fill, name from both hit lists) can be listed too.",
                        True, {"yellow": False}),
     "double_determination": ("Double determination incomplete",
-                             "The sample has one determination only, or its determinations could not be paired "
-                             "(feature double determination failed). What the automation did (pairing, gap fills, "
-                             "names, harmonised boundaries) is listed as information.",
+                             "A run with a replicate suffix has no partner (an incomplete double determination), or "
+                             "the determinations could not be paired (feature double determination failed). A "
+                             "single determination is listed as information, and so is what the automation did "
+                             "(pairing, gap fills, names, harmonised boundaries).",
                              True, {"single": True, "summary": True}),
     "deconvolution": ("Automatic deconvolution split",
                       "A peak split automatically by deconvolution whose areas come from the MS component "
@@ -373,9 +374,13 @@ def _double_determination(rule: Rule, ev: dict) -> list[Finding]:
         return []
     out = []
     members = ", ".join(dd.get("members") or [])
-    if _determination(dd) in (DT.SINGLE, DT.INCOMPLETE) and rule.p("single"):
+    kind = _determination(dd)
+    if kind == DT.INCOMPLETE and rule.p("single"):
         out.append(Finding(rule.id, rule.level, f"one determination only ({members}); no double determination",
                            member=members))
+    elif kind == DT.SINGLE:
+        out.append(Finding(rule.id, "info", dd.get("determination_note") or "single determination",
+                           member=", ".join(dd.get("reported") or []) or members))
     elif dd.get("pairing") == "failed":
         out.append(Finding(rule.id, rule.level, f"the determinations could not be paired: {dd.get('error', '')}",
                            member=members))
