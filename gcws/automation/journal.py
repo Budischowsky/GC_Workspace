@@ -97,6 +97,22 @@ CREATE INDEX IF NOT EXISTS events_job ON events(job_id);
 _JSON = ("members", "blanks", "files", "summary", "evidence", "findings", "override", "plan",
          "review_pending")
 
+#: what an accept or reject sets (besides the state), which :meth:`Journal.undo_review` puts back
+_REVIEW = ("reviewer", "comment", "reviewed_at", "export_pending", "deliver_after")
+
+
+def new_revision(mode: str = "full") -> dict:
+    """The columns a new revision of a job starts from, whatever made it (the raw data changed, process
+    again, update report, the batch folder put back): unreviewed, undelivered, not edited, not waiting
+    for a retry, processed from the raw data (``mode`` "full") or reported again from the analyst's
+    project ("rereport"). The caller adds the revision, state and reason."""
+    return {"mode": mode, **dict.fromkeys(_REVIEW), "export_pending": 0, "deliver_after": 0,
+            "export_state": "none", "edited": 0, "review_pending_json": None, "attempts": 0, "not_before": 0}
+
+
+def _sets(fields: dict) -> str:
+    return ", ".join(f"{k}=?" for k in fields)
+
 
 def finding_key(finding: dict) -> tuple:
     """Stable identity of a finding, independent of its measured value or wording."""
@@ -307,11 +323,10 @@ class Journal:
             for j in self.jobs(batch_id=batch_id):
                 if j.workflow_id == MANUAL_WORKFLOW or j.state == PROCESSING:
                     continue
-                self.con.execute(
-                    "UPDATE jobs SET state=?, revision=revision+1, input_fp='', reason=?, attempts=0, not_before=0, "
-                    "reviewer=NULL, comment=NULL, reviewed_at=NULL, export_pending=0, export_state='none', edited=0, "
-                    "review_pending_json=NULL, deleted=0, deliver_after=0, mode='full', override_json=NULL "
-                    "WHERE id=?", (WAITING, reason, j.id))
+                fields = dict(new_revision(), state=WAITING, input_fp="", reason=reason, deleted=0,
+                              override_json=None)
+                self.con.execute(f"UPDATE jobs SET revision=revision+1, {_sets(fields)} WHERE id=?",
+                                 (*fields.values(), j.id))
                 done.append(j.id)
             self.con.execute("DELETE FROM runs WHERE batch_id=?", (batch_id,))
             self.con.execute("UPDATE batches SET deleted=0, missing=0, reopened=0, plan_json=NULL, seq_completed=0, "
@@ -482,13 +497,12 @@ class Journal:
             if cur.state == REMOVED or cur.deleted:
                 return cur                             # data put in again brings it back (put_in_again)
             if cur.input_fp != input_fp and cur.state not in (QUEUED, PROCESSING, WAITING):
-                self.con.execute(
-                    "UPDATE jobs SET revision=revision+1, members_json=?, blanks_json=?, input_fp=?, state=?, "
-                    "reason=?, attempts=0, reviewer=NULL, comment=NULL, reviewed_at=NULL, export_pending=0, "
-                    "edited=0, review_pending_json=NULL, "
-                    "not_before=0 WHERE id=?",
-                    (json.dumps(members), json.dumps(blanks), input_fp, state, "input changed: " + (reason or ""),
-                     cur.id))
+                # new raw data: processed by the method as it is (no override, not from an edited project)
+                fields = dict(new_revision(), members_json=json.dumps(members), blanks_json=json.dumps(blanks),
+                              input_fp=input_fp, state=state, reason="input changed: " + (reason or ""),
+                              override_json=None)
+                self.con.execute(f"UPDATE jobs SET revision=revision+1, {_sets(fields)} WHERE id=?",
+                                 (*fields.values(), cur.id))
                 self._event_raw("warning", workflow_id, batch_id, cur.id,
                                 f"{group_name}: the raw data changed; processed again (revision {cur.revision + 1})")
             elif cur.state == WAITING or (cur.state == NOT_PROCESSED and cur.input_fp != input_fp):
@@ -625,9 +639,9 @@ class Journal:
                 return False
             intent = {"user": user, "comment": comment,
                       "findings": [finding_key(f) for f in (job.findings or []) if f.get("level", "control") == "control"]}
-            ok = self.transition(job_id, job.state, QUEUED, mode="rereport", revision=job.revision + 1,
-                                 queued_at=time.time(), not_before=0, attempts=0, export_pending=0,
-                                 reviewer=None, comment=None, reviewed_at=None, review_pending=intent)
+            fields = dict(new_revision("rereport"), revision=job.revision + 1, queued_at=time.time(),
+                          review_pending_json=json.dumps(intent, default=str))
+            ok = self.transition(job_id, job.state, QUEUED, **fields)
             if ok:
                 self._event_raw("info", job.workflow_id, job.batch_id, job_id,
                                 f"{job.group_name}: report update requested by {user}; making the edited report "
@@ -679,7 +693,7 @@ class Journal:
             return ok
 
     #: the fields a review changes, which :meth:`undo_review` puts back
-    REVIEW_FIELDS = ("state", "reviewer", "comment", "reviewed_at", "export_pending", "deliver_after")
+    REVIEW_FIELDS = ("state", *_REVIEW)
 
     def undo_review(self, job_id: str, before: dict, user: Optional[str] = None) -> bool:
         """Take back an accept or reject: ``before`` holds :attr:`REVIEW_FIELDS` as they were. Only
@@ -795,9 +809,7 @@ class Journal:
         j = self.job(job_id)
         if j is None:
             return False
-        fields = {"mode": mode, "attempts": 0, "not_before": 0, "queued_at": time.time(), "reviewer": None,
-                  "comment": None, "reviewed_at": None, "export_pending": 0, "revision": int(j.revision or 1) + 1,
-                  "edited": 0, "review_pending": None, "deliver_after": 0}
+        fields = dict(new_revision(mode), queued_at=time.time(), revision=int(j.revision or 1) + 1)
         if override is not None:
             fields["override"] = override
         ok = self.transition(job_id, (CONTROL, ACCEPTED_AUTO, ACCEPTED_MANUAL, REJECTED, FAILED, NOT_PROCESSED,

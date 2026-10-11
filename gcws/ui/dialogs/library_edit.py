@@ -24,7 +24,8 @@ def entry_from_spectrum(win) -> dict:
     spec = sp.spec
     out["rt"] = round(float(spec.rt), 3)
     ident = st.ident_set(ws.signal_key).for_peak(peak) if peak is not None else None
-    if ident is not None and ident.name and not ident.name.lower().startswith("unknown"):
+    from gcws.core.ident import is_unidentified
+    if ident is not None and not is_unidentified(ident.name):
         out["name"] = ident.name
         out["cas"] = ident.cas
         out["formula"] = ident.formula

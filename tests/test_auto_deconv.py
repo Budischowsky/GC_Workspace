@@ -403,7 +403,7 @@ def test_report2_rule_lists_ms_proportion_splits_and_split_istds():
     assert sum("MS component proportions" in t for t in texts) == 1        # the one below the limit is left out
     assert any("IS1" in t and "90 %" in t for t in texts)
     assert any("3 peak(s) split automatically into 4 fragments (2 by MS proportions)" in t for t in texts)
-    assert RU.evaluate([rule], ev).status == RU.ACCEPTED_AUTO              # note only by default
+    assert RU.evaluate([rule], ev).clean              # note only by default
     assert next(r for r in RU.from_list([]) if r.id == "deconvolution").level == "info"
 
 

@@ -245,13 +245,13 @@ def test_single_determination_rule():
     assert res.status == RU.CONTROL and "one determination only" in res.findings[0].text
     ev = {"double_determination": {"members": ["a", "b"], "pairing": "features", "text": "a + b: 3 features"}}
     res = RU.evaluate(RU.default_rules(), ev)
-    assert res.status == RU.ACCEPTED_AUTO and res.findings[0].level == "info"
+    assert res.status == RU.CONTROL and res.clean and res.findings[0].level == "info"
     # a single determination is information, an incomplete double determination needs control
     sd = {"members": ["07_x"], "pairing": "single", "determination": "single", "reported": ["07_x"]}
     res = RU.evaluate(RU.default_rules(), {"double_determination": sd})
-    assert res.status == RU.ACCEPTED_AUTO and [(f.level, f.text) for f in res.findings] ==         [("info", "single determination")]
+    assert res.status == RU.CONTROL and res.clean and [(f.level, f.text) for f in res.findings][:1] ==         [("info", "single determination")]
     res = RU.evaluate(RU.default_rules(), {"double_determination": dict(sd, determination="incomplete")})
-    assert res.status == RU.CONTROL
+    assert res.status == RU.CONTROL and not res.clean
 
 
 def test_template_report_in_the_automation(qapp, samples, data, tmp_path):
@@ -345,14 +345,14 @@ def test_single_determination_only_rules():
     sd = {"members": ["a", "b"], "pairing": "features", "determination": "single", "reported": ["a"],
           "control": "b"}
     res = RU.evaluate(RU.default_rules(), {"double_determination": sd, "features": red})
-    assert res.status == RU.ACCEPTED_AUTO
-    assert [(f.rule, f.level) for f in res.findings] == [("feature_review", "info"), ("double_determination", "info")]
+    assert res.status == RU.CONTROL and res.clean
+    assert [(f.rule, f.level) for f in res.findings][:2] == [("feature_review", "info"), ("double_determination", "info")]
     assert "b is the control determination" in res.findings[1].text
     rules = RU.default_rules()
     next(r for r in rules if r.id == "feature_review").params["single_control"] = True
-    assert RU.evaluate(rules, {"double_determination": sd, "features": red}).status == RU.CONTROL
+    assert not RU.evaluate(rules, {"double_determination": sd, "features": red}).clean
     dd = dict(sd, determination="double", reported=["a", "b"], control="")
-    assert RU.evaluate(RU.default_rules(), {"double_determination": dd, "features": red}).status == RU.CONTROL
+    assert not RU.evaluate(RU.default_rules(), {"double_determination": dd, "features": red}).clean
 
 
 def test_single_determination_only_job(qapp, samples, data, tmp_path):

@@ -8,7 +8,7 @@ from typing import Optional
 
 from PySide6.QtCore import QObject, QTimer, Signal as QtSignal
 
-from gcws.core.ident import Identification
+from gcws.core.ident import Identification, is_unidentified
 from gcws.ms.spectra import extract
 from gcws.ms.assignment import override_for, fragment_id
 
@@ -96,8 +96,7 @@ def build_items(ws, run_ids: list[str], key: str, spectrum_mode: str,
             if ident is not None and (ident.manual or ident.istd):
                 protected += 1
                 continue
-            if ident is not None and skip_identified and ident.name \
-                    and not ident.name.casefold().startswith("unknown"):
+            if ident is not None and skip_identified and not is_unidentified(ident.name):
                 continue                               # unknowns are searched again
             if rescan_below is not None and ident is not None and ident.score is not None \
                     and ident.score >= rescan_below:

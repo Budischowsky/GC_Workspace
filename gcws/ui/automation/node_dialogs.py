@@ -119,9 +119,8 @@ class NodeDialog(QDialog):
             lay.addWidget(theme.hint("A sample is processed only with a blank from its own batch folder. "
                                      "Without one it is listed under 'Not processed' in Report²."))
         elif t == "report2":
-            self.w["auto_accept"] = QCheckBox("Accept reports without findings automatically")
-            self.w["auto_accept"].setChecked(bool(p("auto_accept")))
-            form.addRow("", self.w["auto_accept"])
+            lay.addWidget(theme.hint("Every report needs the analyst's acceptance in Report². A report no rule "
+                                     "found anything in says 'No findings'."))
             self.w["notify"] = QCheckBox("Tray message when a report needs control")
             self.w["notify"].setChecked(bool(p("notify")))
             form.addRow("", self.w["notify"])
@@ -210,6 +209,7 @@ class NodeDialog(QDialog):
 
     def values(self) -> dict:
         out = dict(self.node.params)
+        out.pop("auto_accept", None)                   # before Oct 2026: reports could be accepted by themselves
         for k, w in self.w.items():
             if isinstance(w, QCheckBox):
                 out[k] = w.isChecked()

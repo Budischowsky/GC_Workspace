@@ -56,9 +56,8 @@ def foreign_elements(formula) -> list[str]:
 
 
 def is_unknown(name) -> bool:
-    n = name_key(name)
-    return (not n or n.startswith(("unknown", "unbekannt", "no hit", "kein treffer", "?"))
-            or n in ("-", "n/a"))
+    from gcws.core.ident import is_unidentified
+    return is_unidentified(name)
 
 
 # -- the references ------------------------------------------------------------------------------

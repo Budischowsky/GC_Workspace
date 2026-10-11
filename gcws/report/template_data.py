@@ -217,6 +217,7 @@ def determinations(ws, members, labels) -> list[dict]:
 def _flags(name: str, cas: str, istd_codes, main=None) -> dict:
     """What the row rules ask of a merged row: internal standard, no name and no valid CAS, a library's
     "Sum of" row, unidentified. ``main``: the NIAS script (its CAS check)."""
+    from gcws.core.ident import is_unidentified
     try:
         cas_ok = main.is_valid_cas_number(main.normalize_cas(cas)) if main is not None else bool(cas)
     except Exception:  # noqa: BLE001
@@ -225,7 +226,7 @@ def _flags(name: str, cas: str, istd_codes, main=None) -> dict:
     return {"istd": (name or "").strip().upper() in ISTD_CODES or low in ISTD_NAMES or any(istd_codes),
             "nameless": not low and not cas_ok,
             "library_sum": low.startswith("sum of "),
-            "unidentified": not low or low.startswith("unknown")}
+            "unidentified": is_unidentified(name)}
 
 
 def collect(ws, members: list, group: Optional[dict], *, fields=(), method_name: str = "",

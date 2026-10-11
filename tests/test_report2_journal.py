@@ -273,3 +273,78 @@ def test_stamp_moves_when_only_the_reason_of_a_waiting_sample_changes(tmp_path):
     assert jr.job(w.id).reason == "waiting for 9 run" and jr.stamp() != stamp
     jr.close()
 
+
+
+# -- a new revision starts clean ---------------------------------------------------------------------------
+
+def _reviewed_and_delivered(J, jr, b, name="S"):
+    """A report made again from the edited project, accepted, delivered and with an override: every field
+    a new revision has to clear is set."""
+    j = _done(J, jr, b, name, J.CONTROL, project_path="p.gcws", findings=[{"level": "control", "rule": "x"}])
+    assert jr.mark_edited(j.id, j.revision)
+    assert jr.update_edited(j.id, "changed")
+    jr.transition(j.id, J.QUEUED, J.PROCESSING)
+    jr.transition(j.id, J.PROCESSING, J.CONTROL, finished=time.time(), edited=0)
+    jr.update_job(j.id, review_pending=None, override={"allow_no_blank": True})
+    assert jr.review(j.id, False, "bad") and jr.review(j.id, True, grace=60)
+    jr.update_job(j.id, export_state="done", comment="ok", edited=1)
+    j = jr.job(j.id)
+    assert j.mode == "rereport" and j.export_state == "done" and j.deliver_after and j.reviewer
+    return j
+
+
+def _assert_clean(J, jr, before, mode="full"):
+    j = jr.job(before.id)
+    assert j.revision == before.revision + 1
+    assert j.mode == mode
+    assert (j.reviewer, j.comment, j.reviewed_at) == (None, None, None)
+    assert not j.export_pending and j.export_state == "none" and not j.deliver_after
+    assert not j.edited and not j.attempts and not j.not_before
+    return j
+
+
+def test_raw_data_changed_starts_a_clean_full_revision(tmp_path):
+    J, jr, b = _journal(tmp_path)
+    before = _reviewed_and_delivered(J, jr, b)
+    jr.ensure_job("wf", "m", b["id"], "S", "S", ["S.D"], {}, "fp2")
+    j = _assert_clean(J, jr, before)
+    assert j.state == J.WAITING and j.review_pending is None
+    assert not j.override                          # the new raw data is processed by the method as it is
+
+
+def test_process_again_starts_a_clean_revision(tmp_path):
+    J, jr, b = _journal(tmp_path)
+    before = _reviewed_and_delivered(J, jr, b)
+    assert jr.review(before.id, False, "bad")
+    before = jr.job(before.id)
+    assert jr.request(before.id, "full")
+    j = _assert_clean(J, jr, before)
+    assert j.state == J.QUEUED and j.override == {"allow_no_blank": True}   # kept unless a new one is given
+    assert jr.review(j.id, True) is False                                    # queued: nothing to accept
+
+
+def test_update_report_starts_a_clean_rereport_revision(tmp_path):
+    J, jr, b = _journal(tmp_path)
+    before = _reviewed_and_delivered(J, jr, b)
+    assert jr.set_control(before.id)
+    assert jr.mark_edited(before.id, before.revision)
+    before = jr.job(before.id)
+    assert jr.update_edited(before.id, "again")
+    j = jr.job(before.id)
+    assert j.revision == before.revision + 1 and j.mode == "rereport" and j.export_state == "none"
+    assert not j.deliver_after and not j.edited and j.review_pending["comment"] == "again"
+
+
+def test_batch_put_back_starts_a_clean_full_revision(tmp_path):
+    J, jr, b = _journal(tmp_path)
+    before = _reviewed_and_delivered(J, jr, b)
+    jr.delete([before.id])
+    assert jr.reset_batch(b["id"]) == [before.id]
+    j = _assert_clean(J, jr, before)
+    assert j.state == J.WAITING and not j.deleted and not j.override and j.input_fp == ""
+
+
+def test_review_fields_are_the_ones_a_new_revision_clears(tmp_path):
+    from gcws.automation import journal as J
+    cleared = set(J.new_revision())
+    assert set(J.Journal.REVIEW_FIELDS) - {"state"} <= cleared

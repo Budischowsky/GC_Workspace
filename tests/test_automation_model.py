@@ -150,7 +150,7 @@ def _evidence(**kw):
 def test_rules_accept_clean_report_and_flag_problems():
     from gcws.automation import rules as RU
     rules = RU.default_rules()
-    assert RU.evaluate(rules, _evidence()).status == RU.ACCEPTED_AUTO     # QC standard exempt from the window
+    assert RU.evaluate(rules, _evidence()).clean     # QC standard exempt from the window
     row = lambda **kw: dict(_evidence()["rows"][0], **kw)
     cases = {
         "manual_check": _evidence(rows=[row(id_status="Manual review")]),
@@ -167,11 +167,11 @@ def test_rules_accept_clean_report_and_flag_problems():
                                              row(name="C", mean=0.001, status="Artefact: only determination 1")]))
     assert len(res.findings) == 3
     # below the reporting limit a deviation does not count
-    assert RU.evaluate(rules, _evidence(rows=[row(mean=0.005, reldiff=80.0)])).status == RU.ACCEPTED_AUTO
+    assert RU.evaluate(rules, _evidence(rows=[row(mean=0.005, reldiff=80.0)])).clean
     # the fixed area window (switched on) and the areas of the determinations against each other
     low = _evidence()
     low["members"][0]["standards"][0]["fid_area"] = 2e6
-    assert RU.evaluate(rules, low).status == RU.ACCEPTED_AUTO
+    assert RU.evaluate(rules, low).clean
     window = RU.from_list(RU.to_list(rules))
     window[[r.id for r in window].index("istd_qc")].params["area_window"] = True
     assert "area low" in RU.evaluate(window, low).findings[0].text
@@ -183,7 +183,7 @@ def test_rules_accept_clean_report_and_flag_problems():
     res = RU.evaluate(rules, two)
     assert [f.text[:30] for f in res.findings] == ["IS1 area differs by 138 % betw"]   # the QC standard is exempt
     second["standards"][0]["fid_area"] = 8e6
-    assert RU.evaluate(rules, two).status == RU.ACCEPTED_AUTO
+    assert RU.evaluate(rules, two).clean
     # the automatic ISTD detection disagrees with the peak the quantification used
     det = _evidence()
     det["members"][0]["istd_detection"] = {"IS2": {"rt": 18.918, "confidence": "medium", "applied": False,
@@ -211,7 +211,7 @@ def test_optional_rules_off_by_default_and_json(data):
     from gcws.automation import rules as RU
     ev = _evidence(rows=[dict(_evidence()["rows"][0], sml=None, mean=0.2),
                          dict(_evidence()["rows"][0], name="unknown (m/z 57)", sml=None, mean=0.3)])
-    assert RU.evaluate(RU.default_rules(), ev).status == RU.ACCEPTED_AUTO
+    assert RU.evaluate(RU.default_rules(), ev).clean
     rules = RU.default_rules()
     for r in rules:
         if r.id in ("no_sml_above_limit", "substance_above", "unidentified_over"):
@@ -226,7 +226,9 @@ def test_optional_rules_off_by_default_and_json(data):
     RU.save_default_rules(info)
     assert RU.to_list(RU.load_default_rules()) == RU.to_list(info)
     assert RU.to_list(RU.rules_for({})) == RU.to_list(info)
-    assert RU.evaluate(RU.default_rules(), _evidence(), auto_accept=False).status == RU.CONTROL
+    res = RU.evaluate(RU.default_rules(), _evidence())                   # nothing to check: still the analyst's
+    assert res.status == RU.CONTROL and res.clean and res.findings[-1].rule == RU.NO_FINDINGS
+    assert res.findings[-1].text.startswith("No findings")
 
 
 def test_feature_review_rule():
@@ -245,7 +247,7 @@ def test_feature_review_rule():
     rule.params["yellow"] = True
     found = RU.CHECKS["feature_review"](rule, ev)
     assert [x.level for x in found] == [RU.CONTROL, "info"]
-    assert RU.evaluate([rule], {"features": ev["features"][1:]}).status == RU.ACCEPTED_AUTO
+    assert RU.evaluate([rule], {"features": ev["features"][1:]}).clean
     assert RU.evaluate([rule], ev).status == RU.CONTROL
 
 
