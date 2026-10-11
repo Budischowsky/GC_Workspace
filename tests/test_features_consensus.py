@@ -68,6 +68,40 @@ def test_case_c_two_hydrocarbons_counts_as_hydrocarbon():
     assert C.decide(feature(member("A", a), member("B", b)), Settings(), hydrocarbons=True).case == "C"
 
 
+OCT = {"name": "Octacosane", "cas": "630-02-4", "formula": "C28H58"}
+TET = {"name": "Tetracosane", "cas": "646-31-1", "formula": "C24H50"}
+XYL = {"name": "Xylene", "cas": "95-47-6", "formula": "C8H10"}
+
+
+def test_case_a_hydrocarbon_reported_as_hydrocarbon():
+    # 25010601: both determinations' first hit Octacosane -> the DD said "Octacosane", the report
+    # made a "Sum of Octacosane" instead of counting it into the hydrocarbon sum
+    f = feature(member("A", [dict(OCT, score=95), dict(TET, score=90)]),
+                member("B", [dict(OCT, score=92), dict(TET, score=91)]))
+    assert C.decide(f, Settings()).name == "Octacosane"                # rule off
+    ident = C.decide(f, Settings(), hydrocarbons=True)
+    assert (ident.case, ident.name, ident.cas, ident.status) == ("A", "Hydrocarbon", "", C.ACCEPTED)
+    assert C.write_back(f, ident, "FID") == []
+
+
+def test_case_b_hydrocarbon_written_back_as_hydrocarbon():
+    # the write-back must not turn a determination's "Hydrocarbon" back into the library name
+    f = feature(member("A", [dict(OCT, score=88), dict(XYL, score=80)]),
+                member("B", [dict(XYL, score=82), dict(OCT, score=81)]))
+    ident = C.decide(f, Settings(), hydrocarbons=True)
+    assert (ident.case, ident.name, ident.cas, ident.status) == ("B", "Hydrocarbon", "", C.ACCEPTED)
+    (p,) = C.write_back(f, ident, "FID")
+    assert (p.run_id, p.ident.name, p.ident.cas) == ("b", "Hydrocarbon", "")
+    assert [h["name"] for h in p.ident.hits] == ["Octacosane", "Xylene"]
+
+
+def test_partly_deuterated_hydrocarbon_is_a_hydrocarbon():
+    import gc_identify as GI
+    assert GI.is_hydrocarbon({"name": "1,1-Dideuterocyclododecane", "formula": "C12H22D2"})
+    # a perdeuterated one is an internal standard, not a sample hydrocarbon
+    assert not GI.is_hydrocarbon({"name": "Perdeutero-Heptadecane", "formula": "C17D36"})
+
+
 def test_case_b_clear_leader_over_both_hit_lists():
     f = feature(member("A", hits((*X, 88), (*Y, 80))), member("B", hits((*Y, 82), (*X, 81))))
     ident = C.decide(f, Settings())

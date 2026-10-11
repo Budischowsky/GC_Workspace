@@ -182,6 +182,7 @@ class Identity:
     margin: Optional[float] = None
     basis: str = ""                       # human-readable: how it was decided
     hits: list = field(default_factory=list)          # the hit list to write back (consensus first)
+    hit: dict = field(default_factory=dict)           # the decided library hit when ``name`` is not its name
 
 
 @dataclass

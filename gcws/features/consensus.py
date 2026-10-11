@@ -152,6 +152,21 @@ def _hit_label(h: dict) -> str:
     return str(h.get("name") or "?")
 
 
+def _named(identity: Identity, h: dict, hydrocarbons: bool) -> Identity:
+    """Cases A/B: a decided non-aromatic hydrocarbon ``h`` is reported as "Hydrocarbon" when the
+    search method says so, as each determination's own identification already is (the library hit
+    is kept in ``hit`` for the write-back)."""
+    if not hydrocarbons:
+        return identity
+    import gc_identify as GI
+    if not GI.is_hydrocarbon(h):
+        return identity
+    identity.hit = h
+    identity.name, identity.cas = GI.HYDROCARBON_NAME, ""
+    identity.basis += f" (a hydrocarbon: {_hit_label(h)})"
+    return identity
+
+
 class Groups:
     """Hits of one substance: the same CAS or the same normalised name (union-find), so that a
     library entry without CAS, a duplicate entry or a synonym is not a second candidate."""
@@ -271,8 +286,8 @@ def decide(feature: Feature, settings: Settings, quality_limit: float = 70.0,
         low = [labels[r] for r, s in top_score.items() if s < quality_limit]
         if low:
             basis += f" (below {quality_limit:g} in {', '.join(low)})"
-        return Identity(_hit_label(h), clean_cas(h.get("cas")), ACCEPTED, "A", cands, basis=basis,
-                        hits=list(accepted[0].peak.hits))
+        return _named(Identity(_hit_label(h), clean_cas(h.get("cas")), ACCEPTED, "A", cands, basis=basis,
+                               hits=list(accepted[0].peak.hits)), h, hydrocarbons)
     # the first hits differ: only candidates accepted somewhere (or the consensus spectrum's first)
     eligible = {groups.of(m.peak.hits[0]) for m in accepted}
     if feature.consensus_hits and _score(feature.consensus_hits[0]) >= quality_limit:
@@ -287,9 +302,9 @@ def decide(feature: Feature, settings: Settings, quality_limit: float = 70.0,
     basis = "consensus spectrum" if cons_scores is not None else "hit lists of the determinations"
     if top3 and consensus_first and margin >= settings.id_margin and total(best) >= quality_limit:
         h = first_hit[best]
-        return Identity(_hit_label(h), clean_cas(h.get("cas")), ACCEPTED, "B", cands, margin,
-                        f"{basis}: {_hit_label(h)} leads by {margin:.1f} points",
-                        hits=[copy.deepcopy(first_hit[g]) for g in ranked])
+        return _named(Identity(_hit_label(h), clean_cas(h.get("cas")), ACCEPTED, "B", cands, margin,
+                               f"{basis}: {_hit_label(h)} leads by {margin:.1f} points",
+                               hits=[copy.deepcopy(first_hit[g]) for g in ranked]), h, hydrocarbons)
     # C: no clear leader -- the accepted candidates, best first
     pair = [first_hit[g] for g in ranked_e[:2]]
     name = " / ".join(_hit_label(h) for h in pair)
@@ -313,7 +328,7 @@ def write_back(feature: Feature, identity: Identity, key: str, quality_limit: fl
     if identity.case not in ("A", "B") or identity.status != ACCEPTED:
         return []
     groups = Groups([m.peak.hits for m in feature.found] + [identity.hits])
-    decided = groups.of({"name": identity.name, "cas": identity.cas})
+    decided = groups.of(identity.hit or {"name": identity.name, "cas": identity.cas})
     out = []
     for m in feature.found:
         p = m.peak
@@ -332,8 +347,10 @@ def write_back(feature: Feature, identity: Identity, key: str, quality_limit: fl
                 continue
             new_hits = [copy.deepcopy(chosen)] + hits
         old = p.ident
+        renamed = bool(identity.hit)      # "Hydrocarbon": the decided name, not the library's
         ident = Identification(
-            apex_rt=p.rt, name=_hit_label(chosen), cas=clean_cas(chosen.get("cas")),
+            apex_rt=p.rt, name=identity.name if renamed else _hit_label(chosen),
+            cas=identity.cas if renamed else clean_cas(chosen.get("cas")),
             score=_score(chosen) or None,
             status=ACCEPTED if _score(chosen) >= quality_limit else REVIEW,
             formula=str(chosen.get("formula") or ""), library=str(chosen.get("library") or ""),

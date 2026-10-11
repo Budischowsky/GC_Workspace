@@ -159,7 +159,7 @@ def split_by_score(jobs: list[PeakJob], limit: int) -> tuple[list[PeakJob], list
 
 
 def is_hydrocarbon(hit: Optional[dict]) -> bool:
-    """A non-aromatic hydrocarbon: formula of C and H only, no aromatic name stem.
+    """A non-aromatic hydrocarbon: formula of C and H (and D) only, no aromatic name stem.
 
     Covers n-alkanes, branched and cyclic alkanes, alkenes and terpene-like
     polyenes (squalene). No double-bond-equivalent limit, so polycyclic
@@ -172,7 +172,9 @@ def is_hydrocarbon(hit: Optional[dict]) -> bool:
     parts = FORMULA_PART.findall(formula)
     if not parts or "".join(e + n for e, n in parts) != formula:
         return False
-    if {e for e, _n in parts} != {"C", "H"}:
+    # a partly deuterated library entry (1,1-Dideuterocyclododecane, C12H22D2) is the hydrocarbon's
+    # spectrum; a perdeuterated one (C17D36) is an internal standard and stays itself
+    if {e for e, _n in parts} - {"D"} != {"C", "H"}:
         return False
     name = str(hit.get("name") or "").casefold()
     return not any(stem in name for stem in AROMATIC_STEMS)
