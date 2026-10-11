@@ -77,7 +77,7 @@ def test_stale_norm_snapshot_on_disk_is_replaced(libraries, tmp_path, monkeypatc
     want = {hi: norms.NormFolds().get(eng.shards[0], 0, 41, hi) for hi in (150, 200)}
     for hi in (150, 200):
         assert np.array_equal(norms.NormFolds(disk=disk).get(shard, 0, 41, hi), want[hi])
-    monkeypatch.setattr(norms, "_fold_mass", lambda *a: (_ for _ in ()).throw(AssertionError("folded")))
+    monkeypatch.setattr(norms, "_fold", lambda *a: (_ for _ in ()).throw(AssertionError("folded")))
     for hi in (150, 200):                                       # stored now: read back by the next process
         assert np.array_equal(norms.NormFolds(disk=disk).get(shard, 0, 41, hi), want[hi])
 

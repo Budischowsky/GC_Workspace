@@ -34,12 +34,12 @@ def test_folds_resume_from_the_nearest_snapshot(libraries, monkeypatch):
     f = norms.NormFolds()
     f.get(shard, 0, 41, 200)
     folded = []
-    original = norms._fold_mass
+    original = norms._fold
 
-    def spy(out, shard_, m):
-        folded.append(m)
-        return original(out, shard_, m)
-    monkeypatch.setattr(norms, "_fold_mass", spy)
+    def spy(out, shard_, first, maximum):
+        folded.extend(range(first, maximum + 1))
+        return original(out, shard_, first, maximum)
+    monkeypatch.setattr(norms, "_fold", spy)
     f.get(shard, 0, 41, 260)
     assert folded == list(range(201, 261))
 
@@ -92,12 +92,12 @@ def test_snapshots_on_disk_resume_in_a_new_process(libraries, tmp_path, monkeypa
     assert sorted(p.name for p in (tmp_path / "norms" / "index_fp").iterdir()) == \
         ["39_250.npy", "41_200.npy", "41_300.npy"]
     folded = []
-    original = norms._fold_mass
+    original = norms._fold
 
-    def spy(out, shard_, m):
-        folded.append(m)
-        return original(out, shard_, m)
-    monkeypatch.setattr(norms, "_fold_mass", spy)
+    def spy(out, shard_, first, maximum):
+        folded.extend(range(first, maximum + 1))
+        return original(out, shard_, first, maximum)
+    monkeypatch.setattr(norms, "_fold", spy)
     second = norms.NormFolds(disk=disk)
     work = {}
     for lo, hi in RANGES:
@@ -127,3 +127,69 @@ def test_disk_snapshots_keep_to_the_budget(libraries, tmp_path):
     small = norms.NormFolds(disk=disk)
     assert np.array_equal(small.get(eng.shards[0], 0, 41, 170), _vendor()(eng, 0, 41, 170))
     assert len(list((tmp_path / "norms" / "fp").iterdir())) == 3   # in-memory shards: nothing stored
+
+
+def _synthetic_shard(rng, count=60000, masses=600, ordered=True):
+    """A mass-major index like the built ones: per mass a sorted random subset of rows."""
+    pointers, rows, intensities = [0], [], []
+    for m in range(masses):
+        n = int(rng.integers(0, count // 4)) if m >= 30 and rng.random() > 0.1 else 0
+        r = np.sort(rng.choice(count, size=n, replace=False)).astype(np.int32)
+        if not ordered and n > 1:
+            r[[0, -1]] = r[[-1, 0]]
+        rows.append(r)
+        intensities.append(rng.random(n, dtype=np.float32) * np.float32(999))
+        pointers.append(pointers[-1] + n)
+    pointers += [pointers[-1]] * (10002 - len(pointers))
+    return dict(count=count, pointers=np.array(pointers, np.int64), rows=np.concatenate(rows),
+                intensities=np.concatenate(intensities))
+
+
+def _numpy_fold(out, shard, first, maximum):
+    from gcws.libsearch import norms
+    out = out.copy()
+    for m in range(first, maximum + 1):
+        norms._fold_mass(out, shard, m)
+    return out
+
+
+def test_rust_folds_equal_numpy_bitwise():
+    """Many row chunks in parallel (60 000 rows), from zero and from a snapshot, empty masses and
+    the last mass of the index: the numpy sums bit for bit."""
+    from gcws.libsearch import norms
+    if not norms.rust_folds():
+        pytest.skip("Rust extension not built (tools/build_rust.ps1) or GCWS_RUST_NORMS=off")
+    rng = np.random.default_rng(7)
+    shard = _synthetic_shard(rng)
+    zero = np.zeros(shard["count"])
+    start = _numpy_fold(zero, shard, 35, 90)
+    for first, maximum, base in [(35, 90, zero), (91, 400, start), (1, 10000, zero), (0, 29, zero),
+                                 (500, 500, zero), (41, 599, start)]:
+        got = norms._fold(base.copy(), shard, first, maximum)
+        want = _numpy_fold(base, shard, first, maximum)
+        assert got.view(np.int64).tolist() == want.view(np.int64).tolist(), (first, maximum)
+    assert norms._rust_arrays(shard) is not None
+
+
+def test_unordered_rows_fold_in_numpy(monkeypatch):
+    from gcws.libsearch import norms
+    if norms._rust is None:
+        pytest.skip("Rust extension not built (tools/build_rust.ps1)")
+    shard = _synthetic_shard(np.random.default_rng(3), count=5000, ordered=False)
+    assert norms._rust_arrays(shard) is None
+    called = []
+    monkeypatch.setattr(norms._rust, "fold_norms", lambda *a: called.append(a))
+    got = norms._fold(np.zeros(5000), shard, 35, 300)
+    assert not called
+    assert np.array_equal(got, _numpy_fold(np.zeros(5000), shard, 35, 300))
+
+
+def test_rust_norms_off_keeps_numpy_and_the_disk_store(libraries, monkeypatch):
+    from gcws.libsearch import norms, service
+    monkeypatch.setenv("GCWS_RUST_NORMS", "off")
+    assert not norms.rust_folds()
+    service.reset()
+    assert service.get_engine()._folds.disk is not None
+    monkeypatch.delenv("GCWS_RUST_NORMS")
+    service.reset()
+    assert (service.get_engine()._folds.disk is None) == norms.rust_folds()

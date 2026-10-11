@@ -7,6 +7,7 @@
 //! * `integ`: kernels of the chromatogram integrator (`gcws.integration.rust_integration`).
 //! * `fit`: the grid search of the component fit (`gcws.ms.rust_fit`).
 //! * `ions`: ion perception and shape links of the array deconvolution (`gcws.ms.rust_deconv`).
+//! * `norms`: the prefilter norms of a mass range (`gcws.libsearch.norms`).
 //!
 //! They reproduce the Python results bit for bit, except `fit`, whose residuals agree to about
 //! 1e-15 relative (its own SVD; see the module docs).
@@ -15,6 +16,7 @@ mod fit;
 mod integ;
 mod ions;
 mod kernel;
+mod norms;
 mod refs;
 
 use std::collections::HashMap;
@@ -459,5 +461,7 @@ fn gcws_rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ions::link_r, m)?)?;
     m.add_function(wrap_pyfunction!(ions::perceive_components, m)?)?;
     m.add_function(wrap_pyfunction!(ions::np_einsum_dot, m)?)?;
+    m.add_function(wrap_pyfunction!(norms::rows_ordered, m)?)?;
+    m.add_function(wrap_pyfunction!(norms::fold_norms, m)?)?;
     Ok(())
 }
