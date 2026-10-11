@@ -27,14 +27,12 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QC
                                QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from gcws.automation import journal as J
+from gcws.automation import review as R
 from gcws.ui import theme
 from gcws.ui.widgets.chips import Chip as _Chip
 
 PERIODS = {"all": ("All", None), "today": ("Today", 1), "week": ("7 days", 7), "month": ("30 days", 30),
            "year": ("12 months", 365)}
-LEVEL = {J.ACCEPTED_AUTO: "ok", J.ACCEPTED_MANUAL: "ok", J.CONTROL: "warn", J.REJECTED: "bad",
-         J.FAILED: "bad", J.NOT_PROCESSED: "bad", J.WAITING: "neutral", J.QUEUED: "info", J.PROCESSING: "info",
-         J.REMOVED: "neutral"}
 FILE_LABELS = {"docx": "Word", "xlsx": "Excel", "pdf": "PDF", "dd": "Double determination",
                "batch_docx": "Batch Word", "batch_pdf": "Batch PDF", "batch_xlsx": "Batch summary"}
 WAITING_STATES = (J.WAITING, J.QUEUED, J.PROCESSING)
@@ -42,65 +40,11 @@ WAITING_STATES = (J.WAITING, J.QUEUED, J.PROCESSING)
 FILTERS = {"all": ("All", "info"), "control": ("Control needed", "warn"), "accepted": ("Accepted", "ok"),
            "waiting": ("Waiting", "neutral"), "not_processed": ("Not processed", "bad"),
            "failed": ("Failed", "bad"), "rejected": ("Rejected", "bad"), "removed": ("Removed", "neutral")}
-BUCKET_LEVEL = {"control": "warn", "accepted": "ok", "waiting": "info", "not_processed": "bad", "failed": "bad",
-                "rejected": "bad", "removed": "neutral"}
-WORST = ("bad", "warn", "info", "ok", "neutral")
 ROLE_KIND = Qt.UserRole + 1                     # "batch", "job" or "finding"
 ROLE_BAR = Qt.UserRole + 2                      # a batch's progress: [(level, count), ...]
 COLUMNS = ["Sample", "Status", "Findings", "Delivered", "Processed"]
 REGISTER = ["Sample", "Batch", "Workflow", "Status", "Done", "Reviewed by", "Decided", "Delivered", "Processed"]
 DONE_FILTERS = {"all": "Done and not done", "done": "Done", "open": "Not done"}
-
-
-def bucket(job: J.Job) -> str:
-    """The filter chip a report counts for."""
-    if job.review_pending or job.state == J.CONTROL:
-        return "control"
-    if job.state in J.ACCEPTED:
-        return "accepted"
-    return {J.NOT_PROCESSED: "not_processed", J.FAILED: "failed", J.REJECTED: "rejected",
-            J.REMOVED: "removed"}.get(job.state, "waiting")
-
-
-def can_accept(job: J.Job) -> bool:
-    return not job.deleted and not job.review_pending and job.state in (J.CONTROL, J.REJECTED)
-
-
-def can_reject(job: J.Job) -> bool:
-    return not job.deleted and not job.review_pending and job.state in (J.CONTROL, *J.ACCEPTED)
-
-
-def can_set_control(job: J.Job) -> bool:
-    """Set status > Control needed: an accepted (or rejected) report is checked again."""
-    return not job.deleted and not job.is_batch and not job.review_pending and job.state in (*J.ACCEPTED, J.REJECTED)
-
-
-def can_reprocess(job: J.Job) -> bool:
-    """Process or report again: a workflow does it, so never an entry accepted by hand (accept it again in
-    Replicates instead)."""
-    return not job.deleted and not job.review_pending and job.state not in (J.QUEUED, J.PROCESSING) \
-        and job.workflow_id != J.MANUAL_WORKFLOW
-
-
-def delivered(job: J.Job) -> tuple[str, str]:
-    """The Delivered column of a report: (text, level)."""
-    if job.state not in (J.CONTROL, *J.ACCEPTED):
-        return "", "neutral"
-    if job.export_pending:
-        return "pending", "info"
-    return {"done": ("✓", "ok"), "partial": ("partly", "warn"), "error": ("failed", "bad")}.get(
-        job.export_state or "", ("", "neutral"))
-
-
-def is_done(job: J.Job) -> bool:
-    """Register: a sample is done when it is accepted and delivered (an entry accepted by hand, which no
-    workflow delivers, when it is accepted). Everything else is not done yet - waiting, in work, needing
-    control, failed, not processed, rejected, accepted but not delivered."""
-    if job.state not in J.ACCEPTED or job.review_pending or job.deleted:
-        return False
-    if job.workflow_id == J.MANUAL_WORKFLOW:
-        return True
-    return not job.export_pending and job.export_state == "done"
 
 
 def activity(job: J.Job) -> float:
@@ -178,7 +122,7 @@ class Report2Dock(QWidget):
         self.prepare_review = None               # optional main-window callback: save current job first
         self.mode = "todo"
         self.filter = "all"
-        self._undo_fn: Optional[Callable[[], str]] = None
+        self._undo: Optional[R.Undo] = None           # what the message bar offers to undo
         self._local = None                       # LocalJobs, made when first needed
         self._deliver: set = set()               # accepted here without a watcher: delivered after the undo time
         self._building = False
@@ -587,11 +531,9 @@ class Report2Dock(QWidget):
         register = self.mode == "register"
         for bid, jobs in by_batch.items():
             b = self._batches.get(bid, {})
-            if b.get("deleted") and not self.show_deleted:
+            if not self.show_deleted and R.hidden_in_report2(b, jobs):
                 continue
-            if not self.show_deleted and all(j.deleted for j in jobs):
-                continue                               # nothing left to show (only deleted reports)
-            mode = "archive" if J.batch_closed(b, jobs) else "todo"
+            mode = "archive" if R.batch_closed(b, jobs) else "todo"
             n_batches[mode] += 1
             n_batches["register"] += sum(1 for j in jobs if not j.is_batch and (self.show_deleted or not j.deleted))
             if mode != self.mode and not register:
@@ -620,7 +562,7 @@ class Report2Dock(QWidget):
             if j.is_batch or j.deleted:
                 continue
             counts["all"] += 1
-            counts[bucket(j)] += 1
+            counts[R.bucket(j)] += 1
             auto += j.state == J.ACCEPTED_AUTO
             manual += j.state == J.ACCEPTED_MANUAL
         for key, (label, level) in FILTERS.items():
@@ -632,10 +574,10 @@ class Report2Dock(QWidget):
             self.chips[key].style().unpolish(self.chips[key])
             self.chips[key].style().polish(self.chips[key])
         self.chips["accepted"].setToolTip(f"{auto} automatic, {manual} by the analyst")
-        shown = [j for j in view if self.filter == "all" or bucket(j) == self.filter]
+        shown = [j for j in view if self.filter == "all" or R.bucket(j) == self.filter]
         if register:
             want = self.done_filter.currentData() or "all"
-            shown = [j for j in shown if want == "all" or is_done(j) == (want == "done")]
+            shown = [j for j in shown if want == "all" or R.is_done(j) == (want == "done")]
             self._fill_register(shown)
         else:
             self._fill(shown)
@@ -711,17 +653,17 @@ class Report2Dock(QWidget):
         b = self._batches.get(bid, {})
         live = [j for j in self._by_batch.get(bid, []) if not j.deleted and j.state != J.REMOVED]
         samples = [j for j in live if not j.is_batch]
-        n = {k: 0 for k in BUCKET_LEVEL}
+        n = {k: 0 for k in R.BUCKET_LEVEL}
         for j in samples:
-            n[bucket(j)] += 1
-        parts = [(BUCKET_LEVEL[k], v) for k, v in n.items() if v]
+            n[R.bucket(j)] += 1
+        parts = [(R.BUCKET_LEVEL[k], v) for k, v in n.items() if v]
         bad = n["failed"] + n["not_processed"] + n["rejected"]
         text = f"{n['accepted']}/{len(samples)} accepted"
         text += f" · {n['control']} control" if n["control"] else ""
         text += f" · {bad} failed/rejected" if bad else ""
         text += f" · {n['waiting']} waiting" if n["waiting"] else ""
         accepted = [j for j in live if j.state in J.ACCEPTED]
-        sent = sum(delivered(j)[0] == "✓" for j in accepted)
+        sent = sum(R.delivered(j)[0] == "✓" for j in accepted)
         last = max((activity(j) for j in self._by_batch.get(bid, [])), default=0)
         findings = sum(self._facts(j)[0] for j in samples)
         deleted = bool(b.get("deleted"))
@@ -731,7 +673,7 @@ class Report2Dock(QWidget):
         it.setData(0, Qt.UserRole, bid)
         if not deleted:
             it.setData(1, ROLE_BAR, parts or [("neutral", 1)])
-        worst = next((lv for lv in WORST if any(p[0] == lv for p in parts)), "neutral")
+        worst = R.worst(p[0] for p in parts)
         it.setIcon(0, _dot("neutral" if deleted else worst))
         it.setToolTip(0, b.get("folder", ""))
         it.setToolTip(1, text)
@@ -773,7 +715,7 @@ class Report2Dock(QWidget):
         status = "Updating report" if j.review_pending else J.STATE_LABELS.get(j.state, j.state)
         if j.deleted:
             status = f"Deleted ({status.lower()})"
-        sent, sent_level = delivered(j)
+        sent, sent_level = R.delivered(j)
         n, finding_text, lights = self._facts(j)
         it = QTreeWidgetItem([label, status, str(n) if n else "", sent, J.ago(j.finished or j.created)])
         it.setData(0, ROLE_KIND, "job")
@@ -792,7 +734,7 @@ class Report2Dock(QWidget):
                 f.setItalic(True)
                 it.setFont(0, f)
         else:
-            it.setBackground(1, theme.status_brush(LEVEL.get(j.state, "neutral")))
+            it.setBackground(1, theme.status_brush(R.level(j)))
             if sent:
                 it.setForeground(3, theme.status_color(sent_level))
         if j.reason:
@@ -871,10 +813,10 @@ class Report2Dock(QWidget):
         if job is None:
             return
         jobs = self.journal.jobs(batch_id=job.batch_id)
-        mode = "archive" if J.batch_closed(self.journal.batch_by_id(job.batch_id), jobs) else "todo"
+        mode = "archive" if R.batch_closed(self.journal.batch_by_id(job.batch_id), jobs) else "todo"
         if self.workflow.currentData() not in ("", job.workflow_id):
             self.workflow.setCurrentIndex(0)
-        if self.filter != "all" and bucket(job) != self.filter:
+        if self.filter != "all" and R.bucket(job) != self.filter:
             self.filter = "all"
         text = self.search.text().strip().casefold()
         if text and text not in (job.group_name or "").casefold():
@@ -940,7 +882,7 @@ class Report2Dock(QWidget):
             self.reasons.setText("Accept, Reject and the right-click menu act on all of them.")
         else:
             b = self._batches.get(job.batch_id, {})
-            text = f"<b>{job.group_name}</b> &nbsp; {theme.chip_html(job.label, LEVEL.get(job.state, 'neutral'))}"
+            text = f"<b>{job.group_name}</b> &nbsp; {theme.chip_html(job.label, R.level(job))}"
             if job.deleted:
                 text += " " + theme.chip_html("Deleted", "neutral")
             text += f"<br>batch folder {b.get('folder', '')} · revision {job.revision}"
@@ -1112,17 +1054,18 @@ class Report2Dock(QWidget):
     def _update_actions(self, jobs: list):
         one = jobs[0] if len(jobs) == 1 else None
         live = [j for j in jobs if not j.deleted]
-        self.a_accept.setEnabled(any(can_accept(j) for j in jobs))
+        self.a_accept.setEnabled(any(R.allowed(j, "accept") for j in jobs))
         self.a_accept_comment.setEnabled(self.a_accept.isEnabled())
         self.a_status_accepted.setEnabled(self.a_accept.isEnabled())
-        self.a_status_control.setEnabled(any(can_set_control(j) for j in jobs))
-        self.b_reject.setEnabled(any(can_reject(j) for j in jobs))
+        self.a_status_control.setEnabled(any(R.allowed(j, "set_control") for j in jobs))
+        self.b_reject.setEnabled(any(R.allowed(j, "reject") for j in jobs))
         self.b_project.setEnabled(one is not None and not one.is_batch and not one.review_pending and
                                   bool(one.project_path) and Path(one.project_path).exists())
         self.a_project.setEnabled(self.b_project.isEnabled())
         self.a_replicates.setEnabled(one is not None and self._is_pair(one) and not one.review_pending)
-        self.a_rereport.setEnabled(any(bool(j.project_path) and not j.is_batch and can_reprocess(j) for j in jobs))
-        self.a_reprocess.setEnabled(any(can_reprocess(j) for j in jobs))
+        self.a_rereport.setEnabled(any(bool(j.project_path) and not j.is_batch and R.allowed(j, "reprocess")
+                                       for j in jobs))
+        self.a_reprocess.setEnabled(any(R.allowed(j, "reprocess") for j in jobs))
         self.a_noblank.setEnabled(one is not None and one.state == J.NOT_PROCESSED and not one.deleted)
         self.a_remove.setEnabled(any(j.state in J.REMOVABLE for j in live))
         self.a_export.setEnabled(one is not None and not one.deleted and one.workflow_id != J.MANUAL_WORKFLOW and
@@ -1180,7 +1123,7 @@ class Report2Dock(QWidget):
         menu.addAction(self.a_accept_comment)
         rm = menu.addMenu("Reject")
         rm.aboutToShow.connect(lambda: self._fill_reject_menu(rm, self.reject))
-        rm.setEnabled(any(can_reject(j) for j in jobs))
+        rm.setEnabled(any(R.allowed(j, "reject") for j in jobs))
         sm = menu.addMenu("Set status")
         sm.addAction(self.a_status_accepted)
         sm.addAction(self.a_status_control)
@@ -1219,14 +1162,14 @@ class Report2Dock(QWidget):
         if local:                                      # the workflow copies the runs to this PC
             menu.addAction("Open the local copy", lambda: self.open_path(local)).setEnabled(os.path.isdir(local))
         menu.addSeparator()
-        n = sum(j.state == J.CONTROL and can_accept(j) for j in jobs)
+        n = sum(j.state == J.CONTROL and R.allowed(j, "accept") for j in jobs)
         menu.addAction(f'Accept all "control needed" ({n})...',
                        lambda: self.accept_batch(bid)).setEnabled(bool(n) and not b.get("deleted"))
         rm = menu.addMenu("Reject batch")
         rm.aboutToShow.connect(lambda: self._fill_reject_menu(rm, lambda reason: self.reject_batch(bid, reason)))
-        rm.setEnabled(any(can_reject(j) for j in jobs) and not b.get("deleted"))
+        rm.setEnabled(any(R.allowed(j, "reject") for j in jobs) and not b.get("deleted"))
         menu.addAction("Process batch again...", lambda: self.reprocess_batch(bid)).setEnabled(
-            any(can_reprocess(j) and not j.is_batch for j in jobs) and not b.get("deleted"))
+            any(R.allowed(j, "reprocess") and not j.is_batch for j in jobs) and not b.get("deleted"))
         menu.addSeparator()
         if self.mode == "archive":
             menu.addAction("Reopen", lambda: self.reopen_batch(bid))
@@ -1268,7 +1211,7 @@ class Report2Dock(QWidget):
         if mods == Qt.ControlModifier:
             if key == Qt.Key_O and self.b_project.isEnabled():
                 return self.open_project
-            if key == Qt.Key_Z and self._undo_fn is not None:
+            if key == Qt.Key_Z and self._undo is not None:
                 return self.undo
         return None
 
@@ -1290,8 +1233,8 @@ class Report2Dock(QWidget):
                                              float(j.created or 0))):
             r = self.register.rowCount()
             self.register.insertRow(r)
-            done = is_done(j)
-            sent, sent_level = delivered(j)
+            done = R.is_done(j)
+            sent, sent_level = R.delivered(j)
             status = "Updating report" if j.review_pending else J.STATE_LABELS.get(j.state, j.state)
             if j.deleted:
                 status = f"Deleted ({status.lower()})"
@@ -1304,7 +1247,7 @@ class Report2Dock(QWidget):
                 if v:
                     it.setToolTip(v)
                 self.register.setItem(r, c, it)
-            self.register.item(r, 3).setBackground(theme.status_brush(LEVEL.get(j.state, "neutral")))
+            self.register.item(r, 3).setBackground(theme.status_brush(R.level(j)))
             self.register.item(r, 4).setForeground(theme.status_color("ok" if done else "warn"))
             if j.reason:
                 self.register.item(r, 3).setToolTip(j.reason)
@@ -1389,49 +1332,45 @@ class Report2Dock(QWidget):
 
     # -- messages and undo ---------------------------------------------------------------------------
 
-    def notify(self, text: str, undo: Optional[Callable[[], str]] = None, level: str = "info"):
-        """A message under the list for a few seconds, with "Undo" when ``undo`` is given."""
-        self._undo_fn = undo
+    def notify(self, text: str, undo: Optional[R.Undo] = None, level: str = "info"):
+        """A message under the list for a few seconds, with "Undo" when ``undo`` is given (until the
+        watcher may deliver the accept it takes back, however long the list took to refresh meanwhile)."""
+        self._undo = undo
         self.bar_text.setText(text)
         self.bar.setProperty("level", level)
         self.bar.style().unpolish(self.bar)
         self.bar.style().polish(self.bar)
         self.b_undo.setVisible(undo is not None)
         self.bar.show()
-        self._bar_timer.start(int(J.UNDO_GRACE * 1000))       # start(ms) of an accept changed the interval
+        if undo is not None and undo.until:
+            self._bar_timer.start(max(0, int((undo.until - time.time()) * 1000)))
+        else:
+            self._bar_timer.start(int(J.UNDO_GRACE * 1000))
 
     def dismiss_message(self):
         """The message ends: what it offered to undo is final now (and delivered)."""
         self._bar_timer.stop()
         self.bar.hide()
-        self._undo_fn = None
+        self._undo = None
         self.deliver_due()
 
     def undo(self) -> bool:
-        fn, self._undo_fn = self._undo_fn, None
-        if fn is None:
+        token, self._undo = self._undo, None
+        if token is None:
             return False
-        text = fn()
+        done = R.Review(self.journal).undo(token)
+        if token.kind == "review":
+            self._deliver.difference_update(done.ids)
+            if done.ids:
+                self.current = done.ids[0]
         self.refresh()
-        self.notify(text or "Undone.")
-        return bool(text) and not text.startswith("Not undone")
+        self.notify(done.text)
+        return done.ok
 
     def deliver_due(self):
-        """Deliver what was accepted here while no watcher runs (once it can no longer be undone)."""
-        from gcws.automation import export
-        from gcws.automation import workflow as W
+        """Deliver what was decided here while no watcher runs (its undo is over: the message is gone)."""
         ids, self._deliver = self._deliver, set()
-        for jid in ids:
-            job = self.journal.job(jid)
-            if job is None or not job.export_pending or job.state not in (J.CONTROL, *J.ACCEPTED):
-                continue
-            wf = W.find(job.workflow_id)
-            if wf is not None:
-                try:
-                    export.deliver(self.journal, wf, job)
-                except Exception as exc:  # noqa: BLE001
-                    self.journal.update_job(jid, export_state="error", export_pending=0)
-                    self.journal.event("error", f"{job.group_name}: delivery failed: {exc}", job_id=jid)
+        R.deliver_due(self.journal, only=ids, final=True)
         if ids:
             self.refresh()
 
@@ -1449,52 +1388,25 @@ class Report2Dock(QWidget):
         Undo is offered for a few seconds; then the next report needing control is selected."""
         ids = list(job_ids) if job_ids is not None else [j.id for j in self.selected_jobs()]
         self.dismiss_message()                    # the previous decision is final now
-        allowed = can_accept if accept else can_reject
-        done, before, regenerated = [], [], []
-        for jid in ids:
-            job = self.journal.job(jid)
-            if job is None or not allowed(job):
-                continue
-            if self.prepare_review is not None and not self.prepare_review(jid):
-                continue
-            job = self.journal.job(jid)
-            snap = {k: job.row.get(k) for k in J.Journal.REVIEW_FIELDS} | {"revision": job.revision}
-            if accept and job.edited:                # made again first: it comes back as control needed
-                ok = self.journal.update_edited(jid, comment)
-                if ok:
-                    regenerated.append(jid)
-            else:
-                ok = self.journal.review(jid, accept, comment, grace=J.UNDO_GRACE if accept else 0)
-                if ok:
-                    before.append((jid, snap))
-            if ok:
-                done.append(job)
-        if not done:
+        out = R.Review(self.journal).decide(ids, accept, comment, self.prepare_review)
+        if not out.decided and not out.regenerated:
             self.refresh()
             self.notify("The report changed meanwhile (processed again?); look at it once more.", level="warn")
             return False
         if accept and not self._watcher_running():
-            self._deliver.update(jid for jid, _ in before)
-        for jid in regenerated:                   # made again here at once, not left to the watcher
-            self.local.run(jid)
+            self._deliver.update(j.id for j in out.decided)
+        for job in out.regenerated:               # made again here at once, not left to the watcher
+            self.local.run(job.id)
         nxt = self._next_control(ids[-1]) if len(ids) == 1 else None
         self.refresh()
         if nxt and nxt in self.jobs:
             self.select(nxt)
         verb = "Accepted" if accept else "Rejected"
-        decided = [j for j in done if j.id not in regenerated]
-        parts = [f"{verb} {self._names(decided)}" + (f" ({comment})" if comment and not accept else "")] \
-            if decided else []
-        if regenerated:
-            parts.append(f"{self._names([j for j in done if j.id in regenerated])}: the edited report is made "
-                         "again now - check it, then accept it")
-        self.notify("; ".join(parts) + ".", self._undo_review(before) if before else None)
-        # the watcher delivers an accept once its undo time from the accept on is over: Undo ends then too,
-        # however long the list took to refresh meanwhile
-        due = [float(j.deliver_after) for j in (self.journal.job(jid) for jid, _ in before)
-               if j is not None and j.deliver_after]
-        if due:
-            self._bar_timer.start(max(0, int((min(due) - time.time()) * 1000)))
+        parts = [f"{verb} {self._names(out.decided)}" + (f" ({comment})" if comment and not accept else "")]             if out.decided else []
+        if out.regenerated:
+            parts.append(f"{self._names(out.regenerated)}: the edited report is made again now - check it, "
+                         "then accept it")
+        self.notify("; ".join(parts) + ".", out.undo)
         return True
 
     def update_report(self, job_id: str) -> bool:
@@ -1515,7 +1427,7 @@ class Report2Dock(QWidget):
         (what was delivered already stays in the target folders)."""
         ids = list(job_ids) if job_ids is not None else [j.id for j in self.selected_jobs()]
         self.dismiss_message()
-        done = [jid for jid in ids if (job := self.journal.job(jid)) is not None and can_set_control(job)
+        done = [jid for jid in ids if (job := self.journal.job(jid)) is not None and R.allowed(job, "set_control")
                 and self.journal.set_control(jid)]
         if done and not self._watcher_running():
             self._deliver.update(done)
@@ -1555,19 +1467,9 @@ class Report2Dock(QWidget):
         if self._local is not None:
             self._local.stop()
 
-    def _undo_review(self, before: list) -> Callable[[], str]:
-        def undo() -> str:
-            ok = [jid for jid, snap in before if self.journal.undo_review(jid, snap)]
-            self._deliver.difference_update(ok)
-            if ok:
-                self.current = ok[0]
-                return f"Undone: {len(ok)} report(s) back as before."
-            return "Not undone: the report was delivered meanwhile; reject it instead."
-        return undo
-
     def accept_with_comment(self) -> bool:
         from gcws.ui.dialogs.report2 import ReviewDialog
-        jobs = [j for j in self.selected_jobs() if can_accept(j)]
+        jobs = [j for j in self.selected_jobs() if R.allowed(j, "accept")]
         if not jobs:
             return False
         dlg = ReviewDialog(True, self._names(jobs), sum(len(j.findings or []) for j in jobs), self)
@@ -1580,7 +1482,7 @@ class Report2Dock(QWidget):
         if reason is None:
             from gcws.ui.dialogs.report2 import ReviewDialog
             jobs = [j for j in (self.selected_jobs() if job_ids is None else
-                                [self.journal.job(i) for i in job_ids]) if j is not None and can_reject(j)]
+                                [self.journal.job(i) for i in job_ids]) if j is not None and R.allowed(j, "reject")]
             if not jobs:
                 return False
             dlg = ReviewDialog(False, self._names(jobs), sum(len(j.findings or []) for j in jobs), self)
@@ -1590,7 +1492,8 @@ class Report2Dock(QWidget):
         return self.review(False, reason, job_ids)
 
     def reprocess(self, mode: str = "full", override: Optional[dict] = None) -> bool:
-        jobs = [j for j in self.selected_jobs() if can_reprocess(j) and (mode != "rereport" or j.project_path)]
+        jobs = [j for j in self.selected_jobs()
+                if R.allowed(j, "reprocess") and (mode != "rereport" or j.project_path)]
         ok = [j for j in jobs if self.journal.request(j.id, mode, override)]
         if not ok:
             self.notify("This report is already being processed.", level="warn")
@@ -1635,12 +1538,13 @@ class Report2Dock(QWidget):
                 "deleted: the reports, the project and the delivered files stay. A sample still in the queue is "
                 "removed from it. View > Show deleted reports brings it back.") != QMessageBox.Yes:
             return []
-        before = {j.id: (j.state, j.reason) for j in jobs}
-        ids = self.journal.delete([j.id for j in jobs])
+        undo = R.Review(self.journal).delete([j.id for j in jobs])
         self.current = None
         self.refresh()
-        self.notify(f"Deleted {self._names(jobs)}.", self._undo_delete(before, lambda: self.journal.restore(ids)))
-        return ids
+        if undo is None:
+            return []
+        self.notify(f"Deleted {self._names(jobs)}.", undo)
+        return list(undo.restore)
 
     def restore_selected(self) -> list:
         ids = self.journal.restore([j.id for j in self.selected_jobs() if j.deleted])
@@ -1651,7 +1555,7 @@ class Report2Dock(QWidget):
         return [j for j in self.journal.jobs(batch_id=bid) if not j.deleted]
 
     def accept_batch(self, bid, confirm: bool = True) -> bool:
-        jobs = [j for j in self._batch_jobs(bid) if j.state == J.CONTROL and can_accept(j)]
+        jobs = [j for j in self._batch_jobs(bid) if j.state == J.CONTROL and R.allowed(j, "accept")]
         name = self._batches.get(bid, {}).get("name", "")
         if not jobs:
             return False
@@ -1662,7 +1566,7 @@ class Report2Dock(QWidget):
         return self.review(True, "", [j.id for j in jobs])
 
     def reject_batch(self, bid, reason: Optional[str], confirm: bool = True) -> bool:
-        jobs = [j for j in self._batch_jobs(bid) if can_reject(j)]
+        jobs = [j for j in self._batch_jobs(bid) if R.allowed(j, "reject")]
         name = self._batches.get(bid, {}).get("name", "")
         if not jobs:
             return False
@@ -1673,7 +1577,7 @@ class Report2Dock(QWidget):
         return self.reject(reason, [j.id for j in jobs])
 
     def reprocess_batch(self, bid, confirm: bool = True) -> bool:
-        jobs = [j for j in self._batch_jobs(bid) if can_reprocess(j) and not j.is_batch]
+        jobs = [j for j in self._batch_jobs(bid) if R.allowed(j, "reprocess") and not j.is_batch]
         name = self._batches.get(bid, {}).get("name", "")
         if not jobs:
             return False
@@ -1694,25 +1598,11 @@ class Report2Dock(QWidget):
                 "Nothing on disk is deleted. The watcher no longer looks at this folder. View > Show deleted "
                 "reports brings it back.") != QMessageBox.Yes:
             return False
-        before = {j.id: (j.state, j.reason) for j in self.journal.jobs(batch_id=bid) if not j.deleted}
-        ok = self.journal.delete_batch(bid)
+        undo = R.Review(self.journal).delete_batch(bid)
         self.refresh()
-        if ok:
-            self.notify(f"Deleted the batch {name}.",
-                        self._undo_delete(before, lambda: self.journal.restore_batch(bid)))
-        return ok
-
-    def _undo_delete(self, before: dict, restore: Callable) -> Callable[[], str]:
-        """Undo of a delete: shown again, and a sample the delete took out of the queue is back in it as it
-        was (``before``: job id -> (state, reason) before the delete)."""
-        def undo() -> str:
-            restore()
-            for jid, (state, reason) in before.items():
-                j = self.journal.job(jid)
-                if j is not None and not j.deleted and j.state == J.REMOVED and state in J.REMOVABLE:
-                    self.journal.update_job(jid, state=state, reason=reason)
-            return "Restored."
-        return undo
+        if undo is not None:
+            self.notify(f"Deleted the batch {name}.", undo)
+        return undo is not None
 
     def restore_batch(self, bid) -> bool:
         ok = self.journal.restore_batch(bid)

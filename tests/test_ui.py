@@ -451,7 +451,7 @@ def test_derived_trace_follows_base_reintegration(qtbot, win, samples):
     before = ws.result(sample.id, "FID - Blank")
     assert before is not None
     # a manual change of the plain FID integration re-derives the blank-subtracted trace
-    from gcws.ui.undo import add_event
+    from gcws.core.undo import add_event
     sample.undo.push(add_event(ws, sample.id, "FID", ManualEvent(K.ADD_PEAK, 30.0, 30.2), ""))
     assert ws.result(sample.id, "FID - Blank") is not before
 
@@ -1240,7 +1240,7 @@ def test_processing_method_save_and_load(qtbot, win, samples, tmp_path, monkeypa
     from gcws.signal.blank import BlankOptions
     from gcws.ui.dialogs.own_search import load_options, save_options
     from gcws.ui.dialogs.proc_method import LoadMethodDialog, SaveMethodDialog
-    from gcws.ui.undo import SetMethodCommand
+    from gcws.core.undo import SetMethodCommand
     monkeypatch.setattr(paths, "DATA", tmp_path / "data")
     _load(qtbot, win, samples, ["07_"])
     ws = win.ws
@@ -1811,6 +1811,12 @@ def test_double_determination_accept(qtbot, win, samples, tmp_path):
     ws.message.connect(said.append)
     page.b_accept.click()             # no report possible yet (no migration conditions): the status bar says so
     assert any("not listed in Report²" in t for t in said) and not win.report2.journal.jobs()
+    # a change from the Replicates panel reopens the acceptance too
+    assert not page.group()["signoff"].get("stale")
+    dock.list.setCurrentItem(dock._item_for(("group", g["id"])))
+    dock.set_policy("majority")
+    g = next(x for x in ws.replicate_groups if x["id"] == g["id"])
+    assert g["signoff"]["stale"] and not dock._item_for(("group", g["id"])).text(0).startswith("✔")
 
 
 def test_replicates_back_from_a_group_of_three(qtbot, win, samples):
@@ -1863,7 +1869,7 @@ def test_double_determination_accept_in_report2(qtbot, win, samples, tmp_path):
     jr.transition(job.id, J.QUEUED, J.PROCESSING)
     jr.transition(job.id, J.PROCESSING, J.CONTROL, project_path=str(project))
     win.report2._journal = jr
-    assert win._report2_job is None                         # opened by hand, not from Report²
+    assert win.r2_edit.bound is None                        # opened by hand, not from Report²
     said = []
     ws.message.connect(said.append)
     try:
@@ -1873,7 +1879,7 @@ def test_double_determination_accept_in_report2(qtbot, win, samples, tmp_path):
         assert after.state == J.ACCEPTED_MANUAL and not after.edited, (after.state, said)
         assert any("Accepted in Report² too" in t for t in said)
     finally:
-        win._report2_job = None                             # closing must not try to save a Report² project
+        win.r2_edit.clear()                                 # closing must not try to save a Report² project
         ws.dirty = False
 
 

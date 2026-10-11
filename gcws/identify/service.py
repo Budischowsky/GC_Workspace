@@ -419,7 +419,7 @@ def apply_search_results(ws, items: list[SearchItem], method, *, transfer: bool,
 
     One undo step per run, as the interactive library search does it."""
     from gcws.core.keys import is_fid
-    from gcws.ui.undo import IdentCommand
+    from gcws.core.undo import IdentCommand
     by_run: dict = {}
     for it in items:
         if not it.job.done or it.job.error or not getattr(it.job, "apply", True):

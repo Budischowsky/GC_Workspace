@@ -1,7 +1,7 @@
 """The workspace without the main window: load runs, open a project, search the libraries.
 
-Needs a ``QApplication`` (the workspace keeps undo stacks and settings) but no event loop:
-everything here runs synchronously.
+Uses the workspace without Qt (:class:`gcws.core.workspace.Workspace`): no ``QApplication``, no
+event loop; everything here runs synchronously (``ws.recompute_quant()`` when the values are needed).
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from gcws.core.model import FID, TIC
 
 
 def new_workspace():
-    from gcws.ui.workspace import Workspace
+    from gcws.core.workspace import Workspace
     return Workspace()
 
 

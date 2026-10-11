@@ -12,6 +12,7 @@ import datetime as _dt
 from dataclasses import dataclass, field
 from typing import Optional
 
+from gcws.quant import modes as QM
 from gcws.report import catalog as C
 from gcws.report import service as RS
 
@@ -51,10 +52,9 @@ class ReportData:
 
 
 def _quant_part(quant: dict) -> dict:
-    from gcws.quant.service import quant_detector
     q = {k: copy.deepcopy(quant[k]) for k in ("mode", "unit", "hs", "method", "method_samples", "features")
          if k in quant}
-    q["_detector"] = quant_detector(quant)
+    q["_detector"] = QM.of(quant).detector
     return q
 
 
@@ -127,8 +127,9 @@ def header_values(ws, members, group, names, *, method_name="", template_name=""
     """The header placeholders' values."""
     from gcws.quant import conversion as CV
     from gcws.quant import migration as MG
-    from gcws.quant.service import MODES, mode_unit, quant_detector
+    from gcws.quant.service import MODES
     q = ws.quant
+    mode = QM.of(q)
     n = len(members)
     meta = {}
     try:
@@ -144,7 +145,7 @@ def header_values(ws, members, group, names, *, method_name="", template_name=""
         sv = f"{float(ov):g}" if ov not in (None, "") else ""
     except (TypeError, ValueError):
         sv = str(ov)
-    units = CV.report_units(q)
+    units = mode.report_units()
     first = ws.runs[members[0]] if members and members[0] in ws.runs else None
     sample = ""
     if first is not None:
@@ -158,19 +159,18 @@ def header_values(ws, members, group, names, *, method_name="", template_name=""
         "determination": det, "n": str(n), "analyst": analyst, "operator": "",
         "migrate": meta.get("migrate_text") or "", "sv_ratio": sv,
         "date": _dt.date.today().isoformat(), "method": method_name, "quant_method": quant_text(ws, members),
-        "mode": MODES.get(q.get("mode", "nias_mgkg"), ""), "unit": mode_unit(q),
+        "mode": MODES.get(mode.key, ""), "unit": mode.unit,
         "unit1": units[0] if units else "", "unit2": units[1] if len(units) > 1 else "",
-        "detector": quant_detector(q), "blanks": "; ".join(dict.fromkeys(blanks)), "template": template_name,
+        "detector": mode.detector, "blanks": "; ".join(dict.fromkeys(blanks)), "template": template_name,
     }
 
 
 def quant_text(ws, members) -> str:
     """One line on how the result was quantified."""
-    from gcws.quant.service import MODES, quant_detector
     q = ws.quant
-    mode = q.get("mode", "nias_mgkg")
+    mode = QM.of(q)
     samples = [ws.nias_sample(m) for m in members if m in ws.runs] if hasattr(ws, "nias_sample") else []
-    if mode == "extraction":
+    if mode.key == "extraction":
         try:
             from gcws.quant import units as U
             from gcws.report.quant import method_text
@@ -179,14 +179,14 @@ def quant_text(ws, members) -> str:
                 m = infos[0]["method"]
                 labels = [chr(ord("A") + k) for k in range(len(infos))]
                 amounts = [i["basis"].get(U.AMOUNT_BASIS[m["sample_type"]]) for i in infos]
-                return method_text(m, samples[0].standards, quant_detector(q), amounts, labels)
+                return method_text(m, samples[0].standards, mode.detector, amounts, labels)
         except Exception:  # noqa: BLE001 - fall back to the mode's name
             pass
-    if mode == "hs_screening":
+    if mode.hs:
         s = samples[0] if samples else None
         if s is not None and (s.meta or {}).get("method"):
             return s.meta["method"]
-    return f"{MODES.get(mode, mode)}; {quant_detector(q)}"
+    return f"{mode.label}; {mode.detector}"
 
 
 def determinations(ws, members, labels) -> list[dict]:
@@ -231,28 +231,25 @@ def collect(ws, members: list, group: Optional[dict], *, fields=(), method_name:
             template_name: str = "") -> ReportData:
     """The report data of ``members`` (one run: a single determination) with the values of ``fields``."""
     from gcws.quant import conversion as CV
+    from gcws.quant import double_determination as DD
     from gcws.quant import duplicate_view as DV
-    from gcws.quant.nias_bridge import make_settings
     from gcws.quant.peak_values import rows_for
-    from gcws.quant.service import quant_detector
     members = [m for m in members if m in ws.runs]
     group = group or {"members": members, "policy": "all"}
     q = ws.quant
-    mode = q.get("mode", "nias_mgkg")
+    qmode = QM.of(q)
     n = len(members)
     labels = CV.labels(ws, members)
     names = [ws.runs[m].name for m in members]
-    rows, problems = DV.compute(ws, members, group.get("policy", "all"))
-    warnings = list(problems)
     limit, rl = DV.limits(ws)
     policy = group.get("policy", "all")
     if n == 2 and policy == "all":
-        verdicts = [DV.plain_verdict(r, limit, rl, tuple(labels[:2]), ws.quant_unit()) for r in rows]
-        edits = dict(group.get(DV.edits_key(q, ws.quant_unit())) or {})
-        settings = make_settings(q.get("settings"))
-        tol = float(getattr(settings, "rt_tolerance", 0.035) or 0.035)
-        rows = DV.apply_edits(rows, verdicts, edits, tol)
+        _, verdicts, rows, problems = DD.evaluate(ws, members, DD.edits_of(group, q, ws.quant_unit()),
+                                                  tuple(labels[:2]))
+        warnings = list(problems)
     else:
+        rows, problems = DV.compute(ws, members, policy)
+        warnings = list(problems)
         verdicts = [DV.plain_verdict(r, limit, rl, tuple((labels + ["B"])[:2]), ws.quant_unit())
                     if n == 2 else None for r in rows]
         rows = [dict(r, report=DV.default_report(r, v), deleted=False, dismissed=0, comment="", edited={})
@@ -260,9 +257,9 @@ def collect(ws, members: list, group: Optional[dict], *, fields=(), method_name:
     fields = set(fields) | BASE_FIELDS
     fields |= {k for f in fields for k in NEEDS.get(f, ())}
     wanted = [C.get(k) for k in fields if C.get(k) is not None]
-    skey = quant_detector(q)
-    settings = make_settings(q.get("hs" if mode == "hs_screening" else "settings"))
-    ratio = CV.ratio_fn(q, settings, members)
+    skey = qmode.detector
+    settings = qmode.settings()
+    ratio = qmode.ratio(settings, members)
     peak_fields = [f for f in wanted if f.per_det and f.group != "Concentration" and f.key not in _SOURCE_FIELDS]
     peak_rows = {m: {r.index: r for r in rows_for(ws, m, skey)} for m in members} if peak_fields else {}
     lookup, main = {}, None
@@ -335,13 +332,13 @@ def collect(ws, members: list, group: Optional[dict], *, fields=(), method_name:
         })
     has_ms = any(ws.runs[m].run.ms is not None for m in members)
     rl_method = rl
-    if mode == "extraction":
+    if qmode.key == "extraction":
         from gcws.quant import extraction as EX
         rl_method = float(EX.of(q).get("reporting_limit") or 0.0)
-    return ReportData(mode=mode, quant=_quant_part(q), n=n, labels=labels, names=names, rows=out_rows,
+    return ReportData(mode=qmode.key, quant=_quant_part(q), n=n, labels=labels, names=names, rows=out_rows,
                       values=header_values(ws, members, group, names, method_name=method_name,
                                            template_name=template_name),
-                      units=CV.available_units(q), report_units=CV.report_units(q), method_limit=rl_method,
+                      units=qmode.available_units(), report_units=qmode.report_units(), method_limit=rl_method,
                       features=bool(rows and rows[0].get("feature_id")), has_ms=has_ms,
                       has_cas=bool(lookup), determinations=determinations(ws, members, labels),
                       warnings=warnings)

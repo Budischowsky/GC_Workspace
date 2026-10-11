@@ -116,16 +116,8 @@ def register_path() -> Path:
 
 
 def casinfo_path() -> Optional[Path]:
-    from gcws import paths
-    try:
-        from gcws.ui.dialogs.preferences import load_settings
-        raw = load_settings().get("standard_cas_path", "CASINFO.xlsx")
-    except Exception:  # noqa: BLE001
-        raw = "CASINFO.xlsx"
-    p = Path(raw)
-    if not p.is_absolute():
-        p = next((b / p for b in (paths.RESOURCES, paths.ROOT, paths.DATA) if (b / p).exists()), p)
-    return p if p.exists() else None
+    from gcws.core.settings import cas_path
+    return cas_path()
 
 
 def _add(cas: set, names: set, c, n):

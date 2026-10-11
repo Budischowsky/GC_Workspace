@@ -19,6 +19,7 @@ from typing import Callable, Optional
 
 from gcws.automation import rules as RU
 from gcws.automation import store
+from gcws.quant import modes as QM
 
 log = logging.getLogger(__name__)
 
@@ -323,7 +324,7 @@ def run_features(ws, members: list) -> dict:
     from gcws.features.model import PAIRING_FEATURES
     names = [ws.runs[m].name for m in members if m in ws.runs]
     out = {"members": names, "pairing": SV.pairing(ws)}
-    if SV.pairing(ws) != PAIRING_FEATURES or (ws.quant or {}).get("mode") == "hs_screening":
+    if SV.pairing(ws) != PAIRING_FEATURES or QM.of(ws.quant).hs:
         return out
     stack = ws.project_undo
     before = stack.count()
@@ -366,6 +367,7 @@ def evidence_for(ws, members: list, *, kind: str = "nias", require: str = "auto"
                  detection: Optional[dict] = None) -> dict:
     """What the Report² rules look at for the determinations ``members`` of one sample (without the
     report's rows, summary and warnings, which the caller adds)."""
+    from gcws.quant import limits as QL
     from gcws.quant.nias_bridge import make_settings
     s = make_settings((ws.quant or {}).get("settings"))
     out = []
@@ -384,10 +386,9 @@ def evidence_for(ws, members: list, *, kind: str = "nias", require: str = "auto"
         features = feature_evidence(ws, members)
     except Exception:  # noqa: BLE001 - the other rules still work
         features = []
-    return {"kind": kind, "mode": (ws.quant or {}).get("mode", "nias_mgkg"), "members": out, "rows": [],
+    return {"kind": kind, "mode": QM.of(ws.quant).key, "members": out, "rows": [],
             "summary": {}, "warnings": [], "errors": [], "features": features,
-            "settings": {"reporting_limit": getattr(s, "reporting_limit", 0.01),
-                         "duplicate_max_reldiff": getattr(s, "duplicate_max_reldiff", 30.0)}}
+            "settings": QL.of_settings(s).as_evidence()}
 
 
 def _safe(fn, *args) -> dict:

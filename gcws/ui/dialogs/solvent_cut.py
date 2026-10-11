@@ -2,6 +2,7 @@
 import copy
 from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox,
                                QFormLayout, QLabel)
+from gcws.quant import modes as QM
 from gcws.ui.layout.plot_menus import RetentionTimeSpinBox
 
 
@@ -9,7 +10,7 @@ class SolventCutDialog(QDialog):
     def __init__(self, ws, parent=None):
         super().__init__(parent)
         self.ws = ws
-        self.hs = ws.quant.get("mode") == "hs_screening"
+        self.hs = QM.of(ws.quant).hs
         self.setWindowTitle("Solvent cut")
         form = QFormLayout(self)
         def row(key, label):

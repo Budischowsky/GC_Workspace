@@ -146,7 +146,7 @@ def test_identification_copies_of_undo_are_deep_and_equal():
     """IdentCommand copies identifications with a plain-data copier: equal to deepcopy, nothing shared."""
     import copy
     from gcws.core.ident import Identification
-    from gcws.ui.undo import _copy_idents
+    from gcws.core.undo import _copy_idents
     hits = [{"name": "A", "score": 55, "peaks": [[73, 9.2], [165, 3.2]], "pair": (1, 2.5), "meta": {"x": [1]}}]
     items = [Identification(10.0, "A", "1-2-3", 80, hits=hits), Identification(11.0, "B")]
     copies = _copy_idents(items)

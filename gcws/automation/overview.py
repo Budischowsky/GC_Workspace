@@ -16,13 +16,11 @@ from typing import Optional
 
 from gcws.automation import journal as J
 from gcws.automation import localcopy as LC
+from gcws.automation import review as R
 from gcws.automation import scanner as SC
 from gcws.automation import store
 
 ROLES = {"blank": "blank", "blank_istd": "blank + ISTD", "sample": "sample", "ladder": "alkane ladder"}
-LEVEL = {J.ACCEPTED_AUTO: "ok", J.ACCEPTED_MANUAL: "ok", J.CONTROL: "warn", J.REJECTED: "bad", J.FAILED: "bad",
-         J.NOT_PROCESSED: "bad", J.WAITING: "neutral", J.QUEUED: "info", J.PROCESSING: "info", J.REMOVED: "neutral"}
-WORST = ("bad", "warn", "info", "ok", "neutral")
 
 
 @dataclass
@@ -54,11 +52,6 @@ def _runs_in(folder) -> list[str]:
 def _name(run: dict, stem: str) -> str:
     """A run's file name (os.path: thousands of runs are listed at each refresh)."""
     return os.path.basename(run.get("path") or stem)
-
-
-def _worst(levels) -> str:
-    levels = set(levels)
-    return next((lv for lv in WORST if lv in levels), "neutral")
 
 
 def _summary(jobs: list) -> str:
@@ -113,10 +106,7 @@ def _workflow(journal: J.Journal, wf, jobs: list, now: float) -> Item:
         # a network folder is left to the watcher's look (GC Workspace never waits for a slow drive)
         here = f.get("path") or b.get("folder") or ""
         gone = bool(here) and not store.is_network(here) and not os.path.isdir(here)
-        # every report of it deleted in Report² (one by one): as deleted as the batch itself
-        reports = [j for j in by_batch.get(b.get("id"), []) if not j.is_batch]
-        emptied = bool(reports) and all(j.deleted for j in reports)
-        if b.get("deleted") or (b.get("missing") and not f) or gone or emptied:
+        if R.hidden_in_tree(b, by_batch.get(b.get("id"), []), listed=bool(f), gone=gone):
             # deleted (from the disk, or in Report²): not listed, nor is its local copy
             lp = b.get("local_folder") or (str(LC.local_batch(local_root, root, here)) if local_root and here else "")
             if lp:
@@ -183,7 +173,7 @@ def _batch(journal: J.Journal, wf, f: dict, b: dict, jobs: list, root: str, loca
     item.state = _summary(live)
     # the runs of reports deleted in Report² are not listed either
     hidden = gone | {str(m).casefold() for j in samples if j.deleted for m in j.members or []}
-    item.level = _worst(LEVEL.get(j.state, "neutral") for j in live)
+    item.level = R.worst(R.level(j) for j in live)
     report = next((j for j in jobs if j.is_batch and not j.deleted), None)
     if report is not None:
         item.job_id = report.id
@@ -235,7 +225,7 @@ def _batch(journal: J.Journal, wf, f: dict, b: dict, jobs: list, root: str, loca
             run.sample, run.job_id = j.group_name, j.id
             run.state = J.STATE_LABELS.get(j.state, j.state)
             run.why = j.reason or ""
-            run.level = LEVEL.get(j.state, "neutral")
+            run.level = R.level(j)
         elif by_blank.get(name.casefold()):
             owners = by_blank[name.casefold()]
             run.sample = f"{ROLES.get(r.get('role'), 'blank')} of " + ", ".join(o.group_name for o in owners[:3]) + \

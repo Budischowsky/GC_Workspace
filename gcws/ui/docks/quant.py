@@ -9,8 +9,9 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
                                QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
 from gcws.core.keys import is_fid
+from gcws.quant import modes as QM
 from gcws.quant.service import DETECTORS, MODES, UNITS, quant_detector
-from gcws.ui.undo import ValueCommand
+from gcws.core.undo import ValueCommand
 
 
 def _item(text, editable=False):
@@ -206,13 +207,13 @@ class QuantDock(QScrollArea):
         import gc_fid
         self._loading = True
         q = self.ws.quant
-        self.mode.setCurrentIndex(max(0, self.mode.findData(q.get("mode", "nias_mgkg"))))
-        mode = self.mode.currentData()
-        self.rrt_box.setVisible(mode == "nias_mgkg")
-        hs = mode == "hs_screening"
+        self.mode.setCurrentIndex(max(0, self.mode.findData(QM.of(q).key)))
+        mode = QM.named(self.mode.currentData(), q)
+        self.rrt_box.setVisible(mode.nias)
+        hs = mode.hs
         for group in self.legacy_groups:
             group.setVisible(not hs)
-        extraction = mode == "extraction"
+        extraction = mode.key == "extraction"
         self.nias_params.setVisible(not hs and not extraction)
         self.method_panel.setVisible(extraction)
         self.defs_note.setText(
@@ -222,9 +223,9 @@ class QuantDock(QScrollArea):
             "once this table is set, the FC17/BBP/DNNP concentrations of the NIAS parameters no longer apply.")
         self.hs_panel.setVisible(hs)
         self.mode_form.setRowVisible(self.detector, not hs)
-        det = quant_detector(q)
+        det = QM.of(q).detector
         self.detector.setCurrentIndex(max(0, self.detector.findData(det)))
-        own = mode == "istd_conc"
+        own = mode.key == "istd_conc"
         self.mode_form.setRowVisible(self.unit, own)
         self.mode_form.setRowVisible(self.istd_conc, own)
         self.mode_form.setRowVisible(self.result_unit, not own and not hs)
@@ -235,8 +236,7 @@ class QuantDock(QScrollArea):
         if not (pending or self.istd_conc.hasFocus()):
             self.istd_conc.setValue(float(q.get("istd_conc_value") or 0))
         self.istd_conc.setSuffix(f" {unit}")
-        from gcws.quant.service import mode_unit
-        self.result_unit.setText(f"<b>{mode_unit(q)}</b> (fixed by the mode)")
+        self.result_unit.setText(f"<b>{QM.of(q).unit}</b> (fixed by the mode)")
         self.mode_note.setText({
             "hs_screening": "<b>HS-Screening:</b> MS-only quantification from TIC peak areas. "
                             "Configure the seven HS standards and sample amount below.",
@@ -261,7 +261,7 @@ class QuantDock(QScrollArea):
                           f"{det} area × standard amount ÷ standard area; Conc. 1 and Conc. 2 = mass ÷ sample "
                           "mass, area or extract volume. No response factors: every substance is assumed to "
                           "respond like the standards.",
-        }[mode] + ("" if hs or det != "TIC" else
+        }[mode.key] + ("" if hs or det != "TIC" else
                    "<br><b>TIC:</b> areas, ISTDs, blanks and names come from the TIC peaks; RTs in the "
                    "ISTD table, the bindings and the solvent end stay in FID time (TIC + FID-MS offset)."))
         if hs:
@@ -364,7 +364,7 @@ class QuantDock(QScrollArea):
         self._commit.stop()
         q = copy.deepcopy(self.ws.quant)
         q["mode"] = self.mode.currentData()
-        if q["mode"] != "hs_screening":
+        if not QM.of(q).hs:
             q["unit"] = self.unit.currentText().strip() or UNITS[0]
             q["istd_conc_value"] = self.istd_conc.value()
             det = self.detector.currentData()
@@ -451,7 +451,7 @@ class QuantDock(QScrollArea):
                                                          ("unbound" if rt is None else f"{rt:.3f}")), q)
 
     def _bind_selected(self):
-        if self.ws.quant.get("mode") == "hs_screening":
+        if QM.of(self.ws.quant).hs:
             self.hs_panel.bind()
             return
         p = self.ws.selected_peak()
@@ -484,7 +484,7 @@ class QuantDock(QScrollArea):
         """The chosen standard's spectrum in the active run becomes its reference (undoable)."""
         from gcws.quant import istd_detect as ID
         st = self.ws.active
-        hs = self.ws.quant.get("mode") == "hs_screening"
+        hs = QM.of(self.ws.quant).hs
         code = code or (self.hs_panel.codes.currentData() if hs else self.bind_box.currentData())
         if st is None or not code:
             return None

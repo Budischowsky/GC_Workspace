@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QFileDialog, QGroupBox, 
                                QVBoxLayout, QWidget)
 
 from gcws.automation import journal as J
+from gcws.automation import review as R
 from gcws.automation import templates
 from gcws.automation import workflow as W
 from gcws.ui import theme
@@ -299,16 +300,14 @@ class AutomationDock(QWidget):
         try:
             batches = {b["id"]: b for b in self.journal.batches()}
             # a deleted batch folder (from the disk or in Report²) and a deleted report are not listed
-            jobs = [j for j in self.journal.jobs(states=J.QUEUE) if not j.deleted and not
-                    (batches.get(j.batch_id, {}).get("deleted") or batches.get(j.batch_id, {}).get("missing"))]
+            jobs = [j for j in self.journal.jobs(states=J.QUEUE)
+                    if not R.hidden_in_queue(j, batches.get(j.batch_id, {}))]
         except Exception:  # noqa: BLE001
             return
         keep = set(self.queue_selection()) | {f"batch:{i}" for i in self.request_selection()}
         names = {wf.id: wf.name for wf in W.list_workflows()}
         self.queue.blockSignals(True)
         self.queue.setRowCount(0)
-        level = {J.WAITING: "neutral", J.QUEUED: "info", J.PROCESSING: "info", J.FAILED: "bad",
-                 J.NOT_PROCESSED: "bad"}
         for j in jobs:
             r = self.queue.rowCount()
             self.queue.insertRow(r)
@@ -320,7 +319,7 @@ class AutomationDock(QWidget):
                 if c == 4:
                     it.setToolTip(v)
                 self.queue.setItem(r, c, it)
-            self.queue.item(r, 3).setBackground(theme.status_brush(level.get(j.state, "neutral")))
+            self.queue.item(r, 3).setBackground(theme.status_brush(R.level(j)))
             if j.id in keep:
                 self.queue.selectRow(r)
         # samples added by hand that the watcher has not taken up yet

@@ -65,7 +65,7 @@ def test_real_gap_fill_finds_a_deleted_peak_again(fresh07):
     from gcws.core.events import ManualEvent, ManualKind
     from gcws.features import service as SV
     from gcws.features.model import GAPFILL
-    from gcws.ui.undo import add_event
+    from gcws.core.undo import add_event
     ws, ids = fresh07
     table = SV.build(ws, ids)
     # a clear pair with a comparable spectrum, away from neighbours

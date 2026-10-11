@@ -2,29 +2,13 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout,
                                QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget)
 
 from gcws import paths
-
-
-def _settings_file() -> Path:
-    return paths.DATA / "settings.json"
-
-
-def load_settings() -> dict:
-    try:
-        return json.loads(_settings_file().read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-
-
-def save_settings(data: dict) -> None:
-    _settings_file().parent.mkdir(parents=True, exist_ok=True)
-    _settings_file().write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+from gcws.core.settings import load as load_settings, save as save_settings  # noqa: F401  (the Quant panel imports them here)
 
 
 def _path_row(edit: QLineEdit, folder=True, filt=""):

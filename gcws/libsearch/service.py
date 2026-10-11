@@ -20,7 +20,7 @@ import numpy as np
 
 import gcws.libsearch  # noqa: F401  (vendor on sys.path)
 from gcws.libsearch import store
-from gcws.libsearch.norms import DiskNorms, NormFolds
+from gcws.libsearch.norms import DiskNorms, NormFolds, rust_folds
 
 import engine as _atlas_engine        # vendored SpectrAtlas modules
 import msp as _msp
@@ -87,7 +87,8 @@ class LocalEngine(_atlas_engine.Engine):
 
     def __init__(self, specs: list, cache: Path, progress: Callable[[str], None] = lambda t: None):
         self.root = Path(cache)
-        self._folds = NormFolds(disk=DiskNorms(self.root / ".norms"))
+        # folded in Rust, a range costs less than reading its snapshot back: no store on disk
+        self._folds = NormFolds(disk=None if rust_folds() else DiskNorms(self.root / ".norms"))
         self.root.mkdir(parents=True, exist_ok=True)
         self.library_dirs = []
         self.native, self.custom, self.shards = [], [], []

@@ -161,34 +161,6 @@ def test_watcher_waits_for_the_undo_grace_before_delivering(env, qapp, monkeypat
     assert delivered == [j.id]
 
 
-def test_batch_closed_when_everything_is_accepted_and_delivered(tmp_path):
-    J, jr, b = _journal(tmp_path)
-    a = _done(J, jr, b, "A", J.ACCEPTED_AUTO, export_state="done")
-    c = _done(J, jr, b, "C", J.CONTROL)
-    jobs = lambda: jr.jobs(batch_id=b["id"])                       # noqa: E731
-    batch = lambda: jr.batch_by_id(b["id"])                        # noqa: E731
-    assert not J.batch_closed(batch(), jobs())                     # C needs control
-    assert jr.review(c.id, True)
-    assert not J.batch_closed(batch(), jobs())                     # accepted, not yet delivered
-    jr.update_job(c.id, export_pending=0, export_state="done")
-    assert J.batch_closed(batch(), jobs())
-    jr.update_batch(b["id"], plan={"complete": False})
-    assert not J.batch_closed(batch(), jobs())                     # more samples to come
-    jr.update_batch(b["id"], plan={"complete": True})
-    assert jr.reopen_batch(b["id"], user="analyst")
-    assert not J.batch_closed(batch(), jobs())                     # reopened: back in To do
-    time.sleep(0.01)
-    assert jr.review(c.id, False) and jr.review(c.id, True)       # a rejected report can be accepted
-    jr.update_job(c.id, export_pending=0)
-    assert J.batch_closed(batch(), jobs())                         # decided again after reopening
-    _done(J, jr, b, "F", J.FAILED)
-    assert not J.batch_closed(batch(), jobs())
-    f = [j for j in jobs() if j.group_name == "F"][0]
-    jr.delete([f.id])
-    assert J.batch_closed(batch(), jobs())                         # a deleted report does not count
-    assert not J.batch_closed(batch(), [])
-
-
 def test_relative_times():
     from datetime import datetime, timedelta
     from gcws.automation.journal import ago
@@ -215,6 +187,7 @@ def test_pairs_accepted_by_hand(tmp_path):
     (the workflow's batch when there is one), never waiting for delivery; accepted again it gets the next
     revision of the same entry."""
     from gcws.automation import manual as MA
+    from gcws.automation import review as R
     from gcws.automation.workflow import new_id
     J, jr, b = _journal(tmp_path)
     folder = tmp_path / "26016605_TEST"
@@ -244,7 +217,7 @@ def test_pairs_accepted_by_hand(tmp_path):
     assert MA.clash(jr, b["id"], "Pair (2)") is None and MA.entry(jr, b["id"], "Pair (2)").id == job.id
     back = listed("Pair (2)", replace=MA.entry(jr, b["id"], "Pair (2)").id)
     assert back.id == job.id and not back.deleted and back.revision == 3
-    assert J.batch_closed(jr.batch_by_id(b["id"]), [back])          # nothing pending: it can be archived
+    assert R.batch_closed(jr.batch_by_id(b["id"]), [back])          # nothing pending: it can be archived
 
 
 def test_change_check_and_stamp_are_cheap_and_ignore_the_heartbeat(tmp_path):

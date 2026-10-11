@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+from gcws.quant import modes as QM
 from gcws.report import service as RS
 
 
@@ -21,12 +22,8 @@ class ReportNotPossible(Exception):
 
 def cas_path() -> Optional[Path]:
     """CASINFO.xlsx of the preferences, resolved like the NIAS main script does it."""
-    from gcws import paths
-    from gcws.ui.dialogs.preferences import load_settings
-    raw = Path(load_settings().get("standard_cas_path", "CASINFO.xlsx"))
-    if raw.is_absolute():
-        return raw if raw.exists() else None
-    return next((b / raw for b in (paths.RESOURCES, paths.ROOT, paths.DATA) if (b / raw).exists()), None)
+    from gcws.core.settings import cas_path
+    return cas_path()
 
 
 def prepare(ws, kind: str, group: Optional[dict], *, recompute: bool = True,
@@ -35,7 +32,7 @@ def prepare(ws, kind: str, group: Optional[dict], *, recompute: bool = True,
 
     Recomputes the quantification first (``recompute``: unless the caller just did). A Template report
     needs the method's template (or ``template``); what it cannot fill it leaves out with a warning."""
-    hs = ws.quant.get("mode") == "hs_screening" and kind != "template"
+    hs = QM.of(ws.quant).hs and kind != "template"
     if not RS.kind_fits(kind, ws.quant):
         raise ReportNotPossible("mode", "Select HS-Screening mode and its report together, and Extraction (quant "
                                 "method) with the Quantification report. For other reports, select the "
@@ -102,9 +99,9 @@ def report_order(ws, group: dict) -> list[str]:
     so a report does not depend on the order the pair was picked in. A group whose analyst edits refer to
     determination 1 / 2 keeps its order, so those values stay with their determination."""
     from gcws.io.sequence import order_key
-    from gcws.quant import duplicate_view as DV
+    from gcws.quant import double_determination as DD
     members = [m for m in group["members"] if m in ws.runs]
-    edits = group.get(DV.edits_key(ws.quant, ws.quant_unit())) or {}
+    edits = DD.edits_of(group, ws.quant, ws.quant_unit())
     if any(isinstance(v, dict) and (v.get("dismissed") or any(v.get(k) is not None for k in ("a1", "a2", "c1", "c2")))
            for v in edits.values()):
         return members
@@ -152,7 +149,7 @@ def build_job(ws, kind: str, group: dict, target: Path, *, members: Optional[lis
               method_name: str = "") -> RS.ReportJob:
     """The ``ReportJob`` of ``group`` (after :func:`prepare`) writing ``target``. A Template report's table
     is built here (``template``: else the method's), so writing it never touches the workspace."""
-    from gcws.quant import duplicate_view as DV
+    from gcws.quant import double_determination as DD
     from gcws.quant import migration as MG
     from gcws.quant.nias_bridge import make_settings
     if members is None or samples is None:
@@ -177,7 +174,7 @@ def build_job(ws, kind: str, group: dict, target: Path, *, members: Optional[lis
         keep_middle=target.with_name(target.stem + "_intermediate.xlsx") if keep_middle and not preview else None,
         sample_key=stem, record_seen=(not preview) if record_seen is None else record_seen,
         ri_options={k: bool((ws.quant.get("ri") or {}).get(k)) for k in ("report_ri", "replace_rt")},
-        edits=dict(group.get(DV.edits_key(ws.quant, ws.quant_unit())) or {}),
+        edits=DD.edits_of(group, ws.quant, ws.quant_unit()),
         notes=[] if hs and not ws.quant.get("hs", {}).get("blank_correction", True) else blank_warnings(ws, members),
         features=None if hs or kind == "template" else feature_table(ws, members, group))
     if kind == "template":

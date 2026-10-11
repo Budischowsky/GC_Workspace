@@ -11,6 +11,8 @@ from PySide6.QtCore import QObject, Qt, Signal as QtSignal
 from PySide6.QtGui import QBrush, QColor, QPalette
 from PySide6.QtWidgets import QApplication, QDockWidget, QLabel
 
+from gcws.core import colors
+
 # -- tokens --------------------------------------------------------------------
 # Sets with the same names: LIGHT (default), DARK and NEON. ``set_theme`` loads one into the
 # module names below, so ``theme.ACCENT`` etc. always give the colour of the current theme.
@@ -32,8 +34,7 @@ LIGHT = {
     "PAPER": "#FFFFFF",                # icon fills
     "CHEVRON": "", "CLOSE_ICON": "",   # icon file suffix ("" or "-dark")
     #: run colours: colour-blind-safe (Okabe-Ito first), all dark enough for thin lines on white
-    "RUN_COLORS": ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#8C564B", "#6A3D9A",
-                   "#B8860B", "#E7298A", "#1F3A93", "#11A579", "#A6761D", "#7F3C8D", "#3969AC", "#666666"],
+    "RUN_COLORS": list(colors.RUN_COLORS),
     "PLOT": {
         "bg": "#FFFFFF", "fg": "#46555F", "grid_alpha": 0.12, "cursor": "#1F6F8B", "cursor_text": "#35444E",
         "baseline": "#C0392B", "drop": (90, 102, 112, 160), "manual_fill": (230, 126, 34, 70),
@@ -153,7 +154,7 @@ def qcolor(value, alpha: int | None = None) -> QColor:
 
 
 #: shade of the n-th determination of a double (N-fold) determination: (towards, share)
-SHADES = {1: ("PAPER", 0.45), 2: ("INK", 0.3), 3: ("PAPER", 0.65)}
+SHADES = colors.SHADES
 
 
 def shade(color: str, rank: int) -> str:

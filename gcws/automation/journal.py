@@ -57,6 +57,10 @@ TRANSITIONS = {
 QUEUE = (WAITING, QUEUED, PROCESSING, FAILED, NOT_PROCESSED)
 #: the states "Remove from queue" applies to (a job being processed is not taken away from the watcher)
 REMOVABLE = (WAITING, QUEUED, FAILED, NOT_PROCESSED)
+#: the states the analyst may accept, reject or set back to control needed from (Report², ``review.allowed``)
+ACCEPT_FROM = (CONTROL, REJECTED)
+REJECT_FROM = (CONTROL, ACCEPTED_AUTO, ACCEPTED_MANUAL)
+SET_CONTROL_FROM = (ACCEPTED_AUTO, ACCEPTED_MANUAL, REJECTED)
 BATCH_KEY = "__batch__"                 # the job row of a batch report
 #: the workflow id of the entries the analyst accepted outside any workflow (``gcws.automation.manual``)
 MANUAL_WORKFLOW = "manual"
@@ -639,7 +643,7 @@ class Journal:
         user = user or _user()
         with self.tx():
             j = self.job(job_id)
-            if j is None or j.is_batch or j.deleted or j.review_pending or j.state not in (*ACCEPTED, REJECTED):
+            if j is None or j.is_batch or j.deleted or j.review_pending or j.state not in SET_CONTROL_FROM:
                 return False
             deliver = j.workflow_id != MANUAL_WORKFLOW
             ok = self.transition(job_id, j.state, CONTROL, reviewer=None, comment=None, reviewed_at=None,
@@ -653,23 +657,26 @@ class Journal:
 
     def review(self, job_id: str, accept: bool, comment: str = "", user: Optional[str] = None,
                grace: float = 0.0) -> bool:
-        """The analyst accepts or rejects a processed report. ``grace``: seconds the watcher waits
-        before it delivers an accepted report (so the analyst can still undo it)."""
+        """The analyst accepts (from control needed or rejected) or rejects (from control needed or
+        accepted) a processed report - never a deleted one, one being made again, nor accepts an edited one
+        (that is made again first: :meth:`update_edited`). ``grace``: seconds the watcher waits before it
+        delivers an accepted report (so the analyst can still undo it)."""
         user = user or _user()
-        j = self.job(job_id)
-        if j is None or j.review_pending or (accept and j.edited):
-            return False
-        to = ACCEPTED_MANUAL if accept else REJECTED
-        now = time.time()
-        deliver = accept and j.workflow_id != MANUAL_WORKFLOW          # no workflow delivers an entry by hand
-        ok = self.transition(job_id, (CONTROL, ACCEPTED_AUTO, ACCEPTED_MANUAL, REJECTED), to, reviewer=user,
-                             comment=comment, reviewed_at=now, export_pending=1 if deliver else 0,
-                             deliver_after=now + grace if deliver and grace else 0)
-        if ok:
-            self.event("info", f"{j.group_name}: {'accepted' if accept else 'rejected'} by {user}"
-                       + (f" - {comment}" if comment else ""), job_id=job_id, workflow_id=j.workflow_id,
-                       batch_id=j.batch_id, user=user)
-        return ok
+        with self.tx():
+            j = self.job(job_id)
+            if j is None or j.deleted or j.review_pending or (accept and j.edited):
+                return False
+            to = ACCEPTED_MANUAL if accept else REJECTED
+            now = time.time()
+            deliver = accept and j.workflow_id != MANUAL_WORKFLOW      # no workflow delivers an entry by hand
+            ok = self.transition(job_id, ACCEPT_FROM if accept else REJECT_FROM, to, reviewer=user,
+                                 comment=comment, reviewed_at=now, export_pending=1 if deliver else 0,
+                                 deliver_after=now + grace if deliver and grace else 0)
+            if ok:
+                self._event_raw("info", j.workflow_id, j.batch_id, job_id,
+                                f"{j.group_name}: {'accepted' if accept else 'rejected'} by {user}"
+                                + (f" - {comment}" if comment else ""), user)
+            return ok
 
     #: the fields a review changes, which :meth:`undo_review` puts back
     REVIEW_FIELDS = ("state", "reviewer", "comment", "reviewed_at", "export_pending", "deliver_after")
@@ -731,6 +738,16 @@ class Journal:
             self.event("info", f"{j.group_name}: restored in Report² by {user}", job_id=jid,
                        workflow_id=j.workflow_id, batch_id=j.batch_id, user=user)
         return done
+
+    def unremove(self, job_id: str, state: str, reason: str = "") -> bool:
+        """Undo of a delete: a job the delete took out of the queue (:data:`REMOVED`) is back in it in
+        ``state`` (one of :data:`REMOVABLE`, the state it had), once it is shown again. Nothing else ever
+        leaves REMOVED this way (TRANSITIONS: only "Process again" queues it)."""
+        if state not in REMOVABLE:
+            return False
+        cur = self.con.execute("UPDATE jobs SET state=?, reason=? WHERE id=? AND state=? AND deleted=0",
+                               (state, reason, job_id, REMOVED))
+        return cur.rowcount == 1
 
     def delete_batch(self, batch_id: int, user: Optional[str] = None) -> bool:
         """Hide a batch folder with all its reports; the watcher no longer looks at it."""
@@ -901,19 +918,3 @@ def ago(ts, now: Optional[float] = None) -> str:
         return f"{(today - then).days} days ago"
     return then.strftime("%Y-%m-%d")
 
-
-def batch_closed(batch: dict, jobs: list) -> bool:
-    """True when every report of the batch is accepted and delivered (Report² archives it). A
-    reopened batch stays open until one of its reports is decided again."""
-    live = [j for j in jobs if not j.deleted and j.state != REMOVED]
-    if not live or any(j.state not in ACCEPTED or j.export_pending or j.export_state == "error" or j.review_pending
-                       for j in live):
-        return False
-    try:
-        plan = json.loads(batch.get("plan_json") or "null")
-    except ValueError:
-        plan = None
-    if isinstance(plan, dict) and not plan.get("complete", True):
-        return False
-    reopened = float(batch.get("reopened") or 0)
-    return not reopened or max(float(j.reviewed_at or j.finished or 0) for j in live) > reopened

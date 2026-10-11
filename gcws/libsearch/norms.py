@@ -18,6 +18,12 @@ own and searches the same few ranges (the acquisition range; consensus spectra s
 41, 43, ...), so a later process resumes from the nearest stored snapshot instead of starting at
 zero. The files are the float64 arrays themselves (``np.save``), so a loaded snapshot is the
 computed one bit for bit. The least recently used files go once the store exceeds ``budget``.
+
+With the Rust extension (``rust/gcws_rust``, ``fold_norms``) a whole range folds in about 10 ms
+instead of 0.3-0.4 s, from zero as well, with the same sums bit for bit (each reference row still
+adds its terms in ascending mass order). The search service then keeps no snapshots on disk: a job
+of consensus spectra stored ~600 MB of them, more than the store keeps, so it evicted its own and
+paid the writes and the pruning without reading any back. ``GCWS_RUST_NORMS=off`` keeps numpy.
 """
 from __future__ import annotations
 
@@ -29,8 +35,24 @@ from typing import Optional
 
 import numpy as np
 
+try:
+    import gcws_rust as _rust
+except ImportError:  # the extension is not built
+    _rust = None
+if _rust is not None and not hasattr(_rust, "fold_norms"):
+    _rust = None
+
 #: bytes of norm snapshots kept on disk (all libraries together)
 DISK_BUDGET = 400 * 2 ** 20
+
+#: ``id(rows)`` -> (rows, whether every mass lists its rows ascending), checked once per shard
+_ordered: dict = {}
+_ordered_lock = threading.Lock()
+
+
+def rust_folds() -> bool:
+    """Whether ranges fold in Rust (the extension is built and ``GCWS_RUST_NORMS`` is not off)."""
+    return _rust is not None and os.environ.get("GCWS_RUST_NORMS", "").strip().lower() not in ("off", "python")
 
 
 def _fold_mass(out: np.ndarray, shard: dict, m: int) -> None:
@@ -39,6 +61,33 @@ def _fold_mass(out: np.ndarray, shard: dict, m: int) -> None:
     if b > a:
         f = np.float64(m) / 100
         out[shard['rows'][a:b]] += np.asarray(shard['intensities'][a:b], dtype=np.float64) * (f * f)
+
+
+def _rust_arrays(shard: dict) -> Optional[tuple]:
+    """The shard's index arrays for ``fold_norms``, or None when its layout does not allow it."""
+    pointers, rows, intensities = (np.asarray(shard[k]) for k in ('pointers', 'rows', 'intensities'))
+    if (pointers.dtype != np.int64 or rows.dtype != np.int32 or intensities.dtype != np.float32
+            or not all(a.flags.c_contiguous for a in (pointers, rows, intensities))):
+        return None
+    key = id(shard['rows'])
+    with _ordered_lock:
+        held = _ordered.get(key)
+    if held is None or held[0] is not shard['rows']:
+        held = (shard['rows'], bool(_rust.rows_ordered(pointers, rows, int(shard['count']))))
+        with _ordered_lock:
+            _ordered[key] = held
+    return (pointers, rows, intensities) if held[1] else None
+
+
+def _fold(out: np.ndarray, shard: dict, first: int, maximum: int) -> np.ndarray:
+    """``out`` plus the terms of the masses ``first..maximum``, added mass by mass."""
+    if rust_folds() and 0 <= first <= maximum and maximum + 1 < len(shard['pointers']):
+        arrays = _rust_arrays(shard)
+        if arrays is not None:
+            return _rust.fold_norms(*arrays, out, first, maximum)
+    for m in range(first, maximum + 1):
+        _fold_mass(out, shard, m)
+    return out
 
 
 def _fingerprint(shard: dict) -> Optional[str]:
@@ -173,8 +222,8 @@ class NormFolds:
                 out, first = np.zeros(int(shard['count'])), minimum
             else:
                 first = start + 1
-            for m in range(first, maximum + 1):
-                _fold_mass(out, shard, m)
+            if first <= maximum:
+                out = _fold(out, shard, first, maximum)
             if fingerprint is not None and first <= maximum:
                 self.disk.save(fingerprint, minimum, maximum, out)
             with self._lock:

@@ -28,6 +28,7 @@ from gcws import paths
 from gcws.automation import journal as J
 from gcws.automation import localcopy as LC
 from gcws.automation import planner as PN
+from gcws.automation import review as R
 from gcws.automation import runner as RN
 from gcws.automation import scanner as SC
 from gcws.automation import store
@@ -416,7 +417,7 @@ class WatcherCore(QObject):
                 if not b.get("missing") and os.path.isdir(Path(b["folder"]).parent):
                     self._gone(wf, b)                  # deleted (its drive is there): off the queue and the list
                 continue
-            if self.journal.forced(b) or (b.get("manual") and not J.batch_closed(
+            if self.journal.forced(b) or (b.get("manual") and not R.batch_closed(
                     b, self.journal.jobs(workflow_id=wf.id, batch_id=b["id"]))):
                 self._scan_batch(wf, Path(b["folder"]), now, cfg, baseline_new=False)
 
@@ -828,19 +829,8 @@ class WatcherCore(QObject):
         self.changed.emit()
 
     def deliver_pending(self) -> None:
-        from gcws.automation import export
-        now = self.clock()
-        for job in self.journal.to_deliver():
-            if float(job.deliver_after or 0) > now:
-                continue                               # nothing to deliver, or the analyst may still undo
-            wf = self.workflows.get(job.workflow_id) or W.find(job.workflow_id)
-            if wf is None:
-                continue
-            try:
-                export.deliver(self.journal, wf, job)
-            except Exception as exc:  # noqa: BLE001
-                self.journal.update_job(job.id, export_state="error", export_pending=0)
-                self.journal.event("error", f"{job.group_name}: delivery failed: {exc}", job_id=job.id)
+        R.deliver_due(self.journal, now=self.clock(),
+                      find=lambda wid: self.workflows.get(wid) or W.find(wid))
 
 
 # -- the process: tray icon and control socket -------------------------------------------------------

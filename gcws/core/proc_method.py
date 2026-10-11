@@ -92,8 +92,8 @@ def collect(win, name: str, comment: str = "") -> dict:
                           "skip": s.value("search/skip", False, type=bool),
                           "rescan": s.value("search/rescan", False, type=bool),
                           "rescan_limit": int(s.value("search/rescan_limit", 80))}
-    from gcws.ui.dialogs.own_search import load_options
-    sections["own_search"] = load_options()
+    from gcws.core.settings import load_own_search
+    sections["own_search"] = load_own_search()
     sections["report"] = {"keep_middle": s.value("report/keep_middle", False, type=bool)}
     table = getattr(win, "table", None)
     sections["table"] = {"layout": table.layout_state() if table is not None else None,
@@ -292,8 +292,8 @@ def apply(win, method: dict, sections=None) -> list[str]:
     if "search" in chosen:
         _apply_search(sec["search"] or {})
     if "own_search" in chosen:
-        from gcws.ui.dialogs.own_search import save_options
-        save_options(sec["own_search"] or {})
+        from gcws.core.settings import save_own_search
+        save_own_search(sec["own_search"] or {})
     if "report" in chosen:
         on = bool((sec["report"] or {}).get("keep_middle", False))
         s.setValue("report/keep_middle", on)
@@ -342,7 +342,7 @@ def search_config(method: dict, gc_method: str = "") -> SearchConfig:
 
 def _apply_integration(ws, integ: dict, name: str, stack, persist: bool = True) -> None:
     from gcws.integration.method import IntegrationMethod
-    from gcws.ui.undo import SetMethodCommand
+    from gcws.core.undo import SetMethodCommand
     for kind, d in integ.items():
         m = IntegrationMethod.from_dict(d)
         if persist:
