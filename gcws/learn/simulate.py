@@ -7,6 +7,7 @@ from __future__ import annotations
 import statistics
 from typing import Optional
 
+from gcws.core.ident import names_unknown
 from gcws.learn.rules import background, keep_report
 from gcws.learn.runner import ProgramResult
 
@@ -48,7 +49,7 @@ def simulate_report(prog: ProgramResult, params: dict, families=()) -> Optional[
         name = peak.get("name") or ""
         score = peak.get("score")
         if score is not None and score >= params["min_score"] and peak.get("cas") and \
-                not name.casefold().startswith("unknown"):
+                not names_unknown(name):
             lines.append({"rt": peak["rt"], "name": name, "cas": peak["cas"], "kind": "line"})
         elif params["unknowns"] == "report":
             lines.append({"rt": peak["rt"], "name": name or "unknown", "cas": "", "kind": "line"})

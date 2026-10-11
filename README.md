@@ -440,13 +440,14 @@ Watched folder  ->  Method  ->  Report²  ->  Report  ->  Target folder(s)
   when watching starts is not processed (unless chosen).
 - **Method**: a saved processing method (*Method > Save current settings as Method...*, including migration
   conditions for NIAS), library search on/off, automatic ISTD detection, which blank is required, time limit.
-- **Report²**: the rules (see below) and whether a report without findings is accepted automatically.
+- **Report²**: the rules (see below). Every report needs the analyst's acceptance; one without findings
+  says "No findings".
 - **Report**: NIAS / Fingerprint / Total extraction / HS-Screening and its files: Excel, Word, PDF (needs
   Microsoft Word), double determination workbook, and per batch folder a combined Word/PDF report of all
   samples and a Report² summary workbook.
 - **Target folder**: path, subfolder with placeholders `{batch} {sample} {kind} {status} {date} {workflow}`,
   what happens when a file exists. A target inside the watched raw-data folder is refused unless allowed.
-- **Arrows** carry filters (double-click an arrow): report status (accepted automatically / by the analyst /
+- **Arrows** carry filters (double-click an arrow): report status (accepted by the analyst /
   control needed), file formats, sample and batch-folder name patterns. Only what matches passes. Example
   (template "NIAS"): Report² -> Report lets only accepted reports through; Report -> folder A takes Excel,
   Report -> folder B takes Word and PDF. Add an arrow with status *control needed* to a review folder to get
@@ -475,8 +476,8 @@ control. *Start with Windows* (panel or tray menu) puts a shortcut into your Sta
 `data/automation/jobs/<job>/r<revision>`; the raw-data folders are only read. The log is
 `data/logs/watcher.log`.
 
-**Report²** (*Automation > Report²*): how many samples were processed, accepted (automatically / by the
-analyst), need control, were not processed, are waiting or failed - per workflow, period and search text.
+**Report²** (*Automation > Report²*): how many samples were processed, accepted by the analyst, need
+control, were not processed, are waiting or failed - per workflow, period and search text.
 - One list grouped by batch folder; the status chips (control needed, accepted, waiting, ...) count and
   filter it. **To do** holds the open batches; a batch whose reports are all accepted and delivered moves to
   the **Archive** by itself (searchable by batch or sample; *Reopen* brings it back).

@@ -37,9 +37,9 @@ class RulesDialog(QDialog):
         self.setWindowTitle("Report² - rules")
         self.setMinimumSize(620, 560)
         lay = QVBoxLayout(self)
-        lay.addWidget(theme.hint("A report is accepted automatically when no rule finds anything. A rule set to "
-                                 "'control needed' sends it to the analyst; 'note only' lists the finding but "
-                                 "accepts the report."))
+        lay.addWidget(theme.hint("Every report needs the analyst's acceptance. A rule set to 'control needed' "
+                                 "points the analyst to what it found; 'note only' lists the finding. A report no "
+                                 "rule found anything in says 'No findings'."))
         body = QWidget()
         bl = QVBoxLayout(body)
         self._rows = []

@@ -103,7 +103,7 @@ def build_spec(entry: CorpusEntry, method: dict, out_dir: Path, migration: Optio
             "group": {"key": run, "name": run[:-2] if run.lower().endswith(".d") else run, "members": [run]},
             "blanks": blanks, "override": {"allow_no_blank": True},
             "reports": [{"node": "learn", "kind": "nias", "formats": ["xlsx"]}], "rules": None,
-            "auto_accept": True, "has_review": True, "out_dir": str(out_dir), "search": True, "istd_detect": True,
+            "has_review": True, "out_dir": str(out_dir), "search": True, "istd_detect": True,
             "min_confidence": "high", "require_blank": "auto"}
 
 

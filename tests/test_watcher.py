@@ -172,9 +172,6 @@ def test_report_again_is_never_accepted_by_itself(env):
     assert jr.request(job.id, "rereport")
     again, _ = RN.job_spec(jr, env["wf"], jr.job(job.id), method=lambda name: {})
     assert again["mode"] == "rereport" and spec["mode"] == "full"
-    assert PL.checked_state(again, PL.ACCEPTED_AUTO) == PL.CONTROL           # made again: the analyst checks
-    assert PL.checked_state(spec, PL.ACCEPTED_AUTO) == PL.ACCEPTED_AUTO      # processed: the rules decide
-    assert PL.checked_state(again, PL.FAILED) == PL.FAILED
 
 
 def test_set_back_to_control_needed(env):
@@ -377,8 +374,11 @@ def test_watching_a_batch_being_acquired(env, qapp):
     assert not (env["tmp"] / "A").exists()                 # held back until accepted
     assert len(launcher.started) == 2                      # the next sample started at once
     _, spec2, _ = launcher.started[1]
-    launcher.complete(_result(spec2, "accepted_auto", findings=0))
-    assert jr.job(other.id).state == J.ACCEPTED_AUTO
+    launcher.complete(_result(spec2, "accepted_auto", findings=0))   # a program from before Oct 2026
+    assert jr.job(other.id).state == J.CONTROL                       # nothing is accepted by itself
+    assert not (env["tmp"] / "A" / batch.name / "26016607_y_NIAS_Report.xlsx").exists()
+    _accept(jr, other.id)
+    core.tick()
     assert (env["tmp"] / "A" / batch.name / "26016607_y_NIAS_Report.xlsx").is_file()
     assert (env["tmp"] / "B" / batch.name / "26016607_y_NIAS_Report.docx").is_file()
     # the analyst accepts the first one in Report²: it is delivered on the next look
@@ -516,15 +516,17 @@ def test_planned_runs_that_never_came(env, qapp):
     jobs = {j.group_name: j for j in jr.jobs()}
     assert jobs["26016606_x"].state == J.PROCESSING
     assert jobs["26016607_y"].state == J.NOT_PROCESSED and "sequence ended" in jobs["26016607_y"].reason
-    launcher.complete(_result(launcher.started[-1][1], "accepted_auto", findings=0))
+    launcher.complete(_result(launcher.started[-1][1], "control", findings=0))
+    _accept(jr)
     now[0] += 61
     core.tick()                                            # every sample settled: the batch report follows
     assert launcher.started[-1][2] == "batch"
     bspec = launcher.started[-1][1]
     assert [e["name"] for e in bspec["entries"]] == ["26016606_x", "26016607_y"]
-    # every reported sample accepted: the batch report counts as accepted (the missing one is listed)
-    launcher.complete({"state": "accepted_auto", "files": {}, "findings": []})
-    assert next(j for j in jr.jobs() if j.is_batch).state == J.ACCEPTED_AUTO
+    # the batch report (the missing sample is listed) is checked and accepted by the analyst as well
+    launcher.complete({"state": "control", "files": {}, "findings": []})
+    made = next(j for j in jr.jobs() if j.is_batch)
+    assert made.state == J.CONTROL and "batch report" in made.reason
 
 
 def test_removed_sample_does_not_hold_up_the_batch(env, qapp):
@@ -548,7 +550,8 @@ def test_removed_sample_does_not_hold_up_the_batch(env, qapp):
     jobs = {j.group_name: j for j in jr.jobs()}
     y = jobs["26016607_y"]
     assert y.state == J.WAITING
-    launcher.complete(_result(launcher.started[-1][1], "accepted_auto", findings=0))
+    launcher.complete(_result(launcher.started[-1][1], "control", findings=0))
+    _accept(jr)
     now[0] += 61
     core.tick()
     assert not any(j.is_batch for j in jr.jobs())          # waits for y
@@ -759,12 +762,23 @@ def _age(path: Path, seconds: float):
         os.utime(p, (t, t))
 
 
-def _processed(jr, launcher, state="accepted_auto"):
-    """Complete every job the fake launcher starts until the queue is empty."""
+def _accept(jr, *ids):
+    """The analyst accepts the reports ``ids`` (all sample reports needing control when none are given)."""
+    from gcws.automation import journal as J
+    jobs = [jr.job(i) for i in ids] if ids else [j for j in jr.jobs(states=[J.CONTROL]) if not j.is_batch]
+    for j in jobs:
+        assert jr.review(j.id, True, user="analyst")
+
+
+def _processed(jr, launcher, state="control"):
+    """Complete every job the fake launcher starts until the queue is empty; the analyst accepts each
+    sample report."""
     while launcher.job is not None:
-        _, spec, kind = launcher.started[-1]
+        job_id, spec, kind = launcher.started[-1]
         launcher.complete(_result(spec, state, findings=0) if kind == "job" else
-                          {"state": "accepted_auto", "files": {}, "findings": []})
+                          {"state": "control", "files": {}, "findings": []})
+        if kind == "job" and state == "control":
+            _accept(jr, job_id)
 
 
 def _core(env):
@@ -790,7 +804,7 @@ def test_batch_folder_put_in_again_is_processed_again(env, qapp):
     core.tick()
     _processed(jr, launcher)
     sample = next(j for j in jr.jobs() if not j.is_batch)
-    assert sample.state == J.ACCEPTED_AUTO
+    assert sample.state == J.ACCEPTED_MANUAL
     jr.delete([j.id for j in jr.jobs()])                   # deleted in Report²
     keep = env["tmp"] / "keep"
     shutil.move(str(batch), str(keep))                    # taken out of the watched folder ...
@@ -1510,20 +1524,22 @@ def test_a_deleted_run_leaves_a_processed_sample_as_it_is(env, qapp):
     now[0] += 61
     core.tick()
     while launcher.started and jr.job(launcher.started[-1][0]).state == J.PROCESSING:
-        launcher.complete(_result(launcher.started[-1][1], "accepted_auto", findings=0))
+        done_id, done_spec, _ = launcher.started[-1]
+        launcher.complete(_result(done_spec, "control", findings=0))
+        _accept(jr, done_id)
     x = next(j for j in jr.jobs() if j.group_name == "26016606_x")
-    assert x.state == J.ACCEPTED_AUTO and x.revision == 1
+    assert x.state == J.ACCEPTED_MANUAL and x.revision == 1
     away = env["tmp"] / "away.D"
     shutil.move(str(batch / "11_26016606_x_B.D"), str(away))
     now[0] += 61
     core.tick()
     gone = jr.job(x.id)
-    assert gone.state == J.ACCEPTED_AUTO and gone.revision == 1
+    assert gone.state == J.ACCEPTED_MANUAL and gone.revision == 1
     shutil.move(str(away), str(batch / "11_26016606_x_B.D"))
     now[0] += 61
     core.tick()
     back = jr.job(x.id)
-    assert back.state == J.ACCEPTED_AUTO and back.revision == 1
+    assert back.state == J.ACCEPTED_MANUAL and back.revision == 1
     assert [s[0] for s in launcher.started].count(x.id) == 1          # never processed again
     # a blank of it, too
     shutil.move(str(batch / "13_EtOH.D"), str(away))
@@ -1532,4 +1548,4 @@ def test_a_deleted_run_leaves_a_processed_sample_as_it_is(env, qapp):
     shutil.move(str(away), str(batch / "13_EtOH.D"))
     now[0] += 61
     core.tick()
-    assert jr.job(x.id).state == J.ACCEPTED_AUTO and jr.job(x.id).revision == 1
+    assert jr.job(x.id).state == J.ACCEPTED_MANUAL and jr.job(x.id).revision == 1

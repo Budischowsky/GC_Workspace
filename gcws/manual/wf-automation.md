@@ -15,7 +15,7 @@ A **workflow** is a chain of steps drawn as a chart:
 | **Watched folder** | The folder the instrument writes into. Each batch is a folder below it. |
 | **Local copy** | Optional, between the watched folder and the method: copies every finished run to a folder on this PC, and the method works on the copy. For a watched folder on a slow network drive, see [Working from a slow network drive](wf-automation.md#working-from-a-slow-network-drive). |
 | **Method** | Processes each sample with a saved processing method: integration, library search, internal standards, blanks, quantification, double determination. |
-| **Report²** | Judges the result with rules: *accepted* or *control needed*. |
+| **Report²** | Checks the result with rules and lists their findings; the analyst accepts every report. |
 | **Report** | Writes the report files. |
 | **Target folder** | Where the files are delivered. There can be several. |
 
@@ -76,11 +76,11 @@ You need a processing method first: set everything up for one batch by hand and 
 | **Blank needed** | As the blank subtraction uses them | Which blank a sample must have in its batch folder to be processed at all. |
 | **Stop a sample after** | 30 min | A sample that takes longer is stopped and listed as failed. |
 
-**Report²**
+**Report²** - Every report needs the analyst's acceptance in Report². A report no rule found anything in
+says 'No findings'. (Before Oct 2026 such a report could be accepted automatically; that is gone.)
 
 | Setting | Default | Meaning |
 |---|---|---|
-| **Accept reports without findings automatically** | on | Off: every report waits for you. |
 | **Tray message when a report needs control** | on | |
 | **Control needed when** - **Rules...** | the default rules | Own rules for this workflow. |
 
@@ -103,8 +103,7 @@ You need a processing method first: set everything up for one batch by hand and 
 | **File exists** | Keep both (add _2, _3 ...) | Or **Replace**, or **Keep the existing file**. |
 | **Allow a folder inside the watched raw-data folder** | off | Normally refused, so that reports never land among the raw data. |
 
-**An arrow** (double-click it): **Report status** (accepted automatically, accepted by the analyst, control
-needed), **Files** (which file types pass), **Sample names** and **Batch folders** (name patterns). Only
+**An arrow** (double-click it): **Report status** (accepted by the analyst, control needed), **Files** (which file types pass), **Sample names** and **Batch folders** (name patterns). Only
 what matches every chosen condition passes. Nothing chosen = everything passes. On the arrow into the
 **Local copy**, **Batch folders** chooses which batch folders are copied.
 

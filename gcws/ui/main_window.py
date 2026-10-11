@@ -1522,8 +1522,8 @@ class MainWindow(QMainWindow):
             from gcws.ms.assignment import fragment_id
             item = SearchItem(st.id, source_key, 0, peak.apex_rt, job, source_mode, [], fragment_id(peak))
             prev = st.ident_set(source_key).for_peak(peak)
-            ident = identification_from_hits(item, hits, index, method, prev)
-            ident.manual = True
+            from gcws.core.ident import chosen_by_analyst
+            ident = chosen_by_analyst(identification_from_hits(item, hits, index, method, prev))
             st.undo.push(IdentCommand(self.ws, st.id, source_key, [(peak.apex_rt, ident)],
                                       f"peak {peak.apex_rt:.3f}: library hit {ident.name}"))
 
@@ -2236,7 +2236,7 @@ class MainWindow(QMainWindow):
         entries, files, warnings = result
         self.progress.hide()
         self.ws.log("Batch report", name, str(out_dir), "", f"{len(entries)} samples")
-        flagged = [e["name"] for e in entries if e.get("state") != "accepted_auto"]
+        flagged = [e["name"] for e in entries if e.get("state") not in ("no_findings", "accepted_auto")]
         lines = [f"Batch report of {name}: {len(entries)} sample(s) reported to", str(out_dir), ""]
         lines += [f"{Path(p).name}" for p in files.values()]
         if flagged:

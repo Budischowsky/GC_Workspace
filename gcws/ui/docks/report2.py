@@ -1,7 +1,7 @@
 """Report²: the report of the reports.
 
-How many samples the automation processed, which reports were accepted automatically or by the
-analyst and which need control, grouped by batch folder. "To do" holds the open batches; a batch
+How many samples the automation processed, which reports the analyst accepted and which need
+control (every report does until the analyst accepts it), grouped by batch folder. "To do" holds the open batches; a batch
 whose reports are all accepted and delivered moves to the "Archive" by itself ("Reopen" brings it
 back). The chips above the list filter it; a sample expands to its number of red and yellow
 substances. Selecting a report shows a preview (its PDF, or its Word report converted once by

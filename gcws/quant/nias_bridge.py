@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
+from gcws.core.ident import names_unknown
 from gcws.core.model import FID
 
 #: quality given to a name the analyst entered by hand, so AutoLib's
@@ -231,7 +232,7 @@ def build_sample(st, det: Determination, result: dict, settings, *, label: str =
             if ident.manual:
                 # the analyst's name wins; it was entered on purpose
                 name, cas, status = ident.name, ident.cas or "", M.ID_ACCEPTED
-            elif name is None or (str(name).startswith("unknown") and ident.name.startswith("unknown")):
+            elif name is None or (names_unknown(name) and names_unknown(ident.name)):
                 # keep our more informative "unknown (m/z 149, 57, 71)"
                 name = ident.name
         if name is None:

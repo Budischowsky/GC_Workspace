@@ -9,7 +9,7 @@ from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
                                QMenu, QTableView, QToolBar, QVBoxLayout, QWidget)
 
-from gcws.core.ident import Identification
+from gcws.core.ident import hit_chosen_by_analyst, is_unidentified, typed_by_analyst
 from gcws.ui.icons import icon
 from gcws.ui.models.peak_filter import FilterState, value_predicate, value_test  # noqa: F401 (re-export)
 from gcws.ui.models.peak_table import COLUMN_KEYS, COLUMNS, PeakTableModel
@@ -211,8 +211,7 @@ class PeakTable(QWidget):
 
     def _update_info(self):
         n = len(self.model.rows)
-        idn = sum(1 for r in self.model.rows if r.ident and r.ident.name and
-                  not r.ident.name.lower().startswith("unknown"))
+        idn = sum(1 for r in self.model.rows if r.ident and not is_unidentified(r.ident.name, r.ident.status))
         extra = f"  •  {len(self.model.orphans)} orphaned IDs" if self.model.orphans else ""
         hide = self.proxy.hide_predicate
         blank_hidden = sum(1 for r in range(n) if hide(r)) if hide is not None else 0
@@ -387,18 +386,9 @@ class PeakTable(QWidget):
         if st is None:
             return
         old = row.ident
-        ident = Identification(apex_rt=row.peak.apex_rt, name=old.name if old else "",
-                               cas=old.cas if old else "", score=None, status="Manual",
-                               source="manual", manual=True, hits=list(old.hits) if old else [],
-                               istd=old.istd if old else "")
-        if key == "name":
-            if old and old.name == value:
-                return
-            ident.name = value
-        elif key == "cas":
-            if old and old.cas == value:
-                return
-            ident.cas = value
+        if key not in ("name", "cas") or (old is not None and getattr(old, key) == value):
+            return
+        ident = typed_by_analyst(old, row.peak.apex_rt, **{key: value})
         cmd = IdentCommand(self.ws, st.id, self.ws.signal_key, [(row.peak.apex_rt, ident)],
                            f"{key} of peak {row.peak.apex_rt:.3f} = {value!r}")
         self.ws.undo_group.activeStack().push(cmd)
@@ -450,13 +440,7 @@ class PeakTable(QWidget):
 
     def _use_hit(self, row, hit):
         st = self.ws.active
-        old = row.ident
-        ident = Identification(apex_rt=row.peak.apex_rt, name=hit.get("name", ""), cas=hit.get("cas", "") or "",
-                               score=hit.get("score"), status="Accepted (analyst)", formula=hit.get("formula", ""),
-                               library=hit.get("library", ""), hits=list(old.hits) if old else [hit],
-                               source=old.source if old else "", method=old.method if old else "",
-                               searched_at=old.searched_at if old else "", manual=True,
-                               istd=old.istd if old else "")
+        ident = hit_chosen_by_analyst(row.ident, row.peak.apex_rt, hit)
         self.ws.undo_group.activeStack().push(
             IdentCommand(self.ws, st.id, self.ws.signal_key, [(row.peak.apex_rt, ident)],
                          f"peak {row.peak.apex_rt:.3f}: use hit {ident.name}"))
