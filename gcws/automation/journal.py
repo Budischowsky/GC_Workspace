@@ -901,19 +901,3 @@ def ago(ts, now: Optional[float] = None) -> str:
         return f"{(today - then).days} days ago"
     return then.strftime("%Y-%m-%d")
 
-
-def batch_closed(batch: dict, jobs: list) -> bool:
-    """True when every report of the batch is accepted and delivered (Report² archives it). A
-    reopened batch stays open until one of its reports is decided again."""
-    live = [j for j in jobs if not j.deleted and j.state != REMOVED]
-    if not live or any(j.state not in ACCEPTED or j.export_pending or j.export_state == "error" or j.review_pending
-                       for j in live):
-        return False
-    try:
-        plan = json.loads(batch.get("plan_json") or "null")
-    except ValueError:
-        plan = None
-    if isinstance(plan, dict) and not plan.get("complete", True):
-        return False
-    reopened = float(batch.get("reopened") or 0)
-    return not reopened or max(float(j.reviewed_at or j.finished or 0) for j in live) > reopened

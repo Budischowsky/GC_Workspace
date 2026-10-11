@@ -1160,25 +1160,6 @@ def test_save_the_batch_report_as_word_and_excel(qtbot, data, tmp_path, monkeypa
 
 # -- the register (Oct 2026) -----------------------------------------------------------------------------
 
-def test_done_means_accepted_and_delivered(tmp_path):
-    from gcws.automation import journal as J
-    from gcws.ui.docks.report2 import is_done
-    jr = J.Journal(tmp_path / "j.sqlite")
-    b = jr.batch("wf", tmp_path)
-    job = jr.ensure_job("wf", "m", b["id"], "s", "S", ["S.D"], {}, "fp", state=J.QUEUED)
-    jr.transition(job.id, J.QUEUED, J.PROCESSING)
-    jr.transition(job.id, J.PROCESSING, J.ACCEPTED_AUTO, export_pending=1)
-    assert not is_done(jr.job(job.id))                         # accepted, not delivered yet
-    jr.update_job(job.id, export_pending=0, export_state="done")
-    assert is_done(jr.job(job.id))
-    jr.review(job.id, False, "bad")
-    assert not is_done(jr.job(job.id))                         # rejected: not done
-    manual = jr.record_manual("jm", workflow_id=J.MANUAL_WORKFLOW, method_node="manual", batch_id=b["id"],
-                              group_key="manual:p", group_name="P", members=[], files={}, project_path="", job_dir="",
-                              evidence={}, findings=[], summary={}, reviewer="a")
-    assert is_done(manual)                                     # no workflow delivers it: accepted is done
-
-
 def test_register_lists_every_sample_done_or_not(qtbot, data, tmp_path, monkeypatch):
     from openpyxl import load_workbook
     from gcws.automation import journal as J

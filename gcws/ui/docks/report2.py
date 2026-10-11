@@ -27,14 +27,12 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QButtonGroup, QC
                                QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
 from gcws.automation import journal as J
+from gcws.automation import review as R
 from gcws.ui import theme
 from gcws.ui.widgets.chips import Chip as _Chip
 
 PERIODS = {"all": ("All", None), "today": ("Today", 1), "week": ("7 days", 7), "month": ("30 days", 30),
            "year": ("12 months", 365)}
-LEVEL = {J.ACCEPTED_AUTO: "ok", J.ACCEPTED_MANUAL: "ok", J.CONTROL: "warn", J.REJECTED: "bad",
-         J.FAILED: "bad", J.NOT_PROCESSED: "bad", J.WAITING: "neutral", J.QUEUED: "info", J.PROCESSING: "info",
-         J.REMOVED: "neutral"}
 FILE_LABELS = {"docx": "Word", "xlsx": "Excel", "pdf": "PDF", "dd": "Double determination",
                "batch_docx": "Batch Word", "batch_pdf": "Batch PDF", "batch_xlsx": "Batch summary"}
 WAITING_STATES = (J.WAITING, J.QUEUED, J.PROCESSING)
@@ -42,24 +40,11 @@ WAITING_STATES = (J.WAITING, J.QUEUED, J.PROCESSING)
 FILTERS = {"all": ("All", "info"), "control": ("Control needed", "warn"), "accepted": ("Accepted", "ok"),
            "waiting": ("Waiting", "neutral"), "not_processed": ("Not processed", "bad"),
            "failed": ("Failed", "bad"), "rejected": ("Rejected", "bad"), "removed": ("Removed", "neutral")}
-BUCKET_LEVEL = {"control": "warn", "accepted": "ok", "waiting": "info", "not_processed": "bad", "failed": "bad",
-                "rejected": "bad", "removed": "neutral"}
-WORST = ("bad", "warn", "info", "ok", "neutral")
 ROLE_KIND = Qt.UserRole + 1                     # "batch", "job" or "finding"
 ROLE_BAR = Qt.UserRole + 2                      # a batch's progress: [(level, count), ...]
 COLUMNS = ["Sample", "Status", "Findings", "Delivered", "Processed"]
 REGISTER = ["Sample", "Batch", "Workflow", "Status", "Done", "Reviewed by", "Decided", "Delivered", "Processed"]
 DONE_FILTERS = {"all": "Done and not done", "done": "Done", "open": "Not done"}
-
-
-def bucket(job: J.Job) -> str:
-    """The filter chip a report counts for."""
-    if job.review_pending or job.state == J.CONTROL:
-        return "control"
-    if job.state in J.ACCEPTED:
-        return "accepted"
-    return {J.NOT_PROCESSED: "not_processed", J.FAILED: "failed", J.REJECTED: "rejected",
-            J.REMOVED: "removed"}.get(job.state, "waiting")
 
 
 def can_accept(job: J.Job) -> bool:
@@ -80,27 +65,6 @@ def can_reprocess(job: J.Job) -> bool:
     Replicates instead)."""
     return not job.deleted and not job.review_pending and job.state not in (J.QUEUED, J.PROCESSING) \
         and job.workflow_id != J.MANUAL_WORKFLOW
-
-
-def delivered(job: J.Job) -> tuple[str, str]:
-    """The Delivered column of a report: (text, level)."""
-    if job.state not in (J.CONTROL, *J.ACCEPTED):
-        return "", "neutral"
-    if job.export_pending:
-        return "pending", "info"
-    return {"done": ("✓", "ok"), "partial": ("partly", "warn"), "error": ("failed", "bad")}.get(
-        job.export_state or "", ("", "neutral"))
-
-
-def is_done(job: J.Job) -> bool:
-    """Register: a sample is done when it is accepted and delivered (an entry accepted by hand, which no
-    workflow delivers, when it is accepted). Everything else is not done yet - waiting, in work, needing
-    control, failed, not processed, rejected, accepted but not delivered."""
-    if job.state not in J.ACCEPTED or job.review_pending or job.deleted:
-        return False
-    if job.workflow_id == J.MANUAL_WORKFLOW:
-        return True
-    return not job.export_pending and job.export_state == "done"
 
 
 def activity(job: J.Job) -> float:
@@ -591,7 +555,7 @@ class Report2Dock(QWidget):
                 continue
             if not self.show_deleted and all(j.deleted for j in jobs):
                 continue                               # nothing left to show (only deleted reports)
-            mode = "archive" if J.batch_closed(b, jobs) else "todo"
+            mode = "archive" if R.batch_closed(b, jobs) else "todo"
             n_batches[mode] += 1
             n_batches["register"] += sum(1 for j in jobs if not j.is_batch and (self.show_deleted or not j.deleted))
             if mode != self.mode and not register:
@@ -620,7 +584,7 @@ class Report2Dock(QWidget):
             if j.is_batch or j.deleted:
                 continue
             counts["all"] += 1
-            counts[bucket(j)] += 1
+            counts[R.bucket(j)] += 1
             auto += j.state == J.ACCEPTED_AUTO
             manual += j.state == J.ACCEPTED_MANUAL
         for key, (label, level) in FILTERS.items():
@@ -632,10 +596,10 @@ class Report2Dock(QWidget):
             self.chips[key].style().unpolish(self.chips[key])
             self.chips[key].style().polish(self.chips[key])
         self.chips["accepted"].setToolTip(f"{auto} automatic, {manual} by the analyst")
-        shown = [j for j in view if self.filter == "all" or bucket(j) == self.filter]
+        shown = [j for j in view if self.filter == "all" or R.bucket(j) == self.filter]
         if register:
             want = self.done_filter.currentData() or "all"
-            shown = [j for j in shown if want == "all" or is_done(j) == (want == "done")]
+            shown = [j for j in shown if want == "all" or R.is_done(j) == (want == "done")]
             self._fill_register(shown)
         else:
             self._fill(shown)
@@ -711,17 +675,17 @@ class Report2Dock(QWidget):
         b = self._batches.get(bid, {})
         live = [j for j in self._by_batch.get(bid, []) if not j.deleted and j.state != J.REMOVED]
         samples = [j for j in live if not j.is_batch]
-        n = {k: 0 for k in BUCKET_LEVEL}
+        n = {k: 0 for k in R.BUCKET_LEVEL}
         for j in samples:
-            n[bucket(j)] += 1
-        parts = [(BUCKET_LEVEL[k], v) for k, v in n.items() if v]
+            n[R.bucket(j)] += 1
+        parts = [(R.BUCKET_LEVEL[k], v) for k, v in n.items() if v]
         bad = n["failed"] + n["not_processed"] + n["rejected"]
         text = f"{n['accepted']}/{len(samples)} accepted"
         text += f" · {n['control']} control" if n["control"] else ""
         text += f" · {bad} failed/rejected" if bad else ""
         text += f" · {n['waiting']} waiting" if n["waiting"] else ""
         accepted = [j for j in live if j.state in J.ACCEPTED]
-        sent = sum(delivered(j)[0] == "✓" for j in accepted)
+        sent = sum(R.delivered(j)[0] == "✓" for j in accepted)
         last = max((activity(j) for j in self._by_batch.get(bid, [])), default=0)
         findings = sum(self._facts(j)[0] for j in samples)
         deleted = bool(b.get("deleted"))
@@ -731,7 +695,7 @@ class Report2Dock(QWidget):
         it.setData(0, Qt.UserRole, bid)
         if not deleted:
             it.setData(1, ROLE_BAR, parts or [("neutral", 1)])
-        worst = next((lv for lv in WORST if any(p[0] == lv for p in parts)), "neutral")
+        worst = R.worst(p[0] for p in parts)
         it.setIcon(0, _dot("neutral" if deleted else worst))
         it.setToolTip(0, b.get("folder", ""))
         it.setToolTip(1, text)
@@ -773,7 +737,7 @@ class Report2Dock(QWidget):
         status = "Updating report" if j.review_pending else J.STATE_LABELS.get(j.state, j.state)
         if j.deleted:
             status = f"Deleted ({status.lower()})"
-        sent, sent_level = delivered(j)
+        sent, sent_level = R.delivered(j)
         n, finding_text, lights = self._facts(j)
         it = QTreeWidgetItem([label, status, str(n) if n else "", sent, J.ago(j.finished or j.created)])
         it.setData(0, ROLE_KIND, "job")
@@ -792,7 +756,7 @@ class Report2Dock(QWidget):
                 f.setItalic(True)
                 it.setFont(0, f)
         else:
-            it.setBackground(1, theme.status_brush(LEVEL.get(j.state, "neutral")))
+            it.setBackground(1, theme.status_brush(R.level(j)))
             if sent:
                 it.setForeground(3, theme.status_color(sent_level))
         if j.reason:
@@ -871,10 +835,10 @@ class Report2Dock(QWidget):
         if job is None:
             return
         jobs = self.journal.jobs(batch_id=job.batch_id)
-        mode = "archive" if J.batch_closed(self.journal.batch_by_id(job.batch_id), jobs) else "todo"
+        mode = "archive" if R.batch_closed(self.journal.batch_by_id(job.batch_id), jobs) else "todo"
         if self.workflow.currentData() not in ("", job.workflow_id):
             self.workflow.setCurrentIndex(0)
-        if self.filter != "all" and bucket(job) != self.filter:
+        if self.filter != "all" and R.bucket(job) != self.filter:
             self.filter = "all"
         text = self.search.text().strip().casefold()
         if text and text not in (job.group_name or "").casefold():
@@ -940,7 +904,7 @@ class Report2Dock(QWidget):
             self.reasons.setText("Accept, Reject and the right-click menu act on all of them.")
         else:
             b = self._batches.get(job.batch_id, {})
-            text = f"<b>{job.group_name}</b> &nbsp; {theme.chip_html(job.label, LEVEL.get(job.state, 'neutral'))}"
+            text = f"<b>{job.group_name}</b> &nbsp; {theme.chip_html(job.label, R.level(job))}"
             if job.deleted:
                 text += " " + theme.chip_html("Deleted", "neutral")
             text += f"<br>batch folder {b.get('folder', '')} · revision {job.revision}"
@@ -1290,8 +1254,8 @@ class Report2Dock(QWidget):
                                              float(j.created or 0))):
             r = self.register.rowCount()
             self.register.insertRow(r)
-            done = is_done(j)
-            sent, sent_level = delivered(j)
+            done = R.is_done(j)
+            sent, sent_level = R.delivered(j)
             status = "Updating report" if j.review_pending else J.STATE_LABELS.get(j.state, j.state)
             if j.deleted:
                 status = f"Deleted ({status.lower()})"
@@ -1304,7 +1268,7 @@ class Report2Dock(QWidget):
                 if v:
                     it.setToolTip(v)
                 self.register.setItem(r, c, it)
-            self.register.item(r, 3).setBackground(theme.status_brush(LEVEL.get(j.state, "neutral")))
+            self.register.item(r, 3).setBackground(theme.status_brush(R.level(j)))
             self.register.item(r, 4).setForeground(theme.status_color("ok" if done else "warn"))
             if j.reason:
                 self.register.item(r, 3).setToolTip(j.reason)

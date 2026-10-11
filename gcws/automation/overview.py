@@ -16,13 +16,11 @@ from typing import Optional
 
 from gcws.automation import journal as J
 from gcws.automation import localcopy as LC
+from gcws.automation import review as R
 from gcws.automation import scanner as SC
 from gcws.automation import store
 
 ROLES = {"blank": "blank", "blank_istd": "blank + ISTD", "sample": "sample", "ladder": "alkane ladder"}
-LEVEL = {J.ACCEPTED_AUTO: "ok", J.ACCEPTED_MANUAL: "ok", J.CONTROL: "warn", J.REJECTED: "bad", J.FAILED: "bad",
-         J.NOT_PROCESSED: "bad", J.WAITING: "neutral", J.QUEUED: "info", J.PROCESSING: "info", J.REMOVED: "neutral"}
-WORST = ("bad", "warn", "info", "ok", "neutral")
 
 
 @dataclass
@@ -54,11 +52,6 @@ def _runs_in(folder) -> list[str]:
 def _name(run: dict, stem: str) -> str:
     """A run's file name (os.path: thousands of runs are listed at each refresh)."""
     return os.path.basename(run.get("path") or stem)
-
-
-def _worst(levels) -> str:
-    levels = set(levels)
-    return next((lv for lv in WORST if lv in levels), "neutral")
 
 
 def _summary(jobs: list) -> str:
@@ -183,7 +176,7 @@ def _batch(journal: J.Journal, wf, f: dict, b: dict, jobs: list, root: str, loca
     item.state = _summary(live)
     # the runs of reports deleted in Report² are not listed either
     hidden = gone | {str(m).casefold() for j in samples if j.deleted for m in j.members or []}
-    item.level = _worst(LEVEL.get(j.state, "neutral") for j in live)
+    item.level = R.worst(R.level(j) for j in live)
     report = next((j for j in jobs if j.is_batch and not j.deleted), None)
     if report is not None:
         item.job_id = report.id
@@ -235,7 +228,7 @@ def _batch(journal: J.Journal, wf, f: dict, b: dict, jobs: list, root: str, loca
             run.sample, run.job_id = j.group_name, j.id
             run.state = J.STATE_LABELS.get(j.state, j.state)
             run.why = j.reason or ""
-            run.level = LEVEL.get(j.state, "neutral")
+            run.level = R.level(j)
         elif by_blank.get(name.casefold()):
             owners = by_blank[name.casefold()]
             run.sample = f"{ROLES.get(r.get('role'), 'blank')} of " + ", ".join(o.group_name for o in owners[:3]) + \

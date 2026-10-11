@@ -28,6 +28,7 @@ from gcws import paths
 from gcws.automation import journal as J
 from gcws.automation import localcopy as LC
 from gcws.automation import planner as PN
+from gcws.automation import review as R
 from gcws.automation import runner as RN
 from gcws.automation import scanner as SC
 from gcws.automation import store
@@ -416,7 +417,7 @@ class WatcherCore(QObject):
                 if not b.get("missing") and os.path.isdir(Path(b["folder"]).parent):
                     self._gone(wf, b)                  # deleted (its drive is there): off the queue and the list
                 continue
-            if self.journal.forced(b) or (b.get("manual") and not J.batch_closed(
+            if self.journal.forced(b) or (b.get("manual") and not R.batch_closed(
                     b, self.journal.jobs(workflow_id=wf.id, batch_id=b["id"]))):
                 self._scan_batch(wf, Path(b["folder"]), now, cfg, baseline_new=False)
 
