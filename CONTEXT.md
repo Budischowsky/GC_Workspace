@@ -24,6 +24,12 @@ these terms lives in the module named after it.
   was not reopened since. Report² lists closed batches under Archive, the rest under To do.
 - **Deleted** (in Report²): hidden, nothing on disk is touched. A deleted entry still in the queue is
   **removed** from it (state REMOVED); undoing the delete puts it back in the state it had.
+- **Edit session** ("Edit in GC Workspace"): a Report² report bound to the project open in GC Workspace
+  (job id, the revision it was opened at, its project file) with its **baseline**, the project values
+  that can change a report (`gcws/automation/edit_session.py`). Saving a **report change** sends the
+  report back to control; display changes are saved without that. A report that got a new revision
+  while it was open is **stale**: its project is not written over. Two determinations are **the same
+  members** when their run file names match, whatever the case and order.
 
 ## Double determination
 

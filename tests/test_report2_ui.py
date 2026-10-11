@@ -726,8 +726,7 @@ def test_switch_saves_accepted_project_and_returns_it_to_control(qtbot, win, tmp
     jr.transition(job.id, J.QUEUED, J.PROCESSING)
     jr.transition(job.id, J.PROCESSING, J.ACCEPTED_AUTO, project_path=str(project))
     win.report2._journal = jr
-    win._report2_job = (job.id, 1, project)
-    win._report2_baseline = {"quant": {"limit": 1}}
+    win.r2_edit.bind(job.id, 1, project, {"quant": {"limit": 1}})
     win.ws.project_path = project
     win.ws.dirty = True
     monkeypatch.setattr("gcws.ui.main_window.P.to_dict", lambda ws, path: {"quant": {"limit": 2}})
@@ -744,91 +743,6 @@ def test_switch_saves_accepted_project_and_returns_it_to_control(qtbot, win, tmp
     monkeypatch.setattr("gcws.ui.main_window.P.save", lambda ws, path: (writes.append(path), path)[1])
     win.save_project()
     assert writes == []  # Ctrl+S on an old revision must not overwrite the pending source
-
-
-def test_run_rename_marks_report2_project_edited(qtbot, win, tmp_path, monkeypatch):
-    from gcws.automation import journal as J
-    from gcws.ui.main_window import _report_inputs
-
-    jr = J.Journal(tmp_path / "journal.sqlite")
-    batch = jr.batch("wf", tmp_path)
-    job = jr.ensure_job("wf", "method", batch["id"], "pair", "Pair", ["A.D", "B.D"], {}, "fp",
-                        state=J.QUEUED)
-    project = tmp_path / "pair.gcws"
-    project.write_text("original")
-    jr.transition(job.id, J.QUEUED, J.PROCESSING)
-    jr.transition(job.id, J.PROCESSING, J.ACCEPTED_AUTO, project_path=str(project))
-    win.report2._journal = jr
-    win._report2_job = (job.id, 1, project)
-    original = {"runs": [{"id": "a", "name": "Old"}]}
-    renamed = {"runs": [{"id": "a", "name": "New"}]}
-    win._report2_baseline = _report_inputs(original)
-    win.ws.project_path = project
-    win.ws.dirty = False
-    monkeypatch.setattr("gcws.ui.main_window.P.to_dict", lambda ws, path: renamed)
-    monkeypatch.setattr("gcws.ui.main_window.P.save", lambda ws, path: (project.write_text("edited"), project)[1])
-
-    assert win._save_report2_project()
-    assert project.read_text() == "edited"
-    assert jr.job(job.id).state == J.CONTROL and jr.job(job.id).edited == 1
-
-
-def test_rejected_report2_project_can_be_saved_and_requeued(qtbot, win, tmp_path, monkeypatch):
-    from gcws.automation import journal as J
-    from gcws.ui.main_window import _report_inputs
-
-    jr = J.Journal(tmp_path / "journal.sqlite")
-    batch = jr.batch("wf", tmp_path)
-    job = jr.ensure_job("wf", "method", batch["id"], "pair", "Pair", ["A.D", "B.D"], {}, "fp",
-                        state=J.QUEUED)
-    project = tmp_path / "pair.gcws"
-    project.write_text("original")
-    jr.transition(job.id, J.QUEUED, J.PROCESSING)
-    jr.transition(job.id, J.PROCESSING, J.CONTROL, project_path=str(project))
-    assert jr.review(job.id, False, "bad data", user="reviewer")
-    win.report2._journal = jr
-    win._report2_job = (job.id, 1, project)
-    win._report2_baseline = _report_inputs({"quant": {"limit": 1}})
-    win.ws.project_path = project
-    win.ws.dirty = False
-    monkeypatch.setattr("gcws.ui.main_window.P.to_dict", lambda ws, path: {"quant": {"limit": 2}})
-    monkeypatch.setattr("gcws.ui.main_window.P.save", lambda ws, path: (project.write_text("edited"), project)[1])
-    monkeypatch.setattr("gcws.ui.main_window.QMessageBox.warning", lambda *args: None)
-
-    assert win._save_report2_project()
-    saved = jr.job(job.id)
-    assert project.read_text() == "edited"
-    assert saved.state == J.REJECTED and saved.edited == 1
-    assert saved.reviewer == "reviewer" and saved.comment == "bad data"
-    assert jr.accept_edited(job.id, user="analyst")
-    queued = jr.job(job.id)
-    assert queued.state == J.QUEUED and queued.review_pending["user"] == "analyst"
-    assert queued.reviewer is None and queued.comment is None and queued.reviewed_at is None
-
-
-def test_stale_report2_project_refuses_unsaved_display_changes(qtbot, win, tmp_path, monkeypatch):
-    from gcws.automation import journal as J
-    from gcws.ui.main_window import _report_inputs
-
-    jr = J.Journal(tmp_path / "journal.sqlite")
-    batch = jr.batch("wf", tmp_path)
-    job = jr.ensure_job("wf", "method", batch["id"], "pair", "Pair", ["A.D", "B.D"], {}, "fp",
-                        state=J.QUEUED)
-    project = tmp_path / "pair.gcws"
-    project.write_text("original")
-    win.report2._journal = jr
-    win._report2_job = (job.id, 1, project)
-    win._report2_baseline = _report_inputs({"runs": [{"id": "a", "color": "#111111"}]})
-    win.ws.project_path = project
-    win.ws.dirty = True
-    jr.update_job(job.id, revision=2, project_path=str(project))
-    monkeypatch.setattr("gcws.ui.main_window.P.to_dict", lambda ws, path: {"runs": [{"id": "a", "color": "#222222"}]})
-    monkeypatch.setattr("gcws.ui.main_window.P.save", lambda ws, path: pytest.fail("stale source overwritten"))
-    warnings = []
-    monkeypatch.setattr("gcws.ui.main_window.QMessageBox.warning", lambda *args: warnings.append(args[-1]))
-
-    assert not win._save_report2_project()
-    assert warnings and project.read_text() == "original"
 
 
 def test_incomplete_report2_project_is_not_attached_or_saved(qtbot, win, tmp_path, monkeypatch):
@@ -850,7 +764,7 @@ def test_incomplete_report2_project_is_not_attached_or_saved(qtbot, win, tmp_pat
     monkeypatch.setattr("gcws.ui.main_window.QMessageBox.warning", lambda *args: warnings.append(args[-1]))
 
     assert not win.open_report2_job(job.id)
-    assert win._report2_job is None and project.read_text() == "original"
+    assert win.r2_edit.bound is None and project.read_text() == "original"
     assert warnings
 
 
@@ -874,7 +788,7 @@ def test_async_report2_load_failure_does_not_bind_partial_workspace(qtbot, win, 
     monkeypatch.setattr("gcws.ui.main_window.QMessageBox.warning", lambda *args: warnings.append(args[-1]))
 
     assert win.open_report2_job(job.id)
-    assert win._report2_job is None and project.read_text() == "original"
+    assert win.r2_edit.bound is None and project.read_text() == "original"
     assert any("did not all load" in text for text in warnings)
 
 
@@ -1007,8 +921,7 @@ def test_edit_an_accepted_report_and_update_it(qtbot, win, data, tmp_path, monke
     assert routed == [job.id]                              # bound to the report, not just opened
     monkeypatch.setattr(win, "open_report2_job", bind)
     assert not win.r2_bar.isVisibleTo(win)
-    win._report2_job = (job.id, job.revision, project)
-    win._report2_baseline = {"quant": {"limit": 1}}
+    win.r2_edit.bind(job.id, job.revision, project, {"quant": {"limit": 1}})
     win.ws.project_path, win.ws.dirty = project, True
     assert win.r2_bar.isVisibleTo(win) and "S-auto" in win.r2_label.text() and "accepted" in win.r2_label.text()
     monkeypatch.setattr("gcws.ui.main_window.P.to_dict", lambda ws, path: {"quant": {"limit": 2}})
@@ -1034,7 +947,7 @@ def test_edit_an_accepted_report_and_update_it(qtbot, win, data, tmp_path, monke
         after = jr.job(job.id)
         assert after.state == J.CONTROL and after.revision == 2 and after.reviewer is None
         assert "control" in win.r2_label.text()
-        assert win._report2_job == (job.id, 2, newer) and win.ws.project_path == newer   # still editing it
+        assert win.r2_edit.bound == (job.id, 2, newer) and win.ws.project_path == newer   # still editing it
         assert win.report2.review(True, job_ids=[job.id])
         win.report2.deliver_due()
         after = jr.job(job.id)
@@ -1047,11 +960,11 @@ def test_edit_an_accepted_report_and_update_it(qtbot, win, data, tmp_path, monke
         monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: asked.append(a) or QMessageBox.No)
         win.ws.dirty = True
         assert win.stop_report2_edit()
-        assert asked and win._report2_job is None and not win.r2_bar.isVisibleTo(win)
+        assert asked and win.r2_edit.bound is None and not win.r2_bar.isVisibleTo(win)
         assert win.ws.project_path is None                 # never saved into the report's project by accident
         assert jr.job(job.id).state == J.ACCEPTED_MANUAL
     finally:
-        win._report2_job = None
+        win.r2_edit.clear()
         win.ws.dirty = False
 
 

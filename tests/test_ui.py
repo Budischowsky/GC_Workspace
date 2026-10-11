@@ -1869,7 +1869,7 @@ def test_double_determination_accept_in_report2(qtbot, win, samples, tmp_path):
     jr.transition(job.id, J.QUEUED, J.PROCESSING)
     jr.transition(job.id, J.PROCESSING, J.CONTROL, project_path=str(project))
     win.report2._journal = jr
-    assert win._report2_job is None                         # opened by hand, not from Report²
+    assert win.r2_edit.bound is None                        # opened by hand, not from Report²
     said = []
     ws.message.connect(said.append)
     try:
@@ -1879,7 +1879,7 @@ def test_double_determination_accept_in_report2(qtbot, win, samples, tmp_path):
         assert after.state == J.ACCEPTED_MANUAL and not after.edited, (after.state, said)
         assert any("Accepted in Report² too" in t for t in said)
     finally:
-        win._report2_job = None                             # closing must not try to save a Report² project
+        win.r2_edit.clear()                                 # closing must not try to save a Report² project
         ws.dirty = False
 
 

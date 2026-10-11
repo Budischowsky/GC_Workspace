@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QDockWidget, QF
                                QMainWindow, QMenu, QMessageBox, QProgressBar, QPushButton, QToolBar, QWidget)
 
 import gcws
+from gcws.automation import edit_session as ES
 from gcws.core import project as P
 from gcws.core.model import FID, TIC, eic_key
 from gcws.io.sequence import ROLE_LABELS
@@ -43,19 +44,6 @@ GOTO_ORDER = ("chrom", "zoom", "table", "spectrum", "tree", "quant", "replicates
               "props", "audit", "automation")
 
 
-_REPORT_RUN_FIELDS = ("id", "name", "role", "blanks", "blanks_istd", "blanks_manual", "methods", "manual",
-                      "identifications", "delay", "delay_override", "spectrum_overrides")
-
-
-def _report_inputs(data: dict) -> dict:
-    """Project values that can change a generated report; omit display state and audit timestamps."""
-    groups = [{k: v for k, v in g.items() if k != "signoff"} for g in data.get("replicate_groups") or []]
-    inputs = {"quant": data.get("quant") or {}, "replicate_groups": groups,           # who accepted: no report change
-              "runs": [{key: run.get(key) for key in _REPORT_RUN_FIELDS} for run in data.get("runs") or []]}
-    return json.loads(json.dumps(inputs, sort_keys=True, default=str))
-
-
-
 def write_reports(jobs) -> list[dict]:
     """Write report jobs (worker thread): ``[{"names", "target", "warnings"} or {"names", "error"}]``. A report
     file that is open elsewhere is written beside it with ``_2``."""
@@ -77,16 +65,6 @@ def write_reports(jobs) -> list[dict]:
 
 
 class MainWindow(QMainWindow):
-    @property
-    def _report2_job(self):
-        """(job id, journal revision, project path) of the Report² report being edited here, or None."""
-        return self.__dict__.get("_report2_edit")
-
-    @_report2_job.setter
-    def _report2_job(self, value):
-        self.__dict__["_report2_edit"] = value
-        self._update_report2_bar()
-
     def __init__(self):
         from gcws.ui import theme
         theme.ensure_applied()
@@ -101,8 +79,7 @@ class MainWindow(QMainWindow):
         self.loading = 0
         self._pending_project = None
         self._project_open_callback = None
-        self._report2_job = None                 # (job id, journal revision, original project path)
-        self._report2_baseline = None
+        self.r2_edit = ES.EditSession(lambda: self.report2.journal, self._update_report2_bar)  # Report² report edited here
         self._fresh_folders: set = set()      # batch folders of runs loaded (not from a project) in this load
         self._method_run = None              # Method > Run Method in progress: {"name", "method", "ids", "steps"}
         self._maximized = None          # (dock, saved main-window state | floating geometry)
@@ -987,11 +964,10 @@ class MainWindow(QMainWindow):
         self.ws.remove_run(run_id)
 
     def close_all(self):
-        if self._report2_job is not None:
+        if self.r2_edit.bound is not None:
             if not self._save_report2_project():
                 return False
-            self._report2_job = None
-            self._report2_baseline = None
+            self.r2_edit.clear()
         for rid in list(self.ws.order):
             self.ws.remove_run(rid)
         self.ws.automation = {}
@@ -1765,30 +1741,8 @@ class MainWindow(QMainWindow):
     def _report2_job_of(self, group: dict):
         """The Report² report of this pair: the one loaded from Report², else a processed pair of this
         project file with the same two runs (the project was opened another way), else None."""
-        names = sorted(self.ws.runs[m].run.path.name.casefold() for m in group["members"] if m in self.ws.runs)
-
-        def same(job) -> bool:
-            return job is not None and not job.deleted and \
-                sorted(str(n).casefold() for n in job.members or []) == names
-
-        if self._report2_job:
-            job = self.report2.journal.job(self._report2_job[0])
-            return job if same(job) else None
-        if not self.ws.project_path or len(names) != 2:
-            return None
-        try:
-            here = Path(self.ws.project_path).resolve()
-            jobs = self.report2.journal.jobs(include_batch=False)
-        except Exception:  # noqa: BLE001 - no journal: no Report² report
-            return None
-        found = []
-        for job in jobs:
-            try:
-                if job.project_path and same(job) and Path(job.project_path).resolve() == here:
-                    found.append(job)
-            except OSError:
-                continue
-        return found[-1] if found else None              # the newest, in the order they were created
+        names = [self.ws.runs[m].run.path.name for m in group["members"] if m in self.ws.runs]
+        return self.r2_edit.find_for(self.ws.project_path, names)
 
     def _accept_pair(self, group_id: str) -> bool:
         """The analyst accepted a double determination. When it is a Report² report, it is accepted there
@@ -1804,14 +1758,13 @@ class MainWindow(QMainWindow):
         job = self._report2_job_of(g)
         if job is None or MA.is_manual(job):
             return self._list_in_report2(g, job)
-        if not self._report2_job:                       # opened another way: bind it as "Open in Replicates" does
+        if self.r2_edit.bound is None:                  # opened another way: bind it as "Open in Replicates" does
             try:
                 data = P.read(job.project_path)
             except Exception as exc:  # noqa: BLE001
                 self.ws.message.emit(f"Accepted here, not in Report²: its project could not be read ({exc}).")
                 return False
-            self._report2_job = (job.id, job.revision, Path(job.project_path))
-            self._report2_baseline = _report_inputs(data)
+            self.r2_edit.bind(job.id, job.revision, job.project_path, data)
         if not self._save_report2_project(job.id):       # changes since the report: saved, back to control
             self.ws.message.emit("Accepted here; the project could not be saved for Report².")
             return False
@@ -1935,9 +1888,8 @@ class MainWindow(QMainWindow):
             except Exception as exc:  # noqa: BLE001
                 self.ws.message.emit(f"Accepted in the project; Report² could not list {name} ({exc}).")
                 return
-            if own and self._report2_job and self._report2_job[0] == job.id:
-                self._report2_job = (job.id, job.revision, project)
-                self._report2_baseline = _report_inputs(P.to_dict(self.ws, project))
+            if own and self.r2_edit.job_id == job.id:
+                self.r2_edit.bind(job.id, job.revision, project, P.to_dict(self.ws, project))
             self.report2.refresh()
             self.report2.reveal(job.id)
             self.ws.log("Listed in Report² (accepted by hand)", " / ".join(names), name,
@@ -1994,10 +1946,10 @@ class MainWindow(QMainWindow):
         if self.loading:
             self.statusBar().showMessage("Wait for the current project to finish loading.", 6000)
             return False
-        if self._report2_job and self._report2_job[0] == job_id and self.ws.project_path == path:
+        if self.r2_edit.is_editing(job_id, self.ws.project_path) and self.r2_edit.path == path:
             self._show_report2_job(job_id)
             return True
-        previous = self._report2_job
+        previous = self.r2_edit.bound
         previous_path = Path(self.ws.project_path) if self.ws.project_path else None
 
         def loaded(data, jid=job_id, revision=job.revision, project=path):
@@ -2008,24 +1960,21 @@ class MainWindow(QMainWindow):
                 if previous_path and previous_path != project and previous_path.is_file():
                     def restored(old_data):
                         if previous is not None:
-                            self._report2_job = previous
-                            self._report2_baseline = _report_inputs(old_data)
+                            self.r2_edit.bind(*previous, old_data)
                             self._show_report2_job(previous[0])
                     self.open_project(previous_path, confirm_close=False, on_loaded=restored)
                 return
-            self._report2_job = (jid, revision, project)
-            self._report2_baseline = _report_inputs(data)
+            self.r2_edit.bind(jid, revision, project, data)
             self._show_report2_job(jid)
 
-        return self.open_project(path, confirm_close=self._report2_job is None, on_loaded=loaded)
+        return self.open_project(path, confirm_close=self.r2_edit.bound is None, on_loaded=loaded)
 
     def _show_report2_job(self, job_id: str):
         job = self.report2.journal.job(job_id)
         if job is None:
             return
-        by_name = {st.run.path.name.casefold(): st.id for st in self.ws.states()}
-        members = [by_name.get(name.casefold()) for name in job.members or []]
-        if not members or any(m is None for m in members):
+        members = ES.runs_of(job, {st.id: st.run.path.name for st in self.ws.states()})
+        if not members:
             QMessageBox.warning(self, "Report²", "The project's determinations could not be loaded.")
             return
         if len(members) == 2:
@@ -2043,12 +1992,7 @@ class MainWindow(QMainWindow):
         bar = getattr(self, "r2_bar", None)
         if bar is None:
             return
-        job = None
-        if self._report2_job is not None:
-            try:
-                job = self.report2.journal.job(self._report2_job[0])
-            except Exception:  # noqa: BLE001 - no journal
-                job = None
+        job = self.r2_edit.job()
         bar.setVisible(job is not None)
         if job is not None:
             from gcws.automation import journal as J
@@ -2060,17 +2004,17 @@ class MainWindow(QMainWindow):
         """Update report: the changes are saved and the report is made again here (a new revision). It is not
         accepted by that: it comes back in Report² as "control needed", to be checked and accepted."""
         from gcws.automation import manual as MA
-        if self._report2_job is None:
+        jid = self.r2_edit.job_id
+        if jid is None:
             return False
-        jid = self._report2_job[0]
         jr = self.report2.journal
         job = jr.job(jid)
         if job is None:
             return False
         if MA.is_manual(job):                              # no workflow: listed again as accepted by hand
-            names = sorted(str(m).casefold() for m in job.members or [])
-            g = next((g for g in self.ws.replicate_groups if sorted(
-                self.ws.runs[m].run.path.name.casefold() for m in g["members"] if m in self.ws.runs) == names), None)
+            names = ES.member_key(job.members)
+            g = next((g for g in self.ws.replicate_groups if ES.member_key(
+                self.ws.runs[m].run.path.name for m in g["members"] if m in self.ws.runs) == names), None)
             if g is None:
                 self.statusBar().showMessage(f"{job.group_name}: its double determination is not in the project.", 8000)
                 return False
@@ -2091,14 +2035,10 @@ class MainWindow(QMainWindow):
     def stop_report2_edit(self, ask: bool = True) -> bool:
         """Stop editing: the project is no longer bound to the report. Changes not saved yet are saved to it
         (the report then waits for acceptance in Report²) or kept here only, as the analyst chooses."""
-        if self._report2_job is None:
+        jid = self.r2_edit.job_id
+        if jid is None:
             return False
-        jid, _revision, path = self._report2_job
-        try:
-            changed = _report_inputs(P.to_dict(self.ws, path)) != self._report2_baseline
-        except Exception:  # noqa: BLE001
-            changed = False
-        if ask and (changed or self.ws.dirty):
+        if ask and self.r2_edit.unsaved(self.ws):
             r = QMessageBox.question(
                 self, "Stop editing", "Save your changes to the report's project?\n\nYes: they are saved; the report "
                 "then needs control in Report² (Accept there makes it again, to be checked).\nNo: the report stays "
@@ -2112,55 +2052,27 @@ class MainWindow(QMainWindow):
                     return False
             else:
                 self.ws.project_path = None            # never written into the report's project by accident
-        self._report2_job = None
-        self._report2_baseline = None
+        self.r2_edit.clear()
         self.statusBar().showMessage("Stopped editing the Report² report.", 6000)
         return True
 
     def _report2_regenerated(self, job_id: str):
         """The report being edited here was made again: the project stays bound to its new revision."""
-        if self._report2_job is None or self._report2_job[0] != job_id:
+        if job_id is None or self.r2_edit.job_id != job_id:
             return
-        job = self.report2.journal.job(job_id)
-        if job is None or not job.project_path or not Path(job.project_path).is_file():
+        if not self.r2_edit.follow(self.ws):
             self._update_report2_bar()
-            return
-        path = Path(job.project_path)
-        self.ws.project_path = path
-        self._report2_job = (job_id, job.revision, path)
-        try:
-            self._report2_baseline = _report_inputs(P.to_dict(self.ws, path))
-        except Exception:  # noqa: BLE001
-            pass
 
     def _save_report2_project(self, job_id: str | None = None) -> bool:
-        """Save report-affecting edits before leaving or accepting the loaded Report² pair."""
-        if self._report2_job is None or (job_id is not None and job_id != self._report2_job[0]):
-            return True
-        jid, revision, path = self._report2_job
-        job = self.report2.journal.job(jid)
+        """Save report-affecting edits before leaving or accepting the loaded Report² report."""
         try:
-            snapshot = _report_inputs(P.to_dict(self.ws, path))
-            changed = snapshot != self._report2_baseline
-            if job is None or job.revision != revision or Path(job.project_path or "") != path:
-                if not changed and not self.ws.dirty:
-                    return True  # Accept already queued a new revision; the reviewed project is safe to leave
-                QMessageBox.warning(self, "Report²", "This report changed while it was open. Save a copy of "
-                                    "your additional edits, then reload the current revision.")
-                return False
-            if self.ws.dirty or changed:
-                P.save(self.ws, path)
-                self.ws.project_path = path
-                self.ws.dirty = False
-            from gcws.automation.manual import is_manual
-            # an entry accepted by hand is made again when the pair is accepted again (no workflow does it)
-            if changed and not job.edited and not is_manual(job) and \
-                    not self.report2.journal.mark_edited(jid, revision):
-                raise RuntimeError("The report changed while it was being saved. Reload it before continuing.")
+            changed = self.r2_edit.save(self.ws, job_id)
+        except ES.Stale as exc:
+            QMessageBox.warning(self, "Report²", str(exc))
+            return False
         except Exception as exc:  # noqa: BLE001 - leave the current project open on any save failure
             QMessageBox.warning(self, "Report²", f"Could not save the edited project:\n{exc}")
             return False
-        self._report2_baseline = snapshot
         if changed:
             self.report2.refresh()
         return True
@@ -2365,9 +2277,9 @@ class MainWindow(QMainWindow):
     def save_project(self, ask=False):
         if not self.ws.states():
             return
-        if self._report2_job is not None and not ask:
+        if self.r2_edit.bound is not None and not ask:
             if self._save_report2_project():
-                self.statusBar().showMessage(f"Saved {self._report2_job[2]}", 5000)
+                self.statusBar().showMessage(f"Saved {self.r2_edit.path}", 5000)
             return
         path = self.ws.project_path
         if ask or path is None:
@@ -2377,7 +2289,7 @@ class MainWindow(QMainWindow):
             if not fn:
                 return
             path = Path(fn)
-        if self._report2_job is not None and path == self._report2_job[2]:
+        if self.r2_edit.bound is not None and path == self.r2_edit.path:
             self._save_report2_project()
             return
         try:
@@ -2390,9 +2302,8 @@ class MainWindow(QMainWindow):
         self._add_recent(path)
         self.setWindowTitle(f"GC Workspace - {path.name}")
         self.statusBar().showMessage(f"Saved {path}", 5000)
-        if self._report2_job is not None:
-            self._report2_job = None  # Save As leaves the journal's processed project unchanged
-            self._report2_baseline = None
+        if self.r2_edit.bound is not None:
+            self.r2_edit.clear()  # Save As leaves the journal's processed project unchanged
             self.statusBar().showMessage(f"Saved a separate copy at {path}; Report² is unchanged", 8000)
 
     def open_project(self, path=None, *, confirm_close=True, on_loaded=None):
@@ -2430,8 +2341,7 @@ class MainWindow(QMainWindow):
             return False
         if not self._save_report2_project():
             return False
-        self._report2_job = None
-        self._report2_baseline = None
+        self.r2_edit.clear()
         self._project_open_callback = on_loaded
         self.close_all()
         self.ws.audit.load(data.get("audit"))
@@ -2666,7 +2576,7 @@ class MainWindow(QMainWindow):
         return False
 
     def closeEvent(self, ev):
-        if self._report2_job is not None:
+        if self.r2_edit.bound is not None:
             if not self._save_report2_project():
                 ev.ignore()
                 return
