@@ -22,12 +22,8 @@ class ReportNotPossible(Exception):
 
 def cas_path() -> Optional[Path]:
     """CASINFO.xlsx of the preferences, resolved like the NIAS main script does it."""
-    from gcws import paths
-    from gcws.ui.dialogs.preferences import load_settings
-    raw = Path(load_settings().get("standard_cas_path", "CASINFO.xlsx"))
-    if raw.is_absolute():
-        return raw if raw.exists() else None
-    return next((b / raw for b in (paths.RESOURCES, paths.ROOT, paths.DATA) if (b / raw).exists()), None)
+    from gcws.core.settings import cas_path
+    return cas_path()
 
 
 def prepare(ws, kind: str, group: Optional[dict], *, recompute: bool = True,

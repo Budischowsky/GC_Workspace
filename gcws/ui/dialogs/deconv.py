@@ -42,7 +42,7 @@ from gcws.ms.spectra import ms_times
 from gcws.ui import theme, workers
 from gcws.ui.docks.interpretation_view import InterpretationView
 from gcws.ui.docks.spectrum import StickPlot
-from gcws.ui.undo import ManualEventsCommand
+from gcws.core.undo import ManualEventsCommand
 
 SCOPES = (("peak", "Selected peak"), ("range", "Visible range"), ("run", "Whole run"))
 PRESET_GROUPS = (("Resolution", ("high", "medium", "low")), ("Sensitivity", ("high", "medium", "low")),

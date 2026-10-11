@@ -239,7 +239,7 @@ def test_fragment_override_and_identification_survive_reload_and_undo(qtbot, win
     from gcws.core import project as P
     from gcws.core.ident import Identification
     from gcws.ms.assignment import fragment_id, override_key, override_for
-    from gcws.ui.undo import IdentCommand
+    from gcws.core.undo import IdentCommand
     ws, st, dlg = _open(qtbot, win, samples, 'FID', 11.865)
     parent = ws.selected_peak()
     parent_ident = Identification(parent.apex_rt, name='Original parent', manual=True)
@@ -340,7 +340,7 @@ def test_split_peaks_are_drawn_as_their_curves_and_markers_follow_integration(qt
     from types import SimpleNamespace
     from gcws.core.events import ManualEvent, ManualKind as K
     from gcws.ms import deconv_cache as DC
-    from gcws.ui.undo import ManualEventsCommand
+    from gcws.core.undo import ManualEventsCommand
     ws, st, dlg = _open(qtbot, win, samples, 'FID', 11.865, prefixes=('07_',))
     dlg.split()
     parts = {i: p for i, p in enumerate(ws.active_result().peaks) if p.extra.get('deconv_component')}

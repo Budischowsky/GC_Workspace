@@ -11,7 +11,7 @@ from gcws.core.model import FID, parse_key
 from gcws.integration.method import (CHOICE_EVENTS, DECONV_LEVELS, EventKind, IntegrationMethod,
                                      TimedEvent, VALUE_EVENTS)
 from gcws.ui.icons import icon
-from gcws.ui.undo import ManualEventsCommand, SetMethodCommand
+from gcws.core.undo import ManualEventsCommand, SetMethodCommand
 
 
 #: stored value -> text of the automatic deconvolution split

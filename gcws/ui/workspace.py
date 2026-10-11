@@ -1,7 +1,7 @@
 """Workspace controller: loaded runs, their integrations and identifications.
 
 Holds no widgets. Docks observe its signals and change state through undo
-commands (``gcws.ui.undo``), so every change is undoable and audited.
+commands (``gcws.core.undo``), so every change is undoable and audited.
 """
 from __future__ import annotations
 
@@ -755,7 +755,7 @@ class Workspace(QObject):
         are compared so only what changed is invalidated.
         """
         import copy
-        from gcws.ui.undo import ValueCommand
+        from gcws.core.undo import ValueCommand
 
         def setter(v):
             old = self.quant

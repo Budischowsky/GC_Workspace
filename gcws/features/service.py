@@ -255,7 +255,7 @@ def proposals(table: FeatureTable, kinds=("split", "gapfill", "identity"), auto_
 def commands(ws, props: list) -> list:
     """Undo commands for ``props``: one ManualEventsCommand per run and signal (the events are
     added to the run's list), one IdentCommand per run and signal."""
-    from gcws.ui.undo import IdentCommand, ManualEventsCommand
+    from gcws.core.undo import IdentCommand, ManualEventsCommand
     events: dict = {}
     idents: dict = {}
     for p in props:
@@ -280,7 +280,7 @@ def commands(ws, props: list) -> list:
 
 def apply(ws, table: FeatureTable, props: Optional[list] = None, stack=None, label: str = "") -> int:
     """Make ``props`` (default: the table's automatic ones) as one undo step; returns their number."""
-    from gcws.ui.undo import MultiCommand
+    from gcws.core.undo import MultiCommand
     props = proposals(table) if props is None else props
     if not props:
         return 0

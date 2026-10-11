@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout
 
 from gcws.io.folders import sources
 from gcws.io.sequence import ROLE_LABELS
-from gcws.ui.undo import ValueCommand
+from gcws.core.undo import ValueCommand
 
 
 def _label(text=""):

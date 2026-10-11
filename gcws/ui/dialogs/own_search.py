@@ -2,33 +2,16 @@
 
 The Mass spectrum panel's *Own library* button searches the spectrum on display in the
 library picked here (its arrow menu switches the library); Identify > Own library search
-options... sets the same options. They are kept in ``QSettings("ownsearch/...")``.
+options... sets the same options. They are kept in ``QSettings("ownsearch/...")`` (gcws.core.settings).
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout,
                                QHBoxLayout, QLabel, QSpinBox, QVBoxLayout)
 
-DEFAULTS = {"library": "", "algorithm": "similarity", "min_score": 0, "top_n": 10, "mz_auto": True,
-            "min_mz": 35, "max_mz": 600, "threshold": 0.0, "dedupe": True}
+from gcws.core.settings import load_own_search as load_options, save_own_search as save_options  # noqa: F401
+
 ALGORITHMS = {"similarity": "Similarity (NIST style, match factor)", "pbm": "PBM (Agilent, Qual 0-99)"}
-
-
-def load_options() -> dict:
-    s = QSettings()
-    out = {}
-    for k, v in DEFAULTS.items():
-        raw = s.value(f"ownsearch/{k}", v)
-        out[k] = (raw in (True, "true", "1", 1)) if isinstance(v, bool) else type(v)(raw)
-    return out
-
-
-def save_options(opts: dict) -> None:
-    s = QSettings()
-    for k in DEFAULTS:
-        if k in opts:
-            s.setValue(f"ownsearch/{k}", opts[k])
 
 
 def libraries() -> list[str]:

@@ -13,7 +13,7 @@ from gcws.core.ident import Identification
 from gcws.ui.icons import icon
 from gcws.ui.models.peak_filter import FilterState, value_predicate, value_test  # noqa: F401 (re-export)
 from gcws.ui.models.peak_table import COLUMN_KEYS, COLUMNS, PeakTableModel
-from gcws.ui.undo import IdentCommand
+from gcws.core.undo import IdentCommand
 
 
 #: columns the value filter can use, and its operators

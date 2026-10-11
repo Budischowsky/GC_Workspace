@@ -30,7 +30,7 @@ from gcws.ui.layout.drop_overlay import DropOverlay
 from gcws.ui.plot.chrom import ChromPanel, ViewLink
 from gcws.ui.plot.tools import TOOLS, ToolController
 from gcws.ui.run_tabs import LoadedSamples
-from gcws.ui.undo import IdentCommand, ManualEventsCommand, ValueCommand, add_event
+from gcws.core.undo import IdentCommand, ManualEventsCommand, ValueCommand, add_event
 from gcws.ui.workspace import Workspace
 
 DOCKS = [  # key, title

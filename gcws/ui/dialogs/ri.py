@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
                                QHeaderView, QLabel, QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout)
 
 from gcws.core.model import FID
-from gcws.ui.undo import ValueCommand
+from gcws.core.undo import ValueCommand
 
 
 class RetentionIndexDialog(QDialog):

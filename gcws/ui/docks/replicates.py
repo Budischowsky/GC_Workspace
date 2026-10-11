@@ -20,7 +20,7 @@ from gcws.quant import double_determination as DD
 from gcws.quant import duplicate_view as DV
 from gcws.quant.replicates import POLICIES
 from gcws.ui import theme
-from gcws.ui.undo import ValueCommand
+from gcws.core.undo import ValueCommand
 
 #: list columns
 L_NAME, L_N, L_OPEN = range(3)

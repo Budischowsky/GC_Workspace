@@ -451,7 +451,7 @@ def test_derived_trace_follows_base_reintegration(qtbot, win, samples):
     before = ws.result(sample.id, "FID - Blank")
     assert before is not None
     # a manual change of the plain FID integration re-derives the blank-subtracted trace
-    from gcws.ui.undo import add_event
+    from gcws.core.undo import add_event
     sample.undo.push(add_event(ws, sample.id, "FID", ManualEvent(K.ADD_PEAK, 30.0, 30.2), ""))
     assert ws.result(sample.id, "FID - Blank") is not before
 
@@ -1240,7 +1240,7 @@ def test_processing_method_save_and_load(qtbot, win, samples, tmp_path, monkeypa
     from gcws.signal.blank import BlankOptions
     from gcws.ui.dialogs.own_search import load_options, save_options
     from gcws.ui.dialogs.proc_method import LoadMethodDialog, SaveMethodDialog
-    from gcws.ui.undo import SetMethodCommand
+    from gcws.core.undo import SetMethodCommand
     monkeypatch.setattr(paths, "DATA", tmp_path / "data")
     _load(qtbot, win, samples, ["07_"])
     ws = win.ws

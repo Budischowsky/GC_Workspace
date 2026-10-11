@@ -46,17 +46,9 @@ _CAS = {"path": None, "lookup": {}}
 
 def cas_lookup() -> dict:
     """CASINFO.xlsx (SML) through the vendored NIAS reader, cached."""
-    from gcws.ui.dialogs.preferences import load_settings
-    from gcws import paths
-    from pathlib import Path
-    raw = load_settings().get("standard_cas_path", "CASINFO.xlsx")
-    p = Path(raw)
-    if not p.is_absolute():
-        for base in (paths.RESOURCES, paths.ROOT, paths.DATA):
-            if (base / p).exists():
-                p = base / p
-                break
-    if not p.exists():
+    from gcws.core.settings import cas_path
+    p = cas_path()
+    if p is None:
         return {}
     if _CAS["path"] != str(p):
         try:

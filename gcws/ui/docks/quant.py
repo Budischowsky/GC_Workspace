@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, 
 from gcws.core.keys import is_fid
 from gcws.quant import modes as QM
 from gcws.quant.service import DETECTORS, MODES, UNITS, quant_detector
-from gcws.ui.undo import ValueCommand
+from gcws.core.undo import ValueCommand
 
 
 def _item(text, editable=False):

@@ -579,7 +579,7 @@ class DuplicatePage(QWidget):
     def set_identities(self, changes: list) -> None:
         """``(row, name, cas)`` of several substances as one undo step (None keeps a value)."""
         from gcws.core.ident import Identification
-        from gcws.ui.undo import IdentCommand, MultiCommand
+        from gcws.core.undo import IdentCommand, MultiCommand
         per_run: dict = {}                       # one command per run: each command snapshots the set
         for row, name, cas in changes:
             for key, i in (("source1", 0), ("source2", 1)):
@@ -1358,7 +1358,7 @@ class DuplicatePage(QWidget):
     def remove_gap_fill(self, row) -> bool:
         """Take the gap fill of this substance out again (one undo step)."""
         from gcws.features.model import GAPFILL, GAPFILL_OPTION
-        from gcws.ui.undo import ManualEventsCommand, MultiCommand
+        from gcws.core.undo import ManualEventsCommand, MultiCommand
         f = self.feature_of(row)
         if f is None:
             return False
