@@ -14,6 +14,12 @@ NIAS / Fingerprint / Total extraction reports. It needs no ChemStation or MassHu
 The setup ends with a list of optional features. The report preview needs Microsoft Word, pywin32, pypdfium2 and
 Pillow; the last three come with `requirements.txt`.
 
+The setup also builds the Rust kernels (`rust/gcws_rust`: library search, norms, integration, deconvolution,
+fit) into `.venv`. On a PC without Rust it installs rustup with the GNU toolchain into `%USERPROFILE%\.cargo` and
+`.rustup` (no Visual Studio needed; internet access required), builds once and rebuilds only when the Rust sources
+change. For an offline PC put a `gcws_rust-*.whl` built for the same Python into `wheelhouse/`. Without the kernels
+GC Workspace uses its Python code: same results, slower; the setup lists them as missing.
+
 **Libraries**: GC Workspace searches its own list of libraries; add the ones on your PC in *Identify >
 Libraries...* (see below). SpectrAtlas (formerly EI Atlas, `..\UnknownEvaluation`) is not needed for searching; it is only used by
 *Investigate*, and *Libraries... > Take over from SpectrAtlas* adds its libraries once. Search methods and
