@@ -2354,15 +2354,16 @@ def best_spectrum_row_index(rows: list[dict[str, Any]]) -> int:
 
 
 def unknown_entry_similarity(first: dict[str, Any], second: dict[str, Any],
-                             tolerance: int = 0) -> dict[str, Any]:
+                             tolerance: int = 0, profiles: Optional[tuple] = None) -> dict[str, Any]:
     """Rank recognition hints, not identity probabilities.
 
     Spectral/ion evidence forms the baseline. RT can attenuate it and sample
     overlap can boost it proportionally, but neither creates evidence when
     there are no shared ions. Unordered legacy ions carry no spectral score.
+    ``profiles``: the two entries' :func:`entry_ion_profile`, when the caller already has them.
     """
-    left, left_intensities = entry_ion_profile(first)
-    right, right_intensities = entry_ion_profile(second)
+    (left, left_intensities), (right, right_intensities) = (
+        profiles or (entry_ion_profile(first), entry_ion_profile(second)))
     spectral = spectral_match_factor(left, right, tolerance,
                                      left_intensities, right_intensities)
     spectral_available = not ((first.get("rank_unknown") and left_intensities is None)
@@ -2447,6 +2448,8 @@ def compute_unknown_clusters(register: dict[str, Any],
     entries = register.get("unknowns") or {}
     keys = sorted(entries)
     parent = {key: key for key in keys}
+    # once per entry: a profile reads the settings and the register file, and there are n² pairs
+    profiles = {key: entry_ion_profile(entries[key]) for key in keys}
 
     def find(key: str) -> str:
         while parent[key] != key:
@@ -2458,7 +2461,8 @@ def compute_unknown_clusters(register: dict[str, Any],
         for right in keys[index + 1:]:
             if find(left) == find(right):
                 continue
-            if unknown_entry_similarity(entries[left], entries[right])["total"] >= threshold:
+            if unknown_entry_similarity(entries[left], entries[right],
+                                        profiles=(profiles[left], profiles[right]))["total"] >= threshold:
                 parent[find(right)] = find(left)
 
     groups: dict[str, list[str]] = {}
