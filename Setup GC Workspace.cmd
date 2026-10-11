@@ -18,7 +18,7 @@ if not defined GCWS_PY (
     pause
     exit /b 0
 )
-%GCWS_PY% setup_gcws.py
+%GCWS_PY% setup_gcws.py %*
 if errorlevel 1 (
     echo Please check the message above.
     pause

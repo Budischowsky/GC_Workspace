@@ -18,6 +18,8 @@ RUST_CRATE = ROOT / "rust" / "gcws_rust"
 RUST_TOOLCHAIN = "stable-x86_64-pc-windows-gnu"
 RUSTUP_INIT = "https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-gnu/rustup-init.exe"
 MATURIN = "maturin>=1.15,<2"
+#: rustup is installed only on request; without it the shipped wheel or the Python code is used
+INSTALL_RUST = "--install-rust" in sys.argv[1:]
 
 
 #: which optional features work on this PC (report preview: Word over COM, pypdfium2, Pillow)
@@ -147,9 +149,13 @@ def setup_rust(python: Path, env: Path, wheelhouse: Path) -> bool:
         if rust_works(python):
             marker.write_text(json.dumps({"sources": digest, "from": "wheelhouse"}, indent=2), encoding="utf-8")
             return True
+    if find_rustup() is None and not INSTALL_RUST:
+        print("Rust is not installed on this PC: GC Workspace uses its Python code "
+              "(run the setup with --install-rust to install it).")
+        return False
     try:
         build_rust(python)
-    except (OSError, subprocess.CalledProcessError, RuntimeError) as exc:
+    except Exception as exc:  # noqa: BLE001 - without the kernels GC Workspace still works
         print("Rust kernels not built:", exc)
         return False
     if not rust_works(python):
@@ -178,20 +184,26 @@ def setup():
     if not valid:
         subprocess.run([sys.executable, "-m", "venv", str(env)], check=True)
     wheelhouse = ROOT / "wheelhouse"
-    offline = ["--no-index", "--find-links", str(wheelhouse)] if wheelhouse.is_dir() else []
+    # offline only with a full wheelhouse; one holding just the Rust wheel still installs from the internet
+    packages = [w for w in wheelhouse.glob("*.whl") if not w.name.startswith("gcws_rust-")]         if wheelhouse.is_dir() else []
+    offline = ["--no-index", "--find-links", str(wheelhouse)] if packages else []
     subprocess.run([str(python), "-m", "pip", "install", "--upgrade", "pip", *offline], check=False)
     subprocess.run([str(python), "-m", "pip", "install", *offline, "-r", str(ROOT / "requirements.txt")], check=True)
     subprocess.run([str(python), "-c", "import PySide6, pyqtgraph, numpy, openpyxl, docx; import gcws; "
                     "from gcws import paths; paths.initialize(); print('data folder:', paths.DATA)"],
                    check=True, cwd=str(ROOT))
     marker.write_text(json.dumps(identity, indent=2), encoding="utf-8")
-    rust = setup_rust(python, env, wheelhouse)
+    try:
+        rust = setup_rust(python, env, wheelhouse)
+    except Exception as exc:  # noqa: BLE001 - the Rust kernels are optional
+        print("Rust kernels not installed:", exc)
+        rust = False
     subprocess.run([str(python), "-c", OPTIONAL_CHECK], check=False, cwd=str(ROOT))
     if rust:
         print("  [ok]      Rust kernels (faster search, integration, deconvolution)")
     else:
         print("  [missing] Rust kernels: GC Workspace uses its Python code (same results, slower); "
-              "run this setup again with internet access")
+              "see the message above")
     try:
         sys.path.insert(0, str(ROOT))
         import gcws  # noqa: F401
