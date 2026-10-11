@@ -42,3 +42,26 @@ def test_many_jobs_all_report_back():
         workers.submit(lambda i=i: (time.sleep(0.005), i)[1], on_done=seen.append)
     assert _wait(app, lambda: len(seen) == 50)
     assert sorted(seen) == list(range(50))
+
+
+def test_finished_jobs_let_go_of_their_arguments():
+    """A job's arguments (a loaded run with its MS data) are freed once the job has reported back:
+    jobs were kept by Qt for good, and every load, deconvolution and report stayed in memory."""
+    import gc
+    import weakref
+    from PySide6.QtCore import QThreadPool
+    app = QApplication.instance() or QApplication([])
+
+    class Payload:
+        pass
+
+    refs, seen = [], []
+    for _ in range(5):
+        payload = Payload()
+        refs.append(weakref.ref(payload))
+        workers.submit(lambda p: None, payload, on_done=seen.append)
+        del payload
+    assert _wait(app, lambda: len(seen) == 5 and not workers._RUNNING)
+    QThreadPool.globalInstance().waitForDone()
+    gc.collect()
+    assert [r() for r in refs] == [None] * 5

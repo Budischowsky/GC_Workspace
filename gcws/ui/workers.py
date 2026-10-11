@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import traceback
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal as QtSignal, Slot
+from PySide6.QtCore import QObject, QThreadPool, Signal as QtSignal, Slot
 
 
 class _Relay(QObject):
@@ -32,9 +32,11 @@ def _relay() -> _Relay:
     return _RELAY
 
 
-class Worker(QRunnable):
+class Worker:
+    """One job. A plain object whose ``run`` the pool calls: a QRunnable started with auto-delete off
+    belonged to Qt for good, and every job kept its arguments (loaded runs with their MS data)."""
+
     def __init__(self, fn, *args, on_done=None, on_error=None, on_progress=None, **kwargs):
-        super().__init__()
         self.fn, self.args, self.kwargs = fn, args, kwargs
         self.on_done, self.on_error, self.on_progress = on_done, on_error, on_progress
         self.relay = _relay()
@@ -72,9 +74,8 @@ def submit(fn, *args, on_done=None, on_error=None, on_progress=None, with_progre
     w = Worker(fn, *args, on_done=on_done, on_error=on_error, on_progress=on_progress, **kwargs)
     if with_progress:
         w.kwargs["progress"] = w.progress
-    w.setAutoDelete(False)
     _RUNNING.add(w)
-    QThreadPool.globalInstance().start(w)
+    QThreadPool.globalInstance().start(w.run)
     return w
 
 
