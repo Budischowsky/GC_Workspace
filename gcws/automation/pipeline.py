@@ -366,6 +366,7 @@ def evidence_for(ws, members: list, *, kind: str = "nias", require: str = "auto"
                  detection: Optional[dict] = None) -> dict:
     """What the Report² rules look at for the determinations ``members`` of one sample (without the
     report's rows, summary and warnings, which the caller adds)."""
+    from gcws.quant import limits as QL
     from gcws.quant.nias_bridge import make_settings
     s = make_settings((ws.quant or {}).get("settings"))
     out = []
@@ -386,8 +387,7 @@ def evidence_for(ws, members: list, *, kind: str = "nias", require: str = "auto"
         features = []
     return {"kind": kind, "mode": (ws.quant or {}).get("mode", "nias_mgkg"), "members": out, "rows": [],
             "summary": {}, "warnings": [], "errors": [], "features": features,
-            "settings": {"reporting_limit": getattr(s, "reporting_limit", 0.01),
-                         "duplicate_max_reldiff": getattr(s, "duplicate_max_reldiff", 30.0)}}
+            "settings": QL.of_settings(s).as_evidence()}
 
 
 def _safe(fn, *args) -> dict:

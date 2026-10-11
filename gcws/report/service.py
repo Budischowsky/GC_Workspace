@@ -139,7 +139,9 @@ def combined_rows(job: ReportJob):
     limit); ``job.overrides`` receives the values the analyst set. Unknowns come without CAS and
     match quality (:func:`without_id`)."""
     from gcws.quant.replicates import combine, engine_peaks
-    tol = float(getattr(job.settings, "rt_tolerance", 0.035) or 0.035)
+    from gcws.quant import limits as QL
+    q = QL.of_settings(job.settings)
+    tol = q.rt_tolerance
     lists = [engine_peaks(s) for s in job.samples]
     job.overrides = {}
     if job.features is not None and len(job.samples) >= 2:
@@ -147,12 +149,7 @@ def combined_rows(job: ReportJob):
     rows = combine(lists, tol, job.policy)
     if len(job.samples) == 2 and job.policy == "all":
         from gcws.quant import duplicate_view as DV
-        limit = DV.reldiff_limit(job.settings)
-        rl = 0.0
-        if job.kind == "nias":
-            import gc_duplicate as GD
-            rl = getattr(job.settings, "reporting_limit", None)
-            rl = float(rl if rl is not None else GD.DEFAULT_REPORTING_LIMIT)
+        limit, rl = q.difference, q.reporting if job.kind == "nias" else 0.0
         rows, job.overrides = DV.rows_for_report(rows, job.edits or {}, limit, rl, tol)
     return [without_id(r) for r in rows]
 
@@ -162,12 +159,9 @@ def feature_rows(job: ReportJob, lists: list, tol: float):
     determinations the analyst's report choices and numbers as in :func:`combined_rows`."""
     from gcws.features import combine as FC
     from gcws.quant import duplicate_view as DV
-    limit = DV.reldiff_limit(job.settings)
-    rl = 0.0
-    if job.kind == "nias":
-        import gc_duplicate as GD
-        rl = getattr(job.settings, "reporting_limit", None)
-        rl = float(rl if rl is not None else GD.DEFAULT_REPORTING_LIMIT)
+    from gcws.quant import limits as QL
+    q = QL.of_settings(job.settings)
+    limit, rl = q.difference, q.reporting if job.kind == "nias" else 0.0
     rows = FC.rows(job.features, lists, limit, rl, job.policy)
     if len(job.samples) == 2 and job.policy == "all":
         rows, job.overrides = DV.rows_for_report(rows, job.edits or {}, limit, rl, tol)
@@ -400,7 +394,8 @@ def record_seen(kind: str, rows: list, target: Path, sample_key: str = "") -> st
 def reported_rows(job: ReportJob, combined, audit) -> list:
     if audit is not None and isinstance(audit.get("rows"), list):
         return list(audit["rows"])
-    limit = float(getattr(job.settings, "reporting_limit", 0.01) or 0.01)
+    from gcws.quant import limits as QL
+    limit = QL.of_settings(job.settings).reporting
     out = []
     for i, r in enumerate(combined):
         mean = (job.overrides.get(i) or {}).get("mean", r.get("mean"))

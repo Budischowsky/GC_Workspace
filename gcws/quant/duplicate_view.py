@@ -210,7 +210,7 @@ def member_problems(ws, members: list[str]) -> list[str]:
 
 def compute(ws, members: list[str], policy: str = "all"):
     """``(rows, problems)`` of the replicate merge for ``members`` in the current quantification mode."""
-    from gcws.quant.nias_bridge import make_settings
+    from gcws.quant import limits as QL
     from gcws.quant.replicates import combine, engine_peaks
     members = [m for m in members if m in ws.runs]
     from gcws.quant.service import quant_detector
@@ -232,14 +232,12 @@ def compute(ws, members: list[str], policy: str = "all"):
         else:
             qr = ws.quant_result.rows.get(m, {})
             lists.append(engine_peaks(s, value=lambda row, qr=qr: qr.get(row.derived.get("gcws_index"), {}).get("conc")))
-    settings = make_settings(ws.quant.get("hs" if mode == "hs_screening" else "settings"))
-    tol = float(getattr(settings, "rt_tolerance", 0.035) or 0.035)
+    q = QL.of_quant(ws.quant)
     table = features_table(ws, members)
     if table is not None:
         from gcws.features import combine as FC
-        limit, rl = limits(ws)
-        return FC.rows(table, lists, limit, rl, policy), []
-    return combine(lists, tol, policy), []
+        return FC.rows(table, lists, q.difference, q.reporting, policy), []
+    return combine(lists, q.rt_tolerance, policy), []
 
 
 def features_table(ws, members: list[str], table=None):
@@ -276,28 +274,10 @@ def stamp(ws, members, key) -> tuple:
 
 
 def limits(ws) -> tuple[float, float]:
-    """(difference limit %, reporting limit) from the quantification settings."""
-    from gcws.quant.nias_bridge import make_settings
-    if ws.quant.get("mode") == "hs_screening":
-        return float(ws.quant.get("hs", {}).get("duplicate_max_reldiff", 30)), 0.0
-    s = make_settings(ws.quant.get("settings"))
-    limit = reldiff_limit(s)
-    rl = getattr(s, "reporting_limit", None)
-    if rl is None:
-        import gc_duplicate as GD
-        rl = GD.DEFAULT_REPORTING_LIMIT
-    rl = float(rl) if ws.quant.get("mode", "nias_mgkg") == "nias_mgkg" else 0.0
-    return limit, rl
-
-
-def reldiff_limit(settings) -> float:
-    """The difference limit (%) of ``settings``; 0 % is a limit (every difference is flagged), only a
-    missing value falls back to the default, as in the workbook (``gc_export.duplicate_limit``)."""
-    value = getattr(settings, "duplicate_max_reldiff", None)
-    try:
-        return float(value) if value is not None else 30.0
-    except (TypeError, ValueError):
-        return 30.0
+    """(difference limit %, reporting limit) from the quantification settings (:func:`gcws.quant.limits.of_quant`)."""
+    from gcws.quant import limits as QL
+    q = QL.of_quant(ws.quant)
+    return q.difference, q.reporting
 
 
 def default_limit(ws) -> float:

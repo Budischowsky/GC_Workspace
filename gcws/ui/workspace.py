@@ -711,7 +711,6 @@ class Workspace(QObject):
         of the other detector receive RRT only; HS quantities use TIC peaks."""
         st = self.runs.get(run_id)
         key = self.effective_key(st, key or self.signal_key)
-        hs = self.quant.get("mode") == "hs_screening"
         from gcws.quant.service import quant_detector, rrt_rows
         detector = quant_detector(self.quant)
         if self.quant_result is None or st is None:
@@ -727,8 +726,8 @@ class Workspace(QObject):
         res, base = self.result(run_id, key), self.result(run_id, detector)
         if res is None or base is None:
             return {}
-        from gcws.quant.nias_bridge import make_settings
-        tol = float(getattr(make_settings(self.quant.get("hs" if hs else "settings")), "rt_tolerance", 0.035) or 0.035)
+        from gcws.quant import limits as QL
+        tol = QL.of_quant(self.quant).rt_tolerance
         pairs = sorted((abs(p.apex_rt - q.apex_rt), i, j) for i, p in enumerate(res.peaks)
                        for j, q in enumerate(base.peaks) if abs(p.apex_rt - q.apex_rt) <= tol and j in rows)
         out, used = {}, set()

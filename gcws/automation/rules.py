@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Optional
 
 from gcws.automation import store
+from gcws.quant import limits as QL
 
 ACCEPTED_AUTO = "accepted_auto"
 CONTROL = "control"
@@ -184,10 +185,8 @@ def _is_unidentified(row: dict) -> bool:
 
 def _manual_check(rule: Rule, ev: dict) -> list[Finding]:
     out = []
-    s = ev.get("settings") or {}
-    limit = _num(s.get("reporting_limit")) or 0.01
-    max_rd = _num(s.get("duplicate_max_reldiff"))
-    max_rd = 30.0 if max_rd is None else max_rd             # 0 % is a limit (as DV.reldiff_limit)
+    q = QL.of_evidence(ev)
+    limit, max_rd = q.reporting, q.difference
     for row in ev.get("rows") or []:
         status = str(row.get("status") or "")
         artefact = status.casefold().startswith("artefact")
@@ -297,7 +296,7 @@ def _processing(rule: Rule, ev: dict) -> list[Finding]:
 
 
 def _no_sml(rule: Rule, ev: dict) -> list[Finding]:
-    limit = _num((ev.get("settings") or {}).get("reporting_limit")) or 0.01
+    limit = QL.of_evidence(ev).reporting
     out = []
     for row in ev.get("rows") or []:
         if _reported(row, limit) and not _is_unidentified(row) and _num(row.get("sml")) is None \
@@ -324,7 +323,7 @@ def _substance_above(rule: Rule, ev: dict) -> list[Finding]:
 
 
 def _unidentified(rule: Rule, ev: dict) -> list[Finding]:
-    limit = _num((ev.get("settings") or {}).get("reporting_limit")) or 0.01
+    limit = QL.of_evidence(ev).reporting
     n = sum(1 for row in ev.get("rows") or [] if _reported(row, limit) and _is_unidentified(row))
     mx = int(_num(rule.p("max")) or 0)
     return [Finding(rule.id, rule.level, f"{n} unidentified substances (more than {mx})", value=n)] if n > mx else []
@@ -377,7 +376,7 @@ def _double_determination(rule: Rule, ev: dict) -> list[Finding]:
 
 
 def _deconvolution(rule: Rule, ev: dict) -> list[Finding]:
-    limit = _num((ev.get("settings") or {}).get("reporting_limit")) or 0.01
+    limit = QL.of_evidence(ev).reporting
     out = []
     for m in ev.get("members") or []:
         d = m.get("deconvolution") or {}

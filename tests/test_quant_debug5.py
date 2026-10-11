@@ -9,9 +9,10 @@ def test_difference_limit_zero_is_kept():
     it used to become 30 % in the list and the reports."""
     ws = SimpleNamespace(quant={"mode": "nias_mgkg", "settings": {"duplicate_max_reldiff": 0.0}})
     assert DV.limits(ws)[0] == 0.0
+    from gcws.quant import limits as QL
     from gcws.quant.nias_bridge import make_settings
-    assert DV.reldiff_limit(make_settings({"duplicate_max_reldiff": 0.0})) == 0.0
-    assert DV.reldiff_limit(SimpleNamespace()) == 30.0
+    assert QL.of_settings(make_settings({"duplicate_max_reldiff": 0.0})).difference == 0.0
+    assert QL.of_settings(SimpleNamespace()).difference == 30.0
 
 
 def test_report_determinations_take_the_analysts_difference():

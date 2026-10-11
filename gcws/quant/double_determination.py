@@ -43,9 +43,9 @@ def evaluate(ws, members: list, edits: dict, labels=("A", "B"), policy: str = "a
 
 
 def rt_tolerance(quant: dict) -> float:
-    """The RT tolerance (min) that pairs an edit with its row."""
-    from gcws.quant.nias_bridge import make_settings
-    return float(getattr(make_settings((quant or {}).get("settings")), "rt_tolerance", 0.035) or 0.035)
+    """The RT tolerance (min) that pairs an edit with its row: the one that paired the row."""
+    from gcws.quant import limits as QL
+    return QL.of_quant(quant).rt_tolerance
 
 
 # -- changes -----------------------------------------------------------------------------------------
