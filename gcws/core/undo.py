@@ -194,3 +194,86 @@ class MultiCommand(QUndoCommand):
     def undo(self):
         for c in reversed(self.commands):
             c.undo()
+
+
+class UndoStack:
+    """The undo stack of a workspace without Qt (unattended processing): what callers use of a
+    ``QUndoStack`` - push (runs the command), macros, count, undo and redo."""
+
+    def __init__(self):
+        self._done: list = []                         # one entry per step: a command or a macro list
+        self._undone: list = []
+        self._macro: Optional[list] = None
+        self._depth = 0
+
+    def push(self, cmd) -> None:
+        cmd.redo()
+        if self._macro is not None:
+            self._macro.append(cmd)
+        else:
+            self._done.append(cmd)
+            self._undone.clear()
+
+    def beginMacro(self, text: str) -> None:
+        if self._depth == 0:
+            self._macro = []
+        self._depth += 1
+
+    def endMacro(self) -> None:
+        self._depth -= 1
+        if self._depth == 0:
+            self._done.append(self._macro)
+            self._undone.clear()
+            self._macro = None
+
+    def count(self) -> int:
+        return len(self._done) + len(self._undone)
+
+    def index(self) -> int:
+        return len(self._done)
+
+    def canUndo(self) -> bool:
+        return bool(self._done)
+
+    def canRedo(self) -> bool:
+        return bool(self._undone)
+
+    def undo(self) -> None:
+        if self._done:
+            step = self._done.pop()
+            for cmd in reversed(step if isinstance(step, list) else [step]):
+                cmd.undo()
+            self._undone.append(step)
+
+    def redo(self) -> None:
+        if self._undone:
+            step = self._undone.pop()
+            for cmd in step if isinstance(step, list) else [step]:
+                cmd.redo()
+            self._done.append(step)
+
+    def clear(self) -> None:
+        self._done.clear()
+        self._undone.clear()
+
+
+class UndoGroup:
+    """The stacks of a workspace without Qt and the active one (as a ``QUndoGroup``)."""
+
+    def __init__(self):
+        self._stacks: list = []
+        self._active: Optional[UndoStack] = None
+
+    def addStack(self, stack) -> None:
+        self._stacks.append(stack)
+
+    def removeStack(self, stack) -> None:
+        self._stacks = [s for s in self._stacks if s is not stack]
+        if self._active is stack:
+            self._active = None
+
+    def setActiveStack(self, stack) -> None:
+        self._active = stack
+
+    def activeStack(self):
+        return self._active

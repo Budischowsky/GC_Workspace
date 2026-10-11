@@ -53,9 +53,9 @@ def test_the_three_casinfo_readers_agree(folders):
     assert assemble.cas_path() == substance_flags.casinfo_path() == folders["DATA"] / "CASINFO.xlsx"
 
 
-#: modules outside gcws.ui that may still import it (the app start, the tray watcher's icons, the
-#: headless Workspace and the manual's mode names); everything else depends on core only
-UI_ALLOWED = {"app.py", "automation/watcher.py", "automation/headless.py", "manual/__init__.py"}
+#: modules outside gcws.ui that may still import it (the app start, the tray watcher's icons and the
+#: manual's mode names); everything else depends on core only
+UI_ALLOWED = {"app.py", "automation/watcher.py", "manual/__init__.py"}
 
 
 def test_only_the_allowed_modules_outside_ui_import_it():
