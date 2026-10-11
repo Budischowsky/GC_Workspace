@@ -217,3 +217,27 @@ def test_deliver_due_waits_for_the_undo_time_and_keeps_to_its_own(tmp_path, monk
     assert (jr.job(broken.id).export_state, jr.job(broken.id).export_pending) == ("error", 0)
     assert any("delivery failed: share gone" in e["text"] for e in jr.events(job_id=broken.id))
     assert R.deliver_due(jr, now=later, find=lambda wid: None) == []   # no workflow: nothing to do
+
+
+# -- which batches a view leaves out ---------------------------------------------------------------------
+
+def test_each_view_hides_batches_by_its_own_rule(tmp_path):
+    J, jr, b = _journal(tmp_path)
+    s = _done(J, jr, b, "S", J.CONTROL)
+    batch_job = jr.ensure_job("wf", "m", b["id"], J.BATCH_KEY, "Batch", [], {}, "fp", state=J.QUEUED)
+    jobs = lambda: jr.jobs(batch_id=b["id"])                       # noqa: E731
+    batch = lambda: jr.batch_by_id(b["id"])                        # noqa: E731
+    assert not R.hidden_in_report2(batch(), jobs()) and not R.hidden_in_tree(batch(), jobs(), listed=True, gone=False)
+    jr.delete([s.id])                                              # the only sample report deleted
+    assert R.hidden_in_tree(batch(), jobs(), listed=True, gone=False)     # the tree: emptied
+    assert not R.hidden_in_report2(batch(), jobs())                # Report²: the batch report is still there
+    assert R.hidden_in_queue(jr.job(s.id), batch()) and not R.hidden_in_queue(jr.job(batch_job.id), batch())
+    jr.delete([batch_job.id])
+    assert R.hidden_in_report2(batch(), jobs())
+    jr.restore([s.id, batch_job.id])
+    jr.update_batch(b["id"], missing=1)                            # its folder is missing on disk
+    assert not R.hidden_in_report2(batch(), jobs())                # its reports still exist
+    assert R.hidden_in_queue(jr.job(s.id), batch())
+    assert R.hidden_in_tree(batch(), jobs(), listed=False, gone=False)
+    assert not R.hidden_in_tree(batch(), jobs(), listed=True, gone=False)
+    assert R.hidden_in_tree(dict(batch(), missing=0), jobs(), listed=True, gone=True)

@@ -114,6 +114,31 @@ def batch_closed(batch: dict, jobs: list) -> bool:
     return not reopened or max(float(j.reviewed_at or j.finished or 0) for j in live) > reopened
 
 
+# -- which batches a view leaves out -------------------------------------------------------------------
+# Three views, three questions: each rule is stated once, here.
+
+def hidden_in_report2(batch: dict, jobs: list) -> bool:
+    """Report² (unless it shows deleted reports): a batch deleted there, or one with only deleted reports
+    left (the batch report counts too). A batch whose folder is missing on disk is still listed: its
+    reports exist."""
+    return bool(batch.get("deleted")) or all(j.deleted for j in jobs)
+
+
+def hidden_in_tree(batch: dict, jobs: list, *, listed: bool, gone: bool) -> bool:
+    """The automation overview's folder tree: a batch deleted in Report², missing and no longer listed in
+    the workflow's folder (``listed``), a folder on this PC that is gone (``gone``), or one whose sample
+    reports were all deleted one by one (the batch report does not count)."""
+    reports = [j for j in jobs if not j.is_batch]
+    emptied = bool(reports) and all(j.deleted for j in reports)
+    return bool(batch.get("deleted")) or (bool(batch.get("missing")) and not listed) or gone or emptied
+
+
+def hidden_in_queue(job: J.Job, batch: dict) -> bool:
+    """The Automation panel's queue: a deleted report, or one of a batch deleted (in Report² or from the
+    disk)."""
+    return bool(job.deleted or batch.get("deleted") or batch.get("missing"))
+
+
 # -- decisions and deletes, with undo -------------------------------------------------------------------
 
 @dataclass(frozen=True)

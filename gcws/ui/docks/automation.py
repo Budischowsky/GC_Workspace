@@ -300,8 +300,8 @@ class AutomationDock(QWidget):
         try:
             batches = {b["id"]: b for b in self.journal.batches()}
             # a deleted batch folder (from the disk or in Report²) and a deleted report are not listed
-            jobs = [j for j in self.journal.jobs(states=J.QUEUE) if not j.deleted and not
-                    (batches.get(j.batch_id, {}).get("deleted") or batches.get(j.batch_id, {}).get("missing"))]
+            jobs = [j for j in self.journal.jobs(states=J.QUEUE)
+                    if not R.hidden_in_queue(j, batches.get(j.batch_id, {}))]
         except Exception:  # noqa: BLE001
             return
         keep = set(self.queue_selection()) | {f"batch:{i}" for i in self.request_selection()}

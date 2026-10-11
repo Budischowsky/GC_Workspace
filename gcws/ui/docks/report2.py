@@ -531,10 +531,8 @@ class Report2Dock(QWidget):
         register = self.mode == "register"
         for bid, jobs in by_batch.items():
             b = self._batches.get(bid, {})
-            if b.get("deleted") and not self.show_deleted:
+            if not self.show_deleted and R.hidden_in_report2(b, jobs):
                 continue
-            if not self.show_deleted and all(j.deleted for j in jobs):
-                continue                               # nothing left to show (only deleted reports)
             mode = "archive" if R.batch_closed(b, jobs) else "todo"
             n_batches[mode] += 1
             n_batches["register"] += sum(1 for j in jobs if not j.is_batch and (self.show_deleted or not j.deleted))

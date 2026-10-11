@@ -106,10 +106,7 @@ def _workflow(journal: J.Journal, wf, jobs: list, now: float) -> Item:
         # a network folder is left to the watcher's look (GC Workspace never waits for a slow drive)
         here = f.get("path") or b.get("folder") or ""
         gone = bool(here) and not store.is_network(here) and not os.path.isdir(here)
-        # every report of it deleted in Report² (one by one): as deleted as the batch itself
-        reports = [j for j in by_batch.get(b.get("id"), []) if not j.is_batch]
-        emptied = bool(reports) and all(j.deleted for j in reports)
-        if b.get("deleted") or (b.get("missing") and not f) or gone or emptied:
+        if R.hidden_in_tree(b, by_batch.get(b.get("id"), []), listed=bool(f), gone=gone):
             # deleted (from the disk, or in Report²): not listed, nor is its local copy
             lp = b.get("local_folder") or (str(LC.local_batch(local_root, root, here)) if local_root and here else "")
             if lp:
