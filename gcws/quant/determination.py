@@ -3,7 +3,8 @@
 ``of(quant, group, names)`` answers it for the group ``group`` (``ws.replicate_groups``) of the method
 ``quant`` (``ws.quant``), ``names`` mapping run id -> file name (``07_..._A.D``):
 
-- ``kind``: :data:`SINGLE` (a run without a replicate suffix), :data:`DOUBLE` (two or more runs, all
+- ``kind``: :data:`SINGLE` (a run without a replicate suffix, or made single by hand: ``single`` in the
+  group), :data:`DOUBLE` (two or more runs, all
   reported) or :data:`INCOMPLETE` (a run with a suffix whose partner never came: processed alone, but it
   needs control);
 - ``reported``: the runs whose values go into the report; ``control``: the run compared with the reported
@@ -62,7 +63,7 @@ def of(quant: Optional[dict], group: Optional[dict], names: dict) -> Determinati
         return Determination(DOUBLE, members, members)
     if not members:
         return Determination(SINGLE, (), ())
-    kind = INCOMPLETE if suffix(names[members[0]]) else SINGLE
+    kind = INCOMPLETE if suffix(names[members[0]]) and not (group or {}).get("single") else SINGLE
     return Determination(kind, members, members)
 
 

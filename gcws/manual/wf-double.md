@@ -171,6 +171,21 @@ A sample can also be reported from one run: a **single determination**.
 In Report² a single determination gets the information line *single determination* and is not flagged as
 incomplete.
 
+### Making a single determination by hand
+
+Any sample run can be reported alone, without changing the method: choose it as **A** and pick
+**— single determination —** as **B**. When the run was part of a pair it is taken out of it (the group keeps
+its name, the other run stays unused); `Ctrl+Z` makes the pair again. A run with a suffix made single this
+way is a single determination, not an incomplete double determination. The audit trail notes *Single
+determination made by hand*.
+
+The button below the list then reads **Accept single determination**. It needs no comparison - the run only
+has to be loaded and quantified. It signs off the single determination just as **Accept double
+determination** signs off a pair: your name, the time, the audit trail (*Single determination accepted*) and
+`Ctrl+Z`. A single determination a workflow processed is accepted in Report² too; one you made yourself is
+**listed in Report²** with its report, labelled *single determination* (**Rename…** / **Overwrite** when the
+name is taken). Accepting an incomplete double determination this way makes it a single determination.
+
 ## Three or more determinations
 
 Select a group of three or more in the list **Determinations** on the left: its worksheet shows the means.

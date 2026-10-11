@@ -37,3 +37,9 @@ def test_an_n_fold_group_reports_every_member():
 
 def test_the_suffixes():
     assert [DT.suffix(n) for n in (A, B, PLAIN, "x_rep2.D", "x_1", "26016606")] == ["A", "B", "", "REP2", "1", ""]
+
+
+def test_a_suffixed_run_made_single_by_hand_is_a_single_determination():
+    d = DT.of({}, group("a", single=True), NAMES)
+    assert (d.kind, d.reported, d.control) == (DT.SINGLE, ("a",), None)
+    assert d.single and d.label == "single determination"

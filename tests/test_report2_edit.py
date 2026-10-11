@@ -173,3 +173,10 @@ def test_find_for_the_bound_report_or_the_newest_pair_of_this_project(tmp_path):
     s.bind(other.id, 1, tmp_path / "other.gcws", {})
     assert s.find_for(path, ["A.D", "B.D"]).id == other.id    # bound: that report, wherever the project is
     assert s.find_for(path, ["A.D", "C.D"]) is None
+
+
+def test_find_for_a_single_determination_of_this_project(tmp_path):
+    jr, single, path = _report(tmp_path, members=("A.D",), key="single")
+    s = _session(jr)
+    assert s.find_for(path, ["a.d"]).id == single.id and s.find_for(path, ["A.D", "B.D"]) is None
+    assert s.find_for(path, []) is None

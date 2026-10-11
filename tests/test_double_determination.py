@@ -73,3 +73,26 @@ def test_pair_takes_the_runs_from_other_pairs_and_singles():
     assert next(g for g in out if g["id"] == "g2")["members"] == ["c", "d"]
     out = DD.pair([], ["x", "y"], "fresh")
     assert out[0]["name"] == "fresh" and out[0]["members"] == ["x", "y"] and out[0]["policy"] == "all"
+
+
+def test_make_single_takes_a_run_out_of_its_pair():
+    gs = DD.make_single(groups(), "a", "a alone")
+    (g,) = [g for g in gs if "a" in g["members"]]
+    assert g["id"] == "g1" and g["members"] == ["a"] and g["single"] is True
+    assert g["signoff"]["stale"] and g["signoff"]["by"] == "anna"         # what was accepted changed
+    assert not any("b" in g["members"] for g in gs)                         # B stays unused
+
+
+def test_make_single_of_a_lone_run_and_accepting_it():
+    gs = DD.make_single(groups(), "d", "d")
+    (g,) = [g for g in gs if g["members"] == ["d"]]
+    assert g["name"] == "d" and g["single"] is True and not g.get("signoff")
+    gs = DD.accept(gs, g["id"], "bob", AT, 0)
+    assert DD.is_accepted(next(x for x in gs if x["id"] == g["id"]))
+    again = DD.make_single(gs, "d", "d")                                    # already single: nothing changes
+    assert DD.is_accepted(next(x for x in again if x["id"] == g["id"]))
+
+
+def test_pairing_a_single_determination_again_is_no_longer_single():
+    gs = DD.pair(DD.make_single(groups(), "a", "a"), ["a", "b"], "pair")
+    assert g1(gs)["members"] == ["a", "b"] and "single" not in g1(gs)

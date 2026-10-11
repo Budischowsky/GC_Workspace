@@ -140,7 +140,7 @@ class DuplicatePage(QWidget):
             c.setMinimumContentsLength(26)
             c.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
         self.a.activated.connect(lambda *_: self._a_picked())
-        self.b.activated.connect(lambda *_: self.compare(sync=True))
+        self.b.activated.connect(lambda *_: self._b_picked())
         swap = QToolButton()
         swap.setText("⇄")
         swap.setToolTip("Swap A and B")
@@ -391,6 +391,12 @@ class DuplicatePage(QWidget):
         self._select(self.b, DV.suggest_partner(self.ws, a) or "")
         self.compare(sync=True)
 
+    def _b_picked(self):
+        if self.b.currentData() == "" and self.a.currentData():
+            self.make_single()
+        else:
+            self.compare(sync=True)
+
     def _swap(self):
         a, b = self.a.currentData(), self.b.currentData()
         if not b:
@@ -413,14 +419,36 @@ class DuplicatePage(QWidget):
         """Which determination the chosen runs are (``gcws.quant.determination``)."""
         return DT.of_workspace(self.ws, self.group() or {"members": self.members})
 
+    def _group_name(self, members) -> str:
+        from gcws.io.sequence import replicate_stem
+        was = next((g for g in self.ws.replicate_groups if members[0] in g["members"] and len(g["members"]) <= 2),
+                   None)
+        if was is not None and len(members) == 1:
+            return was["name"]
+        return replicate_stem(self.ws.runs[members[0]].run.path.name) or self.ws.runs[members[0]].name
+
     def _sync_group(self, members):
         if not members or self.group() is not None:
             return
-        from gcws.io.sequence import replicate_stem
-        name = replicate_stem(self.ws.runs[members[0]].run.path.name) or self.ws.runs[members[0]].name
-        groups = DD.pair(self.ws.replicate_groups, members, name)
+        groups = DD.pair(self.ws.replicate_groups, members, self._group_name(members))
         names = " / ".join(self.ws.runs[m].name for m in members)
         self.set_groups(groups, f"double determination {names}")
+
+    def make_single(self) -> None:
+        """Run A as a single determination made by hand ("— single determination —" as partner B): taken
+        out of its pair, the partner stays unused (undoable, in the audit trail)."""
+        a = self.a.currentData()
+        if not a or a not in self.ws.runs:
+            return
+        self._select(self.b, "")
+        was = next((g for g in self.ws.replicate_groups if a in g["members"] and len(g["members"]) <= 2), None)
+        groups = DD.make_single(self.ws.replicate_groups, a, self._group_name([a]))
+        if groups != self.ws.replicate_groups:
+            before = " / ".join(self.ws.runs[m].name for m in (was or {}).get("members", []) if m in self.ws.runs)
+            self.set_groups(groups, f"single determination {self.ws.runs[a].name}")
+            self.ws.log("Single determination made by hand", self.ws.runs[a].name, "",
+                        f"pair {before}" if before and len(was["members"]) == 2 else "", "single determination")
+        self.compare(sync=False)
 
     # -- compute ---------------------------------------------------------------------------
 
@@ -814,7 +842,10 @@ class DuplicatePage(QWidget):
         s = DV.summarize(live, verdicts, DV.limits(self.ws)[0], labels)
         self._update_chips()
         if not self.determination().compared:
-            self.banner.setText("Single determination: choose a partner B to compare.")
+            self.banner.setText("Single determination: accept it, or choose a partner B to compare."
+                                if self.determination().single else
+                                "Incomplete double determination: choose a partner B to compare, or accept "
+                                "it as a single determination.")
             self.banner.setProperty("level", "neutral")
             return
         level, text = s.level, s.text
@@ -863,7 +894,8 @@ class DuplicatePage(QWidget):
         g = self.group()
         signoff = (g or {}).get("signoff") or {}
         n_open = self.decision_counts()[0]
-        ready = self.determination().compared and bool(self.rows)
+        single = len(self.members) == 1
+        ready = (single or self.determination().compared) and bool(self.rows)
         if DD.is_accepted(g):
             left = signoff.get("open") or 0
             self.b_accept.setText(f"Accepted by {signoff.get('by', '?')} ✔")
@@ -873,14 +905,19 @@ class DuplicatePage(QWidget):
                                      + "; any change of a value, a Report box or a name reopens it")
             self.b_accept.setEnabled(False)
             return
-        self.b_accept.setText("Accept again" if signoff else "Accept double determination")
+        self.b_accept.setText("Accept again" if signoff else
+                              "Accept single determination" if single else "Accept double determination")
         self.b_accept.setEnabled(ready)
         if signoff:
             tip = f"Accepted by {signoff.get('by', '?')}, changed since. "
         else:
             tip = ""
         if not ready:
-            tip += "Compare two determinations first"
+            tip += "Load the determination first" if single else "Compare two determinations first"
+        elif single:
+            tip += ("Accept A as a single determination, reported alone (saved with the project and in the audit "
+                    "trail). One a workflow processed is accepted in Report² too; any other is listed there with "
+                    "its report")
         else:
             tip += ("Accept this double determination (saved with the project and in the audit trail). A pair "
                     "a workflow processed is accepted in Report² too; any other is listed there with its report")
@@ -894,19 +931,24 @@ class DuplicatePage(QWidget):
         and the audit trail; ``acceptRequested`` lets Report² accept its report too."""
         from datetime import datetime
         from gcws.core.audit import current_user
-        if not self.determination().compared or not self.rows:
+        single = len(self.members) == 1
+        if not (single or self.determination().compared) or not self.rows:
             return False
-        self._sync_group(self.members)
-        g = self.group()
+        if single:                               # a single determination by hand, signed off in one undo step
+            groups = DD.make_single(self.ws.replicate_groups, self.members[0], self._group_name(self.members))
+        else:
+            self._sync_group(self.members)
+            groups = self.ws.replicate_groups
+        g = next((g for g in groups if [m for m in g["members"] if m in self.ws.runs] == self.members), None)
         if g is None:
             return False
         n_open, decided = self.decision_counts()
-        groups = DD.accept(self.ws.replicate_groups, g["id"], current_user(),
-                           datetime.now().isoformat(timespec="seconds"), n_open)
+        groups = DD.accept(groups, g["id"], current_user(), datetime.now().isoformat(timespec="seconds"), n_open)
         live = self._live()[0]
         n_report = sum(1 for r in live if r.get("report"))
-        self.set_groups(groups, f"double determination accepted: {self._names()}")
-        self.ws.log("Double determination accepted", self._names(),
+        what = "single determination" if single else "double determination"
+        self.set_groups(groups, f"{what} accepted: {self._names()}")
+        self.ws.log(f"{what.capitalize()} accepted", self._names(),
                     f"{n_report} of {len(live)} substances reported; {decided} red decided by the analyst"
                     + (f", {n_open} left open (default)" if n_open else ""))
         self.acceptRequested.emit(g["id"])

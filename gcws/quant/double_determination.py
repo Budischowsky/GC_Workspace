@@ -1,7 +1,7 @@
 """A double determination: one replicate group of two runs, as the analyst reviews and accepts it.
 
 The group is a plain dict saved with the project (``ws.replicate_groups``): ``id``, ``name``, ``members``,
-``policy``, the analyst's edits under the key of the quantification mode and unit
+``policy``, ``single`` (made a single determination by hand), the analyst's edits under the key of the quantification mode and unit
 (:func:`gcws.quant.duplicate_view.edits_key`) and the ``signoff`` (who accepted, when, how many red rows
 were left open). This module owns the changes to it, and the one rule that binds them: any change of
 what was accepted (an edit, a reset, other members, another validity rule, a name of a substance)
@@ -80,10 +80,26 @@ def pair(groups: list, members: list, name: str) -> list:
         if g is not target and len(g["members"]) <= 2:
             g["members"] = [m for m in g["members"] if m not in members]
     out = [g for g in out if g["members"] or g is target]
-    if list(target["members"]) != list(members) or target.get("policy", "all") != "all":
+    if list(target["members"]) != list(members) or target.get("policy", "all") != "all" or target.get("single"):
         _stale(target)
     target["members"] = list(members)
     target["policy"] = "all"
+    target.pop("single", None)
+    return out
+
+
+def make_single(groups: list, run: str, name: str) -> list:
+    """``groups`` with ``run`` as a single determination made by hand: taken out of its pair (the
+    group is reused, the partner stays unused) or a new group named ``name``. A suffixed run made
+    single is a single determination, not an incomplete double determination."""
+    was = next((g for g in groups if run in g["members"] and len(g["members"]) <= 2), None)
+    if was is not None and list(was["members"]) == [run] and was.get("single"):
+        return copy.deepcopy(groups)
+    out = pair(groups, [run], name)
+    g = next(g for g in out if g["members"] == [run])
+    if was is not None and list(was["members"]) == [run]:
+        _stale(g)                                # an incomplete double determination signed off before
+    g["single"] = True
     return out
 
 
