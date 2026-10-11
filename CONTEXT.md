@@ -24,3 +24,14 @@ these terms lives in the module named after it.
   was not reopened since. Report² lists closed batches under Archive, the rest under To do.
 - **Deleted** (in Report²): hidden, nothing on disk is touched. A deleted entry still in the queue is
   **removed** from it (state REMOVED); undoing the delete puts it back in the state it had.
+
+## Double determination
+
+- **Double determination (DD)**: two runs of one sample compared row by row, kept as a replicate group
+  in the project (`ws.replicate_groups`). Its changes live in `gcws/quant/double_determination.py`;
+  the rows and verdicts in `gcws/quant/duplicate_view.py`.
+- **Edits**: the analyst's changes of a row (values, Report box, comment, deleted, outlier dismissed),
+  kept per quantification mode and unit in the group.
+- **Accepted / signoff**: who accepted the pair, when, and how many red rows were left to the default
+  rule. Any later change of what was accepted (an edit, a reset, other members, another validity rule,
+  a substance's name or CAS) makes it **stale**: "Accept again". Renaming the group does not.

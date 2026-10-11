@@ -102,9 +102,9 @@ def report_order(ws, group: dict) -> list[str]:
     so a report does not depend on the order the pair was picked in. A group whose analyst edits refer to
     determination 1 / 2 keeps its order, so those values stay with their determination."""
     from gcws.io.sequence import order_key
-    from gcws.quant import duplicate_view as DV
+    from gcws.quant import double_determination as DD
     members = [m for m in group["members"] if m in ws.runs]
-    edits = group.get(DV.edits_key(ws.quant, ws.quant_unit())) or {}
+    edits = DD.edits_of(group, ws.quant, ws.quant_unit())
     if any(isinstance(v, dict) and (v.get("dismissed") or any(v.get(k) is not None for k in ("a1", "a2", "c1", "c2")))
            for v in edits.values()):
         return members
@@ -152,7 +152,7 @@ def build_job(ws, kind: str, group: dict, target: Path, *, members: Optional[lis
               method_name: str = "") -> RS.ReportJob:
     """The ``ReportJob`` of ``group`` (after :func:`prepare`) writing ``target``. A Template report's table
     is built here (``template``: else the method's), so writing it never touches the workspace."""
-    from gcws.quant import duplicate_view as DV
+    from gcws.quant import double_determination as DD
     from gcws.quant import migration as MG
     from gcws.quant.nias_bridge import make_settings
     if members is None or samples is None:
@@ -177,7 +177,7 @@ def build_job(ws, kind: str, group: dict, target: Path, *, members: Optional[lis
         keep_middle=target.with_name(target.stem + "_intermediate.xlsx") if keep_middle and not preview else None,
         sample_key=stem, record_seen=(not preview) if record_seen is None else record_seen,
         ri_options={k: bool((ws.quant.get("ri") or {}).get(k)) for k in ("report_ri", "replace_rt")},
-        edits=dict(group.get(DV.edits_key(ws.quant, ws.quant_unit())) or {}),
+        edits=DD.edits_of(group, ws.quant, ws.quant_unit()),
         notes=[] if hs and not ws.quant.get("hs", {}).get("blank_correction", True) else blank_warnings(ws, members),
         features=None if hs or kind == "template" else feature_table(ws, members, group))
     if kind == "template":

@@ -231,6 +231,7 @@ def collect(ws, members: list, group: Optional[dict], *, fields=(), method_name:
             template_name: str = "") -> ReportData:
     """The report data of ``members`` (one run: a single determination) with the values of ``fields``."""
     from gcws.quant import conversion as CV
+    from gcws.quant import double_determination as DD
     from gcws.quant import duplicate_view as DV
     from gcws.quant.nias_bridge import make_settings
     from gcws.quant.peak_values import rows_for
@@ -242,17 +243,15 @@ def collect(ws, members: list, group: Optional[dict], *, fields=(), method_name:
     n = len(members)
     labels = CV.labels(ws, members)
     names = [ws.runs[m].name for m in members]
-    rows, problems = DV.compute(ws, members, group.get("policy", "all"))
-    warnings = list(problems)
     limit, rl = DV.limits(ws)
     policy = group.get("policy", "all")
     if n == 2 and policy == "all":
-        verdicts = [DV.plain_verdict(r, limit, rl, tuple(labels[:2]), ws.quant_unit()) for r in rows]
-        edits = dict(group.get(DV.edits_key(q, ws.quant_unit())) or {})
-        settings = make_settings(q.get("settings"))
-        tol = float(getattr(settings, "rt_tolerance", 0.035) or 0.035)
-        rows = DV.apply_edits(rows, verdicts, edits, tol)
+        _, verdicts, rows, problems = DD.evaluate(ws, members, DD.edits_of(group, q, ws.quant_unit()),
+                                                  tuple(labels[:2]))
+        warnings = list(problems)
     else:
+        rows, problems = DV.compute(ws, members, policy)
+        warnings = list(problems)
         verdicts = [DV.plain_verdict(r, limit, rl, tuple((labels + ["B"])[:2]), ws.quant_unit())
                     if n == 2 else None for r in rows]
         rows = [dict(r, report=DV.default_report(r, v), deleted=False, dismissed=0, comment="", edited={})

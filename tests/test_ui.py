@@ -1811,6 +1811,12 @@ def test_double_determination_accept(qtbot, win, samples, tmp_path):
     ws.message.connect(said.append)
     page.b_accept.click()             # no report possible yet (no migration conditions): the status bar says so
     assert any("not listed in Report²" in t for t in said) and not win.report2.journal.jobs()
+    # a change from the Replicates panel reopens the acceptance too
+    assert not page.group()["signoff"].get("stale")
+    dock.list.setCurrentItem(dock._item_for(("group", g["id"])))
+    dock.set_policy("majority")
+    g = next(x for x in ws.replicate_groups if x["id"] == g["id"])
+    assert g["signoff"]["stale"] and not dock._item_for(("group", g["id"])).text(0).startswith("✔")
 
 
 def test_replicates_back_from_a_group_of_three(qtbot, win, samples):

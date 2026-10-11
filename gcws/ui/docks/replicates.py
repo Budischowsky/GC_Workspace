@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QHBoxLayout, QHea
                                QMenu, QScrollArea, QSplitter, QStackedWidget, QTableWidget, QTableWidgetItem,
                                QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget)
 
+from gcws.quant import double_determination as DD
 from gcws.quant import duplicate_view as DV
 from gcws.quant.replicates import POLICIES
 from gcws.ui import theme
@@ -309,7 +310,7 @@ class ReplicatesDock(QWidget):
 
     def _show_summary(self, it, g) -> None:
         signoff = g.get("signoff") or {}
-        accepted = bool(signoff) and not signoff.get("stale")
+        accepted = DD.is_accepted(g)
         it.setText(L_NAME, ("✔ " if accepted else "") + g["name"])
         if accepted:
             it.setForeground(L_NAME, QBrush(theme.status_color("ok")))
@@ -471,11 +472,9 @@ class ReplicatesDock(QWidget):
         from gcws.ui.dialogs.replicates import MembersDialog
         dlg = MembersDialog(self.ws, g, self)
         if dlg.exec():
-            groups = copy.deepcopy(self.ws.replicate_groups)
-            for x in groups:
-                if x["id"] == g["id"]:
-                    x["members"] = dlg.members()
-            self._set_groups(groups, f"members of {g['name']}")
+            groups = DD.set_members(self.ws.replicate_groups, g["id"], dlg.members())
+            if groups != self.ws.replicate_groups:
+                self._set_groups(groups, f"members of {g['name']}")
 
     def delete_group(self):
         g = self._listed_group()
@@ -517,10 +516,9 @@ class ReplicatesDock(QWidget):
     def rename_group(self, group_id: str, name: str) -> None:
         """Give the group ``group_id`` the name ``name`` (one undo step)."""
         name = name.strip()
-        groups = copy.deepcopy(self.ws.replicate_groups)
-        for x in groups:
-            if x["id"] == group_id:
-                x["name"] = name
+        if not any(g["id"] == group_id for g in self.ws.replicate_groups):
+            return
+        groups = DD.rename(self.ws.replicate_groups, group_id, name)
         if name and groups != self.ws.replicate_groups:
             self._set_groups(groups, f"rename group to {name}")
 
@@ -529,11 +527,7 @@ class ReplicatesDock(QWidget):
         g = self._listed_group()
         if g is None or key not in POLICIES or g.get("policy", "all") == key:
             return
-        groups = copy.deepcopy(self.ws.replicate_groups)
-        for x in groups:
-            if x["id"] == g["id"]:
-                x["policy"] = key
-        self._set_groups(groups, f"validity rule of {g['name']}")
+        self._set_groups(DD.set_policy(self.ws.replicate_groups, g["id"], key), f"validity rule of {g['name']}")
 
     # -- worksheet -------------------------------------------------------------------
 

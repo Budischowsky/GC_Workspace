@@ -24,7 +24,6 @@ boundaries.
 from __future__ import annotations
 
 import copy
-import uuid
 
 import numpy as np
 import pyqtgraph as pg
@@ -35,6 +34,7 @@ from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QFileDialog,
                                QTableWidgetItem, QToolButton, QVBoxLayout, QWidget)
 
 from gcws.core.model import FID
+from gcws.quant import double_determination as DD
 from gcws.quant import duplicate_view as DV
 from gcws.quant import service as QS
 from gcws.report import service as RS
@@ -100,12 +100,6 @@ class _AbsAxis(pg.AxisItem):
 
     def tickStrings(self, values, scale, spacing):
         return super().tickStrings([abs(v) for v in values], scale, spacing)
-
-
-def _stale(group: dict) -> None:
-    """An analyst change after the acceptance: the acceptance no longer holds (kept, to say who accepted)."""
-    if group.get("signoff"):
-        group["signoff"] = dict(group["signoff"], stale=True)
 
 
 class _SeverityItem(QTableWidgetItem):
@@ -416,19 +410,9 @@ class DuplicatePage(QWidget):
     def _sync_group(self, members):
         if not members or self.group() is not None:
             return
-        groups = copy.deepcopy(self.ws.replicate_groups)
-        target = next((g for g in groups if members[0] in g["members"] and len(g["members"]) <= 2), None)
-        if target is None:
-            from gcws.io.sequence import replicate_stem
-            name = replicate_stem(self.ws.runs[members[0]].run.path.name) or self.ws.runs[members[0]].name
-            target = {"id": uuid.uuid4().hex[:8], "name": name, "members": [], "policy": "all"}
-            groups.append(target)
-        for g in groups:                        # a run belongs to one pair or single; groups of 3+ keep theirs
-            if g is not target and len(g["members"]) <= 2:
-                g["members"] = [m for m in g["members"] if m not in members]
-        groups = [g for g in groups if g["members"] or g is target]
-        target["members"] = list(members)
-        target["policy"] = "all"
+        from gcws.io.sequence import replicate_stem
+        name = replicate_stem(self.ws.runs[members[0]].run.path.name) or self.ws.runs[members[0]].name
+        groups = DD.pair(self.ws.replicate_groups, members, name)
         names = " / ".join(self.ws.runs[m].name for m in members)
         self.set_groups(groups, f"double determination {names}")
 
@@ -510,27 +494,21 @@ class DuplicatePage(QWidget):
         window = self.window()
         if hasattr(window, "update_activity"):
             window.update_activity(f"compare:{id(self)}", "Preparing comparison table…")
-        rows, problems = DV.compute(self.ws, self.members, "all")
-        limit, rl = DV.limits(self.ws)
-        labels = self.labels()
-        unit = self.ws.quant_unit()
-        verdicts = [DV.plain_verdict(r, limit, rl, labels, unit) for r in rows]
+        rows, verdicts, edited, problems = DD.evaluate(self.ws, self.members, self.edits(), self.labels())
         self.base_rows = rows
         if hasattr(window, "update_activity"):
             window.update_activity(f"compare:{id(self)}", "Drawing comparison results…")
-        self._show(DV.apply_edits(rows, verdicts, self.edits(), self._tol()), verdicts, problems)
+        self._show(edited, verdicts, problems)
         if self.table_features is not None and not self._view_processed:
             self._start_consensus_search()
 
     # -- analyst edits ------------------------------------------------------------------------
 
     def _tol(self) -> float:
-        from gcws.quant.nias_bridge import make_settings
-        return float(getattr(make_settings(self.ws.quant.get("settings")), "rt_tolerance", 0.035) or 0.035)
+        return DD.rt_tolerance(self.ws.quant)
 
     def edits(self) -> dict:
-        g = self.group()
-        return dict((g or {}).get(self.edits_key()) or {})
+        return DD.edits_of(self.group(), self.ws.quant, self.ws.quant_unit())
 
     def _reapply(self):
         if not self.base_rows or self._filling:
@@ -581,33 +559,14 @@ class DuplicatePage(QWidget):
         g = self.group()
         if g is None:
             return
-        groups = copy.deepcopy(self.ws.replicate_groups)
-        tg = next(x for x in groups if x["id"] == g["id"])
-        edits = tg.setdefault(self.edits_key(), {})
-        logs = []
-        for row, field, value in changes:
-            key = row.get("edit_key") or DV.edit_key(row["rt"])
-            e = edits.setdefault(key, {"rt": float(row["rt"])})
-            before = row.get(field) if field not in DV.NUMERIC_EDITS else \
-                row.get("edited", {}).get(field, row.get(field))
-            if value is None:
-                e.pop(field, None)
-            else:
-                e[field] = value
-            e["by"], e["at"] = current_user(), datetime.now().isoformat(timespec="seconds")
-            if not any(k in e for k in DV.NUMERIC_EDITS + DV.ROW_FLAGS):
-                edits.pop(key, None)
-            name = row.get("name") or f"RT {row['rt']:.3f}"
-            if field == "deleted":
-                logs.append((f"{name} (RT {row['rt']:.3f})", "", "row deleted" if value else "row restored"))
-            else:
-                logs.append((f"{name} (RT {row['rt']:.3f}): {field}", "" if before is None else str(before),
-                             "reset" if value is None else str(value)))
+        groups, logs = DD.set_edits(self.ws.replicate_groups, g["id"], self.edits_key(), changes,
+                                    current_user(), datetime.now().isoformat(timespec="seconds"))
         if label is None and len(changes) == 1:
+            row = changes[0][0]
+            name = row.get("name") or f"RT {row['rt']:.3f}"
             label = f"double determination: {changes[0][1]} of {name}"
         elif label is None:
             label = f"double determination: {len(changes)} cells changed"
-        _stale(tg)
         self.set_groups(groups, label)
         for what, before, after in logs:
             self.ws.log("Double determination changed", self._names(), what, before, after)
@@ -659,16 +618,14 @@ class DuplicatePage(QWidget):
         else:
             label = f"double determination: {len(changes)} names / CAS changed"
         g = self.group()
-        if g is None or not (g.get("signoff") and not g["signoff"].get("stale")):
+        if not DD.is_accepted(g):
             self._stack().push(MultiCommand(label, cmds))
             return
         stack = self._stack()                    # the names change what was accepted: one undo step for both
         stack.beginMacro(label)
         try:
             stack.push(MultiCommand(label, cmds))
-            groups = copy.deepcopy(self.ws.replicate_groups)
-            _stale(next(x for x in groups if x["id"] == g["id"]))
-            self.set_groups(groups, label)
+            self.set_groups(DD.stale(self.ws.replicate_groups, g["id"]), label)
         finally:
             stack.endMacro()
 
@@ -816,11 +773,7 @@ class DuplicatePage(QWidget):
         if row is None or row.get("edit_key") not in self.edits():
             return                               # nothing the analyst changed: nothing to reset
         self._sync_group(self.members)
-        g = self.group()
-        groups = copy.deepcopy(self.ws.replicate_groups)
-        tg = next(x for x in groups if x["id"] == g["id"])
-        tg.get(self.edits_key(), {}).pop(row["edit_key"], None)
-        _stale(tg)
+        groups = DD.reset_edits(self.ws.replicate_groups, self.group()["id"], self.edits_key(), row["edit_key"])
         self.set_groups(groups, f"double determination: reset {row.get('name') or row['rt']}")
         self.ws.log("Double determination changed", self._names(), f"{row.get('name')}: changes reset")
 
@@ -828,11 +781,7 @@ class DuplicatePage(QWidget):
         g = self.group()
         if g is None or not g.get(self.edits_key()):
             return
-        groups = copy.deepcopy(self.ws.replicate_groups)
-        tg = next(x for x in groups if x["id"] == g["id"])
-        tg[self.edits_key()] = {}
-        _stale(tg)
-        self.set_groups(groups, "double determination: all changes reset")
+        self.set_groups(DD.reset_edits(self.ws.replicate_groups, g["id"], self.edits_key()), "double determination: all changes reset")
         self.ws.log("Double determination changed", self._names(), "all changes reset")
 
     def _show(self, rows, verdicts, problems):
@@ -909,7 +858,7 @@ class DuplicatePage(QWidget):
         signoff = (g or {}).get("signoff") or {}
         n_open = self.decision_counts()[0]
         ready = len(self.members) == 2 and bool(self.rows)
-        if signoff and not signoff.get("stale"):
+        if DD.is_accepted(g):
             left = signoff.get("open") or 0
             self.b_accept.setText(f"Accepted by {signoff.get('by', '?')} ✔")
             self.b_accept.setToolTip(f"Accepted on {str(signoff.get('at', '')).replace('T', ' ')}"
@@ -946,9 +895,8 @@ class DuplicatePage(QWidget):
         if g is None:
             return False
         n_open, decided = self.decision_counts()
-        groups = copy.deepcopy(self.ws.replicate_groups)
-        tg = next(x for x in groups if x["id"] == g["id"])
-        tg["signoff"] = {"by": current_user(), "at": datetime.now().isoformat(timespec="seconds"), "open": n_open}
+        groups = DD.accept(self.ws.replicate_groups, g["id"], current_user(),
+                           datetime.now().isoformat(timespec="seconds"), n_open)
         live = self._live()[0]
         n_report = sum(1 for r in live if r.get("report"))
         self.set_groups(groups, f"double determination accepted: {self._names()}")
