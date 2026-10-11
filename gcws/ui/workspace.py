@@ -22,6 +22,7 @@ from gcws.integration.engine import IntegrationResult, integrate
 from gcws.integration.method import IntegrationMethod
 from gcws.integration.store import MethodStore
 from gcws.io import sequence
+from gcws.quant import modes as QM
 from gcws.signal.delay import DelayEstimate, estimate_delay, refine_with_peaks
 
 from gcws.ui.theme import RUN_COLORS as PALETTE
@@ -463,8 +464,8 @@ class Workspace(QObject):
 
     def solvent_cut_settings(self, key=None, st=None):
         """Enabled/end in detector minutes, including legacy linked-MS fallback."""
-        key = key or (TIC if self.quant.get("mode") == "hs_screening" else FID)
-        if self.quant.get("mode") == "hs_screening":
+        key = key or (TIC if QM.of(self.quant).hs else FID)
+        if QM.of(self.quant).hs:
             hs = self.quant.get("hs", {})
             return (False, 0.0) if is_fid(key) else (bool(hs.get("solvent_cut", False)), float(hs.get("solvent_end", 0)))
         if not is_fid(key) and "ms_solvent" in self.quant:
@@ -483,7 +484,7 @@ class Workspace(QObject):
     def set_solvent_cut(self, enabled: bool, end=None, key=None):
         import copy
         q = copy.deepcopy(self.quant)
-        if q.get("mode") == "hs_screening":
+        if QM.of(q).hs:
             hs = q.setdefault("hs", {})
             hs["solvent_cut"] = bool(enabled)
             if end is not None:
@@ -768,22 +769,22 @@ class Workspace(QObject):
 
     def _quant_settings_changed(self, old: dict, new: dict) -> None:
         """Sub-settings that feed derived data: only what changed is invalidated."""
-        hs_changed = (old.get("mode") == "hs_screening") != (new.get("mode") == "hs_screening")
+        hs_changed = QM.of(old).hs != QM.of(new).hs
         if hs_changed:
-            if new.get("mode") == "hs_screening":
+            if QM.of(new).hs:
                 self._pre_hs_panels = (list(self.panel_keys), list(self.panel_blank), self.table_panel)
                 self.set_panels([TIC, "BPC"], [False, False], 0)
             else:
                 self.set_panels(*getattr(self, "_pre_hs_panels", ([FID, TIC], [False, False], 0)))
             self.signalKeyChanged.emit(self.signal_key)
         def cut(q):
-            if q.get("mode") == "hs_screening":
+            if QM.of(q).hs:
                 return bool(q.get("hs", {}).get("solvent_cut", False)), q.get("hs", {}).get("solvent_end", 0)
             return (bool(q.get("solvent_cut", False)), (q.get("settings") or {}).get("solvent_end", 5.5),
                     q.get("ms_solvent"))
         cut_changed = hs_changed or cut(old or {}) != cut(new or {})
         if cut_changed:
-            if new.get("mode") != "hs_screening":
+            if not QM.of(new).hs:
                 QSettings().setValue("integration/solvent_cut", bool(new.get("solvent_cut", False)))
             # Snapshot all keys first: base integrations invalidate derived results in other runs.
             keys = {st.id: list(st.results) for st in self.states()}
@@ -813,8 +814,7 @@ class Workspace(QObject):
             self.solventCutChanged.emit()
 
     def quant_unit(self) -> str:
-        from gcws.quant.service import mode_unit
-        return mode_unit(self.quant)
+        return QM.of(self.quant).unit
 
     def nias_sample(self, run_id: str):
         if self.quant_result is None:
@@ -937,7 +937,7 @@ class Workspace(QObject):
         import gc_fid
         from gcws.quant.nias_bridge import make_settings
         q = self.quant or {}
-        if q.get("mode") == "hs_screening":
+        if QM.of(q).hs:
             from gcws.quant.hs import matched_standards, standards_in
             if base != TIC or not standards_in(q.get("hs", {}), st.role):
                 return {}                               # external calibration: a sample holds no standard

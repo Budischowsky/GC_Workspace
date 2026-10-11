@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+from gcws.quant import modes as QM
 from gcws.report import service as RS
 
 
@@ -35,7 +36,7 @@ def prepare(ws, kind: str, group: Optional[dict], *, recompute: bool = True,
 
     Recomputes the quantification first (``recompute``: unless the caller just did). A Template report
     needs the method's template (or ``template``); what it cannot fill it leaves out with a warning."""
-    hs = ws.quant.get("mode") == "hs_screening" and kind != "template"
+    hs = QM.of(ws.quant).hs and kind != "template"
     if not RS.kind_fits(kind, ws.quant):
         raise ReportNotPossible("mode", "Select HS-Screening mode and its report together, and Extraction (quant "
                                 "method) with the Quantification report. For other reports, select the "

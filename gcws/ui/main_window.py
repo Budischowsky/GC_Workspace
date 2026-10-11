@@ -14,6 +14,7 @@ from gcws.automation import edit_session as ES
 from gcws.core import project as P
 from gcws.core.model import FID, TIC, eic_key
 from gcws.io.sequence import ROLE_LABELS
+from gcws.quant import modes as QM
 from gcws.ui import workers
 from gcws.ui.docks.audit import AuditDock
 from gcws.ui.docks.events import EventsDock
@@ -1370,7 +1371,7 @@ class MainWindow(QMainWindow):
         from gcws.quant.hs import standards_in
         if not ids or not ID.definitions(self.ws):
             return 0
-        hs = self.ws.quant.get("hs", {}) if self.ws.quant.get("mode") == "hs_screening" else None
+        hs = self.ws.quant.get("hs", {}) if QM.of(self.ws.quant).hs else None
         found = {}
         for rid in ids:
             role = self.ws.runs[rid].role
@@ -1581,7 +1582,7 @@ class MainWindow(QMainWindow):
     def _istd_choices(self) -> tuple[bool, list[tuple[str, str]], dict]:
         """(HS screening?, [(code, name)], {code: bound RT} of the active run) for the ISTD menu."""
         q = self.ws.quant
-        hs = q.get("mode") == "hs_screening"
+        hs = QM.of(q).hs
         st = self.ws.active
         if hs:
             codes = self.quant.hs_panel.istd_codes()

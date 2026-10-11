@@ -559,7 +559,8 @@ def validate(wf: Workflow, *, method_names: Optional[list] = None, check_paths: 
                     sec = (method_loader(m.p("method")) or {}).get("sections") or {}
                 except Exception:  # noqa: BLE001 - reported as missing above
                     continue
-                mode = (sec.get("quant") or {}).get("mode", "nias_mgkg")
+                from gcws.quant import modes as QM
+                mode = QM.of(sec.get("quant")).key
                 tpl = sec.get("report_template") or {}
                 if kind == "template" and not tpl.get("columns"):
                     err(r.id, f"The method '{m.p('method')}' has no report template: design one under Method > "

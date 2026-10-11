@@ -224,10 +224,11 @@ def compute(ws, members: list[str], policy: str = "all"):
     samples = [ws.nias_sample(m) for m in members]
     if problems or not samples or any(s is None for s in samples):
         return [], problems or [f"every determination needs role Sample and an {key} integration"]
-    mode = ws.quant.get("mode", "nias_mgkg")
+    from gcws.quant import modes as QM
+    nias = QM.of(ws.quant).nias
     lists = []
     for m, s in zip(members, samples):
-        if mode == "nias_mgkg":
+        if nias:
             lists.append(engine_peaks(s))
         else:
             qr = ws.quant_result.rows.get(m, {})
@@ -245,7 +246,8 @@ def features_table(ws, members: list[str], table=None):
     pairing set to classic). ``table``: one the caller already built (e.g. after applying)."""
     from gcws.features import service as SV
     from gcws.features.model import PAIRING_FEATURES
-    if ws.quant.get("mode") == "hs_screening" or len(members) < 2 or SV.pairing(ws) != PAIRING_FEATURES:
+    from gcws.quant import modes as QM
+    if QM.of(ws.quant).hs or len(members) < 2 or SV.pairing(ws) != PAIRING_FEATURES:
         return None
     cache = getattr(ws, "_feature_table", None)
     if table is None:
@@ -282,10 +284,8 @@ def limits(ws) -> tuple[float, float]:
 
 def default_limit(ws) -> float:
     """The difference limit (%) a new method starts with."""
-    if ws.quant.get("mode") == "hs_screening":
-        return 30.0
-    import gc_duplicate as GD
-    return float(GD.DEFAULT_MAX_RELDIFF)
+    from gcws.quant import modes as QM
+    return QM.of(ws.quant).default_difference
 
 
 # -- analyst edits (double determination -> report) ----------------------------------------------
@@ -426,13 +426,10 @@ def is_open(row: dict, verdict: Verdict) -> bool:
 
 def edits_key(quant: dict, unit: str) -> str:
     """Where a replicate group keeps the analyst's edits: per unit for HS and the extraction method (an
-    edited value belongs to its unit), ``edits`` for the NIAS modes."""
-    mode = (quant or {}).get("mode")
-    if mode == "hs_screening":
-        return "hs_edits:" + unit
-    if mode == "extraction":
-        return "extraction_edits:" + unit
-    return "edits"
+    edited value belongs to its unit), ``edits`` for the NIAS modes
+    (:meth:`gcws.quant.modes.QuantMode.edits_key`)."""
+    from gcws.quant import modes as QM
+    return QM.of(quant).edits_key(unit)
 
 
 def rows_for_report(rows: list[dict], edits: dict, limit: float, reporting_limit: float, tol: float,

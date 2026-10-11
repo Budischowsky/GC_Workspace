@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from gcws.quant import modes as QM
+
 KINDS = {"nias": "NIAS Report", "fingerprint": "Fingerprint Report",
          "total_extraction": "Total Extraction Report", "hs_screening": "HS-Screening Report",
          "quant": "Quantification Report", "template": "Template Report"}
@@ -28,7 +30,7 @@ SUFFIXES = {"nias": "_NIAS_Report", "fingerprint": "_Fingerprint_Report",
 SEEN_TYPES = {"nias": "NIAS", "fingerprint": "Fingerprint", "total_extraction": "Total extraction",
               "hs_screening": "HS-Screening", "quant": "Quantification", "template": "Template"}
 #: quantification modes with their own report (every other mode: the NIAS, Fingerprint and Total extraction reports)
-MODE_KINDS = {"hs_screening": "hs_screening", "extraction": "quant"}
+MODE_KINDS = QM.REPORT_KINDS       # mode key -> the report only that mode makes
 
 
 def default_kind(quant: dict) -> str:

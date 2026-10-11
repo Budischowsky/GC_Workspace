@@ -169,12 +169,12 @@ class Info:
     @classmethod
     def of_quant(cls, quant: Optional[dict], n: Optional[int] = None, has_ms: Optional[bool] = None,
                  has_cas: Optional[bool] = None) -> "Info":
-        from gcws.quant import conversion as CV
-        from gcws.quant.service import quant_detector
+        from gcws.quant import modes as QM
         q = quant or {}
+        mode = QM.of(q)
         pairing = (q.get("features") or {}).get("pairing")
-        return cls(mode=q.get("mode", "nias_mgkg"), units=tuple(CV.available_units(q)),
-                   detector=quant_detector(q), features=pairing == "features", n=n, has_ms=has_ms,
+        return cls(mode=mode.key, units=tuple(mode.available_units()),
+                   detector=mode.detector, features=pairing == "features", n=n, has_ms=has_ms,
                    has_cas=has_cas)
 
 
@@ -217,12 +217,11 @@ def availability(field: Field, info: Info) -> tuple[bool, str]:
 
 def unit_of(key: str, quant: Optional[dict]) -> str:
     """The unit a concentration field is in ("" for the others)."""
-    from gcws.quant import conversion as CV
-    from gcws.quant.service import mode_unit
+    from gcws.quant import modes as QM
     if key == "conc":
-        return mode_unit(quant or {})
+        return QM.of(quant).unit
     if key in ("report_unit_1", "report_unit_2"):
-        units = CV.report_units(quant or {})
+        units = QM.of(quant).report_units()
         i = int(key[-1]) - 1
         return units[i] if i < len(units) else ""
     return unit_label(key) or ""

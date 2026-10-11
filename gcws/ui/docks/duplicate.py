@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (QComboBox, QDoubleSpinBox, QFileDialog,
 from gcws.core.model import FID
 from gcws.quant import double_determination as DD
 from gcws.quant import duplicate_view as DV
+from gcws.quant import modes as QM
 from gcws.quant import service as QS
 from gcws.report import service as RS
 from gcws.ui import theme, workers
@@ -1004,7 +1005,7 @@ class DuplicatePage(QWidget):
         names = [self.ws.runs[m].name for m in self.members if m in self.ws.runs]
         headers = self.headers()
         feature_rows = bool(self.rows) and bool(self.rows[0].get("feature_id"))
-        units = QS.unit_keys(self.ws.quant.get("mode", "nias_mgkg"), self.ws.quant)
+        units = QM.of(self.ws.quant).unit_keys()
         settings = make_settings(self.ws.quant.get("settings"))
         cur = self.table.currentItem()
         keep_cur = (cur.data(Qt.UserRole), cur.column()) if cur is not None else None
@@ -1195,7 +1196,7 @@ class DuplicatePage(QWidget):
         """Columns without content in this comparison: the feature columns of the classic pairing,
         the units the quantification mode does not compute."""
         feature_rows = bool(self.rows) and bool(self.rows[0].get("feature_id"))
-        units = QS.unit_keys(self.ws.quant.get("mode", "nias_mgkg"), self.ws.quant)
+        units = QM.of(self.ws.quant).unit_keys()
         return (set() if feature_rows else set(FEATURE_COLUMNS)) | {c for c, u in UNIT_OF.items() if u not in units}
 
     def _apply_layout(self) -> None:
@@ -1305,7 +1306,7 @@ class DuplicatePage(QWidget):
     def features_mode(self) -> bool:
         from gcws.features import service as SV
         from gcws.features.model import PAIRING_FEATURES
-        return self.ws.quant.get("mode") != "hs_screening" and SV.pairing(self.ws) == PAIRING_FEATURES
+        return not QM.of(self.ws.quant).hs and SV.pairing(self.ws) == PAIRING_FEATURES
 
     def feature_of(self, row):
         t = self.table_features
@@ -1772,7 +1773,7 @@ class DuplicatePage(QWidget):
         if abs(new - DV.limits(self.ws)[0]) < 1e-9:
             return
         q = copy.deepcopy(self.ws.quant)
-        if q.get("mode") == "hs_screening":
+        if QM.of(q).hs:
             q.setdefault("hs", {})["duplicate_max_reldiff"] = new
             self.ws.push_quant(f"HS duplicate difference limit = {new:g} %", q)
             self.ws.message.emit(f"Difference limit is a report parameter: every report now uses {new:g} %.")
@@ -1796,7 +1797,7 @@ class DuplicatePage(QWidget):
         unit = self.ws.quant_unit()
         extra = [c for c in self.table.shown_columns() if c in UNIT_OF]
         headers = self.headers()
-        units = QS.unit_keys(self.ws.quant.get("mode", "nias_mgkg"), self.ws.quant)
+        units = QM.of(self.ws.quant).unit_keys()
         settings = make_settings(self.ws.quant.get("settings"))
         out = [["RT [min]", "Substance", "CAS", f"{labels[0]} [{unit}]", f"{labels[1]} [{unit}]",
                 f"Mean [{unit}]", "Diff. %", "Verdict", "Explanation", "Report", "Changed by analyst", "Comment"]

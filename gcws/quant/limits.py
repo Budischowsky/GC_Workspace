@@ -60,15 +60,7 @@ def of_evidence(evidence: dict | None) -> QuantLimits:
 
 def of_quant(quant: dict | None) -> QuantLimits:
     """The limits a double determination of the method ``quant`` is compared with. HS screening takes
-    its own difference limit and RT tolerance and has no reporting limit; only NIAS mg/kg applies one."""
-    from gcws.quant.nias_bridge import make_settings
-    quant = quant or {}
-    mode = quant.get("mode", "nias_mgkg")
-    if mode == "hs_screening":
-        hs = quant.get("hs") or {}
-        return QuantLimits(difference=_number(hs.get("duplicate_max_reldiff"), DIFFERENCE), reporting=0.0,
-                           rt_tolerance=of_settings(make_settings(hs)).rt_tolerance)
-    limits = of_settings(make_settings(quant.get("settings")))
-    if mode != "nias_mgkg":
-        limits = QuantLimits(limits.difference, 0.0, limits.rt_tolerance)
-    return limits
+    its own difference limit and RT tolerance and has no reporting limit; only NIAS mg/kg applies one
+    (:meth:`gcws.quant.modes.QuantMode.limits`)."""
+    from gcws.quant import modes as QM
+    return QM.of(quant).limits()

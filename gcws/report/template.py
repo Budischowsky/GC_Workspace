@@ -132,8 +132,8 @@ def preset(name: str) -> dict:
 
 def starter_for(quant: Optional[dict]) -> str:
     """The preset that fits the quantification mode."""
-    mode = (quant or {}).get("mode", "nias_mgkg")
-    return {"hs_screening": "HS-Screening", "extraction": "Quantification"}.get(mode, "NIAS")
+    from gcws.quant import modes as QM
+    return QM.of(quant).template_preset
 
 
 # -- model -------------------------------------------------------------------------------------

@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDialog,
                                QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QSplitter,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
+from gcws.quant import modes as QM
 from gcws.ui.docks.spectrum import StickPlot
 
 
@@ -86,7 +87,7 @@ def save_unknown(win) -> None:
         "sample": st.run.path.name, "sample_name": st.name, "report_type": "GC Workspace",
         "rt": float(peak.apex_rt), "si": ident.score if ident else None,
         "name_raw": ident.name if ident else "", "area_pct": peak.area_pct,
-        "conc_kg": quant.get(idx, {}).get("conc") if ws.quant.get("mode") == "nias_mgkg" else None,
+        "conc_kg": quant.get(idx, {}).get("conc") if QM.of(ws.quant).nias else None,
         "spectrum": points, "source_file": str(st.run.path),
         "apex_scan": spec.apex_scans[len(spec.apex_scans) // 2] if spec.apex_scans else None,
         "bg_scan": spec.bg_scans[0] if spec.bg_scans else None, "bounds_rule": spec.mode,

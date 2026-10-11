@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
+from gcws.quant import modes as QM
+
 DEFAULTS = {"max_shift": 0.5, "sigma": 0.05, "min_confidence": "high", "min_score": 0.3}
 #: a library name counts as evidence from this similarity on
 NAME_MIN = 0.5
@@ -228,7 +230,7 @@ def detect_core(defs: list[dict], refs: dict, peaks: list[PeakInfo], options: Op
 # -- the workspace ---------------------------------------------------------------------------------
 
 def _hs(ws) -> bool:
-    return (ws.quant or {}).get("mode") == "hs_screening"
+    return QM.of(ws.quant).hs
 
 
 def definitions(ws) -> list[dict]:

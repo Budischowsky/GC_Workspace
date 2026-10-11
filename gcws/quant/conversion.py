@@ -7,8 +7,9 @@ determination k is converted with its own ratio (its own sample amount or HS inp
 Units are named by their label ("mg/kg", "µg/L", ...); ``UNIT_KEYS`` gives the row key of each."""
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Optional
 
+from gcws.quant import modes as QM
 from gcws.quant import service as QS
 
 #: unit label -> row key (the peak table's and the double determination's column keys)
@@ -16,7 +17,7 @@ UNIT_KEYS = {**{u: k for k, u in QS.CONC_UNITS.items()}, "µg/HS": "ug_hs", "mg/
 #: the double determination's further-unit columns: A, B and the mean of each unit
 UNIT_SIDES = (("a", "c1"), ("b", "c2"), ("mean", "mean"))
 
-Ratio = Callable[[int, str], Optional[float]]
+Ratio = QM.Ratio
 
 
 def letter(k: int) -> str:
@@ -33,87 +34,19 @@ def labels(ws, members) -> list[str]:
     return out
 
 
-def mode_of(quant) -> str:
-    return (quant or {}).get("mode", "nias_mgkg")
-
-
 def available_units(quant) -> list[str]:
-    """The units the mode gives a result in: its own unit first, then the further units."""
-    mode = mode_of(quant)
-    own = QS.mode_unit(quant or {})
-    if mode == "hs_screening":
-        from gcws.quant.hs import UNITS
-        extra = list(UNITS)
-    elif mode == "extraction":
-        from gcws.quant import extraction as EX
-        from gcws.quant import units as U
-        extra = U.allowed(EX.of(quant)["sample_type"])
-    else:
-        extra = [QS.CONC_UNITS[k] for k in QS.unit_keys(mode, quant)]
-        if mode == "nias_mgkg":
-            extra = ["mg/kg"] + extra
-    return list(dict.fromkeys([own] + extra))
+    """The units the mode gives a result in (:meth:`gcws.quant.modes.QuantMode.available_units`)."""
+    return QM.of(quant).available_units()
 
 
 def report_units(quant) -> list[str]:
-    """Conc. 1 and Conc. 2 of the mode (one unit where the mode has no other)."""
-    mode = mode_of(quant)
-    if mode == "nias_mgkg":
-        return ["mg/kg", "mg/dm²"]
-    if mode == "total_ugl":
-        return ["µg/L", "mg/L"]
-    if mode == "extraction":
-        from gcws.quant import extraction as EX
-        return list(EX.of(quant)["units"])
-    if mode == "hs_screening":
-        from gcws.quant.hs import report_units as hs_units
-        return hs_units((quant or {}).get("hs"))
-    return [QS.mode_unit(quant or {})]
+    """Conc. 1 and Conc. 2 of the mode (:meth:`gcws.quant.modes.QuantMode.report_units`)."""
+    return QM.of(quant).report_units()
 
 
 def ratio_fn(quant, settings, members) -> Ratio:
-    """``ratio(k, unit)``: the factor from determination k's concentration (the mode's unit) to ``unit``;
-    None when the unit cannot be computed (another mode's unit, a missing amount or parameter)."""
-    quant = quant or {}
-    mode = mode_of(quant)
-    own = QS.mode_unit(quant)
-    members = list(members)
-
-    if mode == "extraction":
-        from gcws.quant import extraction as EX
-        from gcws.quant import units as U
-        u1 = EX.unit(quant)
-
-        def ratio(k, unit):
-            if unit == own:
-                return 1.0
-            rid = members[k] if k < len(members) else ""
-            return U.ratio(u1, unit, EX.basis(quant, rid)) if unit in U.UNITS else None
-        return ratio
-
-    if mode == "hs_screening":
-        from gcws.quant.hs import UNITS, per_ug
-        inputs = (quant.get("hs") or {}).get("samples") or {}
-
-        def ratio(k, unit):
-            if unit == own:
-                return 1.0
-            if unit not in UNITS or own not in UNITS:
-                return None
-            rid = members[k] if k < len(members) else ""
-            a, b = per_ug(unit, inputs.get(rid)), per_ug(own, inputs.get(rid))
-            return a / b if (a is not None and b) else None
-        return ratio
-
-    # the NIAS modes: every further unit is a constant multiple of the mode's unit
-    one = QS.from_mode_unit(mode, settings, 1.0) if mode in ("nias_mgkg", "total_ugl") else {}
-
-    def ratio(_k, unit):
-        if unit == own:
-            return 1.0
-        key = UNIT_KEYS.get(unit)
-        return one.get(key) if key else None
-    return ratio
+    """``ratio(k, unit)`` of the mode (:meth:`gcws.quant.modes.QuantMode.ratio`)."""
+    return QM.of(quant).ratio(settings, members)
 
 
 def det_values(row: dict, n: int):
@@ -140,10 +73,10 @@ def in_unit(row: dict, n: int, unit: str, ratio: Ratio):
 def unit_cells(quant, settings, row: dict, members, units: list[str], labs) -> list[tuple]:
     """``(value, calculation)`` of the double determination's further-unit columns of ``row``: A, B and
     the mean of every ``QS.CONC_UNITS`` key (None outside ``units``), the analyst's edits included."""
-    mode = mode_of(quant)
-    if mode == "extraction":
+    mode = QM.of(quant)
+    if mode.key == "extraction":
         return _extraction_cells(quant, row, members, units, labs)
-    conv = {side: QS.from_mode_unit(mode, settings, row.get(field)) if units else None
+    conv = {side: mode.convert(row.get(field), settings) if units else None
             for side, field in UNIT_SIDES}
     return [(conv[side][unit], conv[side]["calc"].get(unit)) if unit in units else (None, None)
             for unit in QS.CONC_UNITS for side, _field in UNIT_SIDES]

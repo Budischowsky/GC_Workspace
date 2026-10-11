@@ -41,3 +41,14 @@ these terms lives in the module named after it.
 - **Accepted / signoff**: who accepted the pair, when, and how many red rows were left to the default
   rule. Any later change of what was accepted (an edit, a reset, other members, another validity rule,
   a substance's name or CAS) makes it **stale**: "Accept again". Renaming the group does not.
+
+## Quantification
+
+- **Quant mode**: how a method turns peak areas into concentrations, stored as `quant["mode"]`
+  (missing = NIAS mg/kg): NIAS mg/kg (migration, SML check), NIAS total extraction (µg/L), internal
+  standard concentration, area percent, HS screening (MS only) and extraction (quant method). What a
+  mode answers for itself (its own unit, the further and report units, unit conversion, detector,
+  limits, where DD edits are kept, its own report) lives in `gcws/quant/modes.py`: callers ask
+  `modes.of(quant)` instead of comparing the mode string.
+- **Own unit / Conc.**: the unit the mode computes in; **further units** are the same result in other
+  units; **Conc. 1 / Conc. 2** are the two units a report shows.

@@ -30,27 +30,15 @@ DETECTORS = {FID: "FID", TIC: "TIC (MS)"}
 
 
 def quant_detector(quant: dict) -> str:
-    """Signal the quantities are computed from: TIC for HS-Screening, else the panel's choice."""
-    quant = quant or {}
-    if quant.get("mode") == "hs_screening":
-        return TIC
-    return TIC if quant.get("detector") == TIC else FID
+    """Signal the quantities are computed from (:attr:`gcws.quant.modes.QuantMode.detector`)."""
+    from gcws.quant import modes as QM
+    return QM.of(quant).detector
 
 
 def mode_unit(quant: dict) -> str:
-    mode = quant.get("mode", "nias_mgkg")
-    if mode == "hs_screening":
-        return quant.get("hs", {}).get("unit", "µg/HS")
-    if mode == "nias_mgkg":
-        return "mg/kg"
-    if mode == "total_ugl":
-        return "µg/L"
-    if mode == "area_pct":
-        return "%"
-    if mode == "extraction":
-        from gcws.quant import extraction as EX
-        return EX.unit(quant)
-    return quant.get("unit", "µg/L")
+    """The mode's own unit (:attr:`gcws.quant.modes.QuantMode.unit`)."""
+    from gcws.quant import modes as QM
+    return QM.of(quant).unit
 
 
 _CAS = {"path": None, "lookup": {}}
@@ -123,7 +111,8 @@ def rrt_reference(sample, quant, st, key="FID"):
 
 def rrt_rows(sample, quant, st, peaks, key):
     """RRT on the displayed detector axis."""
-    if quant.get("mode", "nias_mgkg") != "nias_mgkg":
+    from gcws.quant import modes as QM
+    if not QM.of(quant).nias:
         return {}
     reference, status = rrt_reference(sample, quant, st, key)
     return {i: {"rrt": p.apex_rt / reference if reference is not None else None,
@@ -131,7 +120,9 @@ def rrt_rows(sample, quant, st, peaks, key):
 
 
 def compute(ws) -> QuantResult:
-    if (ws.quant or {}).get("mode") == "hs_screening":
+    from gcws.quant import modes as QM
+    qmode = QM.of(ws.quant)
+    if qmode.hs:
         from gcws.quant.hs import compute as compute_hs
         return compute_hs(ws)
     out = QuantResult()
@@ -141,9 +132,9 @@ def compute(ws) -> QuantResult:
     defs = gc_fid.normalise_istd_defs(quant.get("istd_defs")) if quant.get("istd_defs") else \
         gc_fid.default_istd_defs(settings)
     options = gc_fid.normalise_istd_options(quant.get("istd_options") or {})
-    mode = quant.get("mode", "nias_mgkg")
-    key = quant_detector(quant)
-    lookup = cas_lookup() if mode == "nias_mgkg" else {}
+    mode = qmode.key
+    key = qmode.detector
+    lookup = cas_lookup() if qmode.nias else {}
     dets: dict[str, Any] = {}
 
     def det_of(rid):
@@ -267,46 +258,17 @@ def unit_values(mode, settings, *, corr_area=None, mg_dm2=None, conc=None, mean_
 
 
 def unit_keys(mode: str, quant: Optional[dict] = None) -> list[str]:
-    """The further units (``CONC_UNITS`` keys) that ``mode`` computes (extraction: those the method in
-    ``quant`` offers for its sample type)."""
-    if mode == "nias_mgkg":
-        return list(NIAS_UNITS)
-    if mode == "extraction":
-        from gcws.quant import extraction as EX
-        return EX.unit_keys(quant)
-    return ["ug_l", "mg_l", "mg_ml"] if mode == "total_ugl" else []
+    """The further units (``CONC_UNITS`` keys) that ``mode`` computes
+    (:meth:`gcws.quant.modes.QuantMode.unit_keys`; extraction: those the method in ``quant`` offers)."""
+    from gcws.quant import modes as QM
+    return QM.named(mode, quant).unit_keys()
 
 
 def from_mode_unit(mode, settings, value, *, quant: Optional[dict] = None, run_id: str = "") -> dict:
-    """``value`` in the mode's unit (mg/kg or µg/L, e.g. a double determination's concentration with
-    the analyst's edits) in the further units, as :func:`unit_values` gives them for a peak. Extraction:
-    ``value`` in Conc. 1's unit of the run ``run_id``, with the method in ``quant``."""
-    if mode == "extraction":
-        from gcws.quant import extraction as EX
-        from gcws.quant import units as U
-        out: dict = dict.fromkeys(CONC_UNITS)
-        calc: dict = {}
-        b, u1 = EX.basis(quant, run_id), EX.unit(quant)
-        for k in EX.unit_keys(quant):
-            u = U.label_of(k)
-            out[k] = EX.convert_value(quant, run_id, value, u)
-            r = U.ratio(u1, u, b)
-            calc[k] = U.missing(u, b) or (f"{u} = {_g(value)} {u1} × {_g(r)} = {_g(out[k])}"
-                                          if value is not None and r is not None else "")
-        out["calc"] = calc
-        return out
-    if mode != "nias_mgkg" or value is None:
-        return unit_values(mode, settings, conc=value)
-    ov = _positive(getattr(settings, "ov_ratio", None))
-    if not ov:
-        out = unit_values(mode, settings)
-        out["calc"] = dict.fromkeys(CONC_UNITS, "Needs the surface/volume ratio (NIAS parameters)")
-        return out
-    mg_dm2 = value / ov
-    out = unit_values(mode, settings, mg_dm2=mg_dm2, conc=value)
-    out["calc"]["mg_dm2"] = f"mg/dm² = mg/kg ÷ surface/volume = {_g(value)} ÷ {_g(ov)} dm²/kg = {_g(mg_dm2)}"
-    out["calc"].pop("conc", None)
-    return out
+    """``value`` in the mode's unit in the further units (:meth:`gcws.quant.modes.QuantMode.convert`).
+    Extraction: ``value`` in Conc. 1's unit of the run ``run_id``, with the method in ``quant``."""
+    from gcws.quant import modes as QM
+    return QM.named(mode, quant).convert(value, settings, run_id)
 
 
 def rows_for(sample, st, mode, quant, settings, defs, options) -> dict[int, dict]:

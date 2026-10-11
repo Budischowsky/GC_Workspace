@@ -2,6 +2,8 @@
 from PySide6.QtCore import QLocale, QSignalBlocker
 from PySide6.QtWidgets import QDoubleSpinBox, QHBoxLayout, QLabel, QMenu, QWidget, QWidgetAction
 
+from gcws.quant import modes as QM
+
 
 class RetentionTimeSpinBox(QDoubleSpinBox):
     """Accept either decimal mark, never interpret a typed dot as thousands."""
@@ -72,7 +74,7 @@ class ChromatogramMenu(QMenu):
         self.ws.set_solvent_cut(self.cut.isChecked(), self.end.value())
 
     def sync(self, *_):
-        hs = self.ws.quant.get("mode") == "hs_screening"
+        hs = QM.of(self.ws.quant).hs
         self.cut.setText("HS TIC/MS solvent cut" if hs else "FID solvent cut")
         self.end_label.setText("Solvent end RT [min, MS time]" if hs else "Solvent end RT [min, FID time]")
         self.ms_cut.setVisible(not hs)
