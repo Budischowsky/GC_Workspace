@@ -435,6 +435,20 @@ class Lib2Nist:
             raise LibraryError(f"Lib2NIST did not build {target.name}")
 
 
+def _number_new(records: list[MspRecord]) -> None:
+    """Give entries without a library ID the next free ones. Lib2NIST keeps the IDs (``/KeepIDs``) and
+    numbers an entry without one by its position, so in a library with gaps (entries deleted) that
+    number can be taken and Lib2NIST drops the new entry."""
+    used = [int(r.get("ID")) for r in records if r.get("ID").strip().isdigit()]
+    if not used:
+        return
+    nxt = max(used)
+    for r in records:
+        if not r.get("ID").strip().isdigit():
+            nxt += 1
+            r.set("ID", nxt)
+
+
 @dataclass
 class SaveResult:
     count: int
@@ -480,6 +494,8 @@ class LibraryEditor:
         self.backup_dir.mkdir(parents=True, exist_ok=True)
         # one file / folder name (library names can hold dots or a SpectrAtlas path: "libraries\Own.msp")
         backup = self.backup_dir / (re.sub(r'[<>:"/\\|?*]+', "_", self.info.name) + f"-{stamp}")
+        if self.info.kind != "msp":
+            _number_new(records)
         text = write_msp(records)
         if self.info.kind == "msp":
             path = self.info.path

@@ -170,3 +170,15 @@ def test_msp_backup_of_a_dotted_or_atlas_name(tmp_path, name):
     res = ed.add(LE.new_record("B", [(71, 999)]))
     assert res.backup is not None and res.backup.is_file() and res.backup.parent == tmp_path / "backups"
     assert res.backup.name.endswith(".msp") and "-20" in res.backup.name
+
+def test_new_entries_get_the_next_free_library_id():
+    # a library with gaps (deleted entries): Lib2NIST would number a new entry by its position (3, taken)
+    old = [LE.new_record(n, [(91, 999)]) for n in ("a", "b")]
+    old[0].set("ID", 1)
+    old[1].set("ID", 3)
+    new = LE.new_record("c", [(91, 999)])
+    LE._number_new(old + [new])
+    assert [r.get("ID") for r in old + [new]] == ["1", "3", "4"]
+    plain = [LE.new_record("d", [(91, 999)])]
+    LE._number_new(plain)                         # an MSP without IDs stays without
+    assert plain[0].get("ID") == ""
