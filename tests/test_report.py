@@ -420,3 +420,34 @@ def test_unknowns_carry_no_cas_or_match_quality_in_the_nias_and_template_reports
     lines = [r for r in table.rows if r.cells[i_name].value == unknown]
     assert lines and all(r.cells[i_cas].value in (None, "") and r.cells[i_score].value in (None, "")
                          for r in lines)
+
+
+@pytest.mark.parametrize("kind", ["nias", "fingerprint", "total_extraction"])
+def test_reports_add_nothing_to_the_unknown_register(samples, qapp, tmp_path, monkeypatch, kind):
+    """Unknowns go into the register by hand only (Identify > Register selected peak as unknown...): a
+    report with an "unknown (m/z ...)" line neither records it nor searches the register."""
+    import dataclasses
+    from gcws.core.model import FID
+    from gcws.report import assemble as AS
+    from gcws.report import service as RS
+    from gcws.report.legacy_api import main_script
+    main = main_script()
+    touched = []
+    for name in ("record_unknown_sightings", "safe_record_unknown_sightings", "compute_unknown_clusters",
+                 "unknown_register_connection"):
+        monkeypatch.setattr(main, name, lambda *a, _n=name, **k: touched.append(_n))
+    ws = _ws_with(samples, ["06_", "07_", "08_", "11_"], qapp)
+    ws.quant["migration"] = dict(MIGRATION)
+    ids = [s.id for s in ws.states() if s.role == "sample"]
+    for rid in ids:
+        items = ws.runs[rid].ident_set(FID).items
+        items[0] = dataclasses.replace(items[0], name="unknown (m/z 149, 57, 71)", manual=True)
+    ws.recompute_quant()
+    group = {"id": "g", "name": "26016606", "members": ids, "policy": "all"}
+    members, samples_ = AS.prepare(ws, kind, group)
+    job = AS.build_job(ws, kind, group, tmp_path / f"26016606{RS.SUFFIXES[kind]}.xlsx", members=members,
+                       samples=samples_, preview=True, record_seen=False)
+    res = RS.generate(job)
+    assert res.target.exists()
+    assert touched == []
+    assert "unknown_register" not in (res.summary or {})

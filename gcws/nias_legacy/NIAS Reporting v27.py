@@ -5983,10 +5983,6 @@ def process_fingerprint_report(workbook, nias_path: Path, output_path: Path) -> 
         unidentified_register_name(item) for item in retained_rows
         if is_unidentified_item(item)
     ]
-    # Captured before the rows are regrouped, so every single occurrence reaches
-    # the register instead of only the aggregated sum rows.
-    unknown_rows = [item for item in retained_rows
-                    if unknown_mz_ranked(item.get("name"))]
     category_sums = {"hydrocarbon": 0.0, "siloxane": 0.0}
     category_members = {"hydrocarbon": 0, "siloxane": 0}
     uncategorized_rows = []
@@ -6118,7 +6114,7 @@ def process_fingerprint_report(workbook, nias_path: Path, output_path: Path) -> 
             "Summary rows": sum(1 for item in retained_rows if item.get("summary")),
             "Category counts": category_members,
             "Blank matches": blank_matches,
-            "Unidentified source rows registered": len(unknown_names_for_documentation),
+            "Unidentified source rows": len(unknown_names_for_documentation),
         },
     })
 
@@ -6127,21 +6123,10 @@ def process_fingerprint_report(workbook, nias_path: Path, output_path: Path) -> 
     fit_report_rows(target_ws)
     output_workbook.save(output_path)
     register_number = syneris_number_from_text(sample_name, nias_path.stem)
-    unknown_register_result = safe_record_unknown_sightings(
-        unknown_rows,
-        unknown_report_context(
-            sample=register_number,
-            sample_name=sample_name,
-            report_type="Fingerprint",
-            source_file=nias_path,
-            output_file=output_path,
-        ),
-    )
     return {
         "output": output_path,
         "source_sheet": source_ws.title,
         "source_format": "Fingerprint",
-        "unknown_register": unknown_register_result,
         "retained_rows": len(retained_rows),
         "blank_matches": blank_matches,
         "unidentified_count": len(unknown_names_for_documentation),
@@ -6257,10 +6242,6 @@ def process_total_extraction_report(workbook, source_path: Path,
         unidentified_register_name(item) for item in retained_rows
         if is_unidentified_item(item)
     ]
-    # Captured before the rows are regrouped, so every single occurrence reaches
-    # the register instead of only the aggregated sum rows.
-    unknown_rows = [item for item in retained_rows
-                    if unknown_mz_ranked(item.get("name"))]
     category_sums = {"hydrocarbon": 0.0, "siloxane": 0.0}
     category_members = {"hydrocarbon": 0, "siloxane": 0}
     uncategorized_rows = []
@@ -6418,7 +6399,7 @@ def process_total_extraction_report(workbook, source_path: Path,
             "Summary rows": sum(1 for item in retained_rows if item.get("summary")),
             "Category counts": category_members,
             "Blank matches": blank_matches,
-            "Unidentified source rows registered": len(unknown_names_for_documentation),
+            "Unidentified source rows": len(unknown_names_for_documentation),
         },
     })
 
@@ -6427,21 +6408,10 @@ def process_total_extraction_report(workbook, source_path: Path,
     fit_report_rows(target_ws)
     output_workbook.save(output_path)
     register_number = syneris_number_from_text(sample_name, source_path.stem)
-    unknown_register_result = safe_record_unknown_sightings(
-        unknown_rows,
-        unknown_report_context(
-            sample=register_number,
-            sample_name=sample_name,
-            report_type=TOTAL_EXTRACTION_FORMAT,
-            source_file=source_path,
-            output_file=output_path,
-        ),
-    )
     return {
         "output": output_path,
         "source_sheet": source_ws.title,
         "source_format": TOTAL_EXTRACTION_FORMAT,
-        "unknown_register": unknown_register_result,
         "retained_rows": len(retained_rows),
         "blank_matches": blank_matches,
         "unidentified_count": len(unknown_names_for_documentation),
@@ -6679,10 +6649,6 @@ def process_workbook(
         unidentified_register_name(item) for item in retained_rows
         if is_unidentified_item(item)
     ]
-    # Captured before the rows are regrouped, so every single occurrence reaches
-    # the register instead of only the aggregated sum rows.
-    unknown_rows = [item for item in retained_rows
-                    if unknown_mz_ranked(item.get("name"))]
     retained_rows, repeated_substances = split_repeated_substance_groups(retained_rows)
 
     if (not retained_rows and not any(sum_counts.values()) and not repeated_substances
@@ -6875,37 +6841,6 @@ def process_workbook(
         next((report_parameters[name]
               for name in sorted(MIGRATION_PARAMETER_ALIASES["syneris_summary_report_no"])
               if report_parameters.get(name) not in (None, "")), ""))
-    # Migration conditions travel with every sighting: an unknown that only shows
-    # up in 95 % ethanol at 60 °C is an apolar migrant, which already narrows down
-    # the substance class before anything is identified.
-    if duplicate_mode:
-        register_conditions = {
-            "simulant": duplicate_parameters.get("simulans"),
-            "temperature": duplicate_parameters.get("temperatur"),
-            "duration": duplicate_parameters.get("dauer"),
-            "migration_cell": duplicate_parameters.get("migrationszelle"),
-            "analyst": duplicate_parameters.get("auswerter"),
-        }
-    else:
-        register_conditions = {
-            "simulant": source_ws["B10"].value,
-            "temperature": source_ws["E8"].value,
-            "duration": source_ws["E9"].value,
-            "migration_cell": "",
-            "analyst": source_ws["J2"].value,
-        }
-    unknown_register_result = safe_record_unknown_sightings(
-        unknown_rows,
-        unknown_report_context(
-            sample=register_number,
-            sample_name=sample_label,
-            report_type=(SINGLE_FORMAT if single_mode
-                         else "Doppelbestimmung" if duplicate_mode else "NIAS"),
-            source_file=nias_path,
-            output_file=output_path,
-            **register_conditions,
-        ),
-    )
 
     footnotes: dict[str, int] = {}
     for item in retained_rows:
@@ -7165,7 +7100,7 @@ def process_workbook(
             "Reported rows": len(retained_rows),
             "Summary rows": sum(1 for item in retained_rows if item.get("summary")),
             "Category counts": sum_counts,
-            "Unidentified source rows registered": len(unknown_names_for_documentation),
+            "Unidentified source rows": len(unknown_names_for_documentation),
         },
     })
 
@@ -7196,7 +7131,6 @@ def process_workbook(
         "pubchem_unique_queries": len(pubchem_api_queries),
         "pubchem_cache_hits": pubchem_cache_hits,
         "unidentified_count": len(unknown_names_for_documentation),
-        "unknown_register": unknown_register_result,
         "cas_verification_counts": cas_verification_counts,
         "status_counts": status_counts,
         # Identity of the sample this report belongs to. ``syneris_number`` is

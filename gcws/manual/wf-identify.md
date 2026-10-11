@@ -109,7 +109,8 @@ NIAS substances with a matching pattern, and formula suggestions. The optional p
 ## Keep an unknown
 
 **Identify > Register selected peak as unknown...** stores the spectrum, retention time and sample of a peak in
-the **unknown register**, so that the same unknown is recognised in later samples.
+the **unknown register**, so that the same unknown is recognised in later samples. This is the only way an
+unknown gets into the register: reports (also in Automation) do not add their "unknown (m/z ...)" lines.
 
 **Identify > Unknown register...** opens the register: find unknowns by text, by sample name or by m/z values
 (`149 167 279`), look at the spectrum and where it was seen, search it again, give it a name, **Mark**
