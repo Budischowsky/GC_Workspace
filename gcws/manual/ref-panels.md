@@ -205,6 +205,7 @@ Described task by task in [Blanks, internal standards and quantification](wf-qua
 | **Detector** | **FID** or **TIC (MS)**: the peaks the quantities are computed from. |
 | **ISTD concentration**, **Unit** | For the mode **Internal standard concentration** only. |
 | **Result unit** | For **HS-Screening** only. |
+| **Single determination only** | Each sample is reported from one run. Of a pair, A (`_A` / `_1`) is the **reported determination** and B the **control determination**: both are processed and compared, only A goes into the report. Saved with the processing method. See [Single determination](wf-double.md#single-determination). |
 | **NIAS parameters** | A table of **Parameter**, **Value** and **Unit**: the numbers of the NIAS calculation and of the reports (solvent end, reporting limit, quality limit, duplicate difference limit ...). Edit a value in place. |
 | **Migration conditions...** | Opens the migration conditions. |
 | **Internal standards** | The table of standards: **Code**, **Name**, **Conc.**, **Target RT**, **Quantify**. |

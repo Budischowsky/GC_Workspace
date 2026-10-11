@@ -23,7 +23,9 @@ PARAMS = {
     "substance_above": {"mgkg": ("Concentration (mg/kg)", "float", (0, 1e6)),
                         "pattern": ("Only names / CAS matching (e.g. *phthalat*; 80-05-7)", "text", None)},
     "unidentified_over": {"max": ("Allowed unidentified substances", "int", (0, 1000))},
-    "feature_review": {"yellow": ("List the yellow substances too (made consistent automatically)", "bool", None)},
+    "feature_review": {"yellow": ("List the yellow substances too (made consistent automatically)", "bool", None),
+                       "single_control": ("Control needed also in a single determination (red against the control "
+                                          "determination)", "bool", None)},
 }
 
 
