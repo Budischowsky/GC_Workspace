@@ -13,11 +13,24 @@ can be set to control. Toggling the checkbox changes what an accepted group mean
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] The checkbox is in the Quantification panel, saved and loaded with the processing method
-- [ ] Automation job (S1), flag on, pair A/B: B is processed, the report has A's values only, labelled single determination
-- [ ] Report² findings for that job: SD info line; "substances to decide" at info level; can be set to control
-- [ ] Flag off: pairs behave exactly as before
-- [ ] Group operations (S3): toggling the flag makes an accepted group stale
-- [ ] The manual (F1) documents the checkbox and reported / control determination; the coverage test passes
+- [x] The checkbox is in the Quantification panel, saved and loaded with the processing method
+- [x] Automation job (S1), flag on, pair A/B: B is processed, the report has A's values only, labelled single determination
+- [x] Report² findings for that job: SD info line; "substances to decide" at info level; can be set to control
+- [x] Flag off: pairs behave exactly as before
+- [x] Group operations (S3): toggling the flag makes an accepted group stale
+- [x] The manual (F1) documents the checkbox and reported / control determination; the coverage test passes
+
+## Comments
+
+- 2026-10-11: `quant["single_only"]` (in `QUANT_KEYS`, missing = off); `determination.of` makes a pair with
+  the flag a single determination: reported A (`_A`/`_1`, else first by injection), control B; a lone
+  suffixed run with the flag is SD too (the B-only note "A missing, B reported" is left for 04). Reports
+  needed no change (`assemble.prepare` already uses `reported`). Rule `feature_review` gets param
+  `single_control` (Report² rules dialog: "Control needed also in a single determination"); the SD info line
+  names the control. Toggling goes through `Workspace.set_single_only` (one undo macro: quant + groups);
+  `double_determination.method_changed` stales accepted groups whose kind/reported/control changed. N-fold
+  groups (3+) are unaffected. Tests: `test_single_determination_only_job` (S1), `..._rules`,
+  `test_single_determination_only_reports_a_and_keeps_b_as_control`, `test_toggling_..._stales_an_accepted_pair`
+  (S3), `test_single_determination_only_checkbox` (panel, undo, method round trip).

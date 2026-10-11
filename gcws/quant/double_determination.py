@@ -67,6 +67,19 @@ def stale(groups: list, group_id: str) -> list:
     return out
 
 
+def method_changed(groups: list, before: dict, after: dict, names: dict) -> list:
+    """The method's quantification changed from ``before`` to ``after`` (``ws.quant``; ``names``: run id ->
+    file name): an accepted group whose determination changed (Single determination only toggled: other
+    runs reported, another kind) is stale."""
+    from gcws.quant import determination as DT
+    out = copy.deepcopy(groups)
+    for g in out:
+        old, new = DT.of(before, g, names), DT.of(after, g, names)
+        if (old.kind, old.reported, old.control) != (new.kind, new.reported, new.control):
+            _stale(g)
+    return out
+
+
 def pair(groups: list, members: list, name: str) -> list:
     """``groups`` with ``members`` as one group of their own: the group of ``members[0]`` (a pair or a
     single) is reused, else a new one named ``name``. A run belongs to one pair or single, so the

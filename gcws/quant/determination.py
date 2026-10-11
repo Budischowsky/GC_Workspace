@@ -3,9 +3,11 @@
 ``of(quant, group, names)`` answers it for the group ``group`` (``ws.replicate_groups``) of the method
 ``quant`` (``ws.quant``), ``names`` mapping run id -> file name (``07_..._A.D``):
 
-- ``kind``: :data:`SINGLE` (a run without a replicate suffix), :data:`DOUBLE` (two or more runs, all
-  reported) or :data:`INCOMPLETE` (a run with a suffix whose partner never came: processed alone, but it
-  needs control);
+- ``kind``: :data:`SINGLE` (a run without a replicate suffix; with the method's **Single determination
+  only** (``quant["single_only"]``) also a pair, of which one run is reported and the other is the
+  control, and a lone run with a suffix), :data:`DOUBLE` (two or more runs, all reported) or
+  :data:`INCOMPLETE` (a run with a suffix whose partner never came: processed alone, but it needs
+  control);
 - ``reported``: the runs whose values go into the report; ``control``: the run compared with the reported
   one but not reported (a single determination of a pair), else None;
 - ``label``: how the report names it (``{determination}`` of a template).
@@ -55,14 +57,35 @@ class Determination:
             f"{n}-fold determination"
 
 
+def single_only(quant: Optional[dict]) -> bool:
+    """The method reports one determination of a pair (the Quantification panel's checkbox; missing = off)."""
+    return bool((quant or {}).get("single_only"))
+
+
+#: the suffixes of the reported determination of a pair (A)
+_FIRST = {"A", "1", "01", "REP1"}
+
+
+def _reported(members: tuple, names: dict) -> str:
+    """The reported run of a pair: A (``_A`` / ``_1``), otherwise the first by injection."""
+    first = [m for m in members if suffix(names[m]) in _FIRST]
+    if len(first) == 1:
+        return first[0]
+    from gcws.io.sequence import order_key
+    return min(members, key=lambda m: order_key(names[m]))
+
+
 def of(quant: Optional[dict], group: Optional[dict], names: dict) -> Determination:
     """The determination of ``group`` (see the module text); runs missing from ``names`` do not count."""
     members = tuple(m for m in (group or {}).get("members") or [] if m in names)
+    if len(members) == 2 and single_only(quant):
+        rep = _reported(members, names)
+        return Determination(SINGLE, members, (rep,), next(m for m in members if m != rep))
     if len(members) >= 2:
         return Determination(DOUBLE, members, members)
     if not members:
         return Determination(SINGLE, (), ())
-    kind = INCOMPLETE if suffix(names[members[0]]) else SINGLE
+    kind = INCOMPLETE if suffix(names[members[0]]) and not single_only(quant) else SINGLE
     return Determination(kind, members, members)
 
 

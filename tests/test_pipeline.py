@@ -335,3 +335,45 @@ def test_a_run_without_a_suffix_is_a_single_determination(qapp, samples, data, t
     from openpyxl import load_workbook
     sh = load_workbook(files["batch_xlsx"]).active
     assert [sh.cell(4, 1).value, sh.cell(5, 1).value] == ["07", "26016606"]
+
+
+def test_single_determination_only_rules():
+    """Issue 03: in a single determination the red A/B differences are information, unless the rule is set
+    to control; the info line names the control determination."""
+    from gcws.automation import rules as RU
+    red = [{"feature_id": "F1", "rt": 10.0, "name": "X", "light": "red", "verdict": "found in A only"}]
+    sd = {"members": ["a", "b"], "pairing": "features", "determination": "single", "reported": ["a"],
+          "control": "b"}
+    res = RU.evaluate(RU.default_rules(), {"double_determination": sd, "features": red})
+    assert res.status == RU.ACCEPTED_AUTO
+    assert [(f.rule, f.level) for f in res.findings] == [("feature_review", "info"), ("double_determination", "info")]
+    assert "b is the control determination" in res.findings[1].text
+    rules = RU.default_rules()
+    next(r for r in rules if r.id == "feature_review").params["single_control"] = True
+    assert RU.evaluate(rules, {"double_determination": sd, "features": red}).status == RU.CONTROL
+    dd = dict(sd, determination="double", reported=["a", "b"], control="")
+    assert RU.evaluate(RU.default_rules(), {"double_determination": dd, "features": red}).status == RU.CONTROL
+
+
+def test_single_determination_only_job(qapp, samples, data, tmp_path):
+    """Issue 03: with Single determination only, B is processed and compared, the report has A's values
+    only and is labelled single determination; Report² gets the SD info line."""
+    import copy
+    from gcws.automation import pipeline as PL
+    batch = copy_batch(samples, tmp_path / "watch", ["06_", "07_", "08_", "11_", "13_"])
+    method = copy.deepcopy(METHOD)
+    method["sections"]["quant"]["single_only"] = True
+    sd = PL.run_job(spec(batch, tmp_path / "sd", method=method,
+                         reports=[{"node": "r1", "kind": "nias", "formats": ["xlsx"]}]), identify=lib_oracle)
+    assert sd.state in (PL.ACCEPTED_AUTO, PL.CONTROL), sd.reason
+    assert label_of(sd.files["r1"]["xlsx"]) == "PA 26.007, single determination"
+    dd = sd.evidence["double_determination"]
+    assert dd["determination"] == "single" and dd["reported"] == [Path(A).stem] and dd["control"] == Path(B).stem
+    assert dd["pairing"] == "features" and sd.evidence["features"]          # B processed and compared
+    found = [f for f in sd.findings if f["rule"] == "double_determination"]
+    assert found[0]["level"] == "info" and found[0]["text"].startswith("single determination")
+    assert all(f["level"] == "info" for f in sd.findings if f["rule"] == "feature_review")
+    from openpyxl import load_workbook
+    sheet = " | ".join(str(c.value) for ws in load_workbook(sd.files["r1"]["xlsx"]).worksheets
+                      for row in ws.iter_rows() for c in row if c.value is not None)
+    assert Path(A).stem in sheet and Path(B).stem not in sheet

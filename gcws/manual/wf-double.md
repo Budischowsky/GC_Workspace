@@ -171,6 +171,24 @@ A sample can also be reported from one run: a **single determination**.
 In Report² a single determination gets the information line *single determination* and is not flagged as
 incomplete.
 
+### Single determination only
+
+Some methods report every sample from one run, and B is injected only as a control. Tick **Single
+determination only** in the Quantification panel (it is saved with the processing method, so automation and
+every project using the method follow it). Then:
+
+- both runs of a pair are processed (integration, identification, internal standards, blanks,
+  quantification) and compared on the double determination page as usual;
+- A (`_A` / `_1`, otherwise the first by injection) is the **reported determination**: only its values go into
+  the report, which is labelled *single determination*;
+- B is the **control determination**: it stays in the project and the audit trail, but not in the report;
+- a lone `_A` is a single determination too, not an incomplete double determination.
+
+In Report² the information line names the control determination. Red substances of the comparison
+(**Double determination: substances to decide**) are only information, because B is only a control; tick
+**Control needed also in a single determination** in that rule to have them checked anyway. Ticking or
+clearing the box changes what an accepted double determination means: it has to be accepted again.
+
 ## Three or more determinations
 
 Select a group of three or more in the list **Determinations** on the left: its worksheet shows the means.

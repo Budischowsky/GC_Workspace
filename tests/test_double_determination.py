@@ -73,3 +73,38 @@ def test_pair_takes_the_runs_from_other_pairs_and_singles():
     assert next(g for g in out if g["id"] == "g2")["members"] == ["c", "d"]
     out = DD.pair([], ["x", "y"], "fresh")
     assert out[0]["name"] == "fresh" and out[0]["members"] == ["x", "y"] and out[0]["policy"] == "all"
+
+
+# -- single determination only (issue 03) ----------------------------------------------------------
+
+NAMES = {"a": "07_x_A.D", "b": "11_x_B.D", "c": "09_sample.D"}
+SD = {"single_only": True}
+
+
+def test_single_determination_only_reports_a_and_keeps_b_as_control():
+    from gcws.quant import determination as DT
+    det = DT.of(SD, {"members": ["b", "a"]}, NAMES)
+    assert (det.kind, det.reported, det.control, det.label) == (DT.SINGLE, ("a",), "b", "single determination")
+    assert det.compared                                         # B is still processed and compared
+    # _1 / _2, and without A / 1 the first by injection
+    assert DT.of(SD, {"members": ["y", "x"]}, {"x": "03_s_1.D", "y": "05_s_2.D"}).reported == ("x",)
+    assert DT.of(SD, {"members": ["y", "x"]}, {"x": "03_s.D", "y": "05_s.D"}).reported == ("x",)
+    # a lone run with a suffix is a single determination, not an incomplete double determination
+    assert DT.of(SD, {"members": ["a"]}, NAMES).kind == DT.SINGLE
+    # flag off: unchanged
+    off = DT.of({}, {"members": ["a", "b"]}, NAMES)
+    assert (off.kind, off.reported, off.control) == (DT.DOUBLE, ("a", "b"), None)
+    assert DT.of({}, {"members": ["a"]}, NAMES).kind == DT.INCOMPLETE
+
+
+def test_toggling_single_determination_only_stales_an_accepted_pair():
+    gs = groups()
+    on = DD.method_changed(gs, {}, SD, NAMES)
+    assert g1(on)["signoff"]["stale"] and g1(on)["signoff"]["by"] == "anna"
+    assert not next(g for g in on if g["id"] == "g2").get("signoff")
+    accepted = DD.accept(on, "g1", "bob", AT, 0)
+    assert g1(DD.method_changed(accepted, SD, {}, NAMES))["signoff"]["stale"]
+    # a run without a suffix is a single determination either way: nothing changes, the acceptance holds
+    lone = [{"id": "g2", "name": "single", "members": ["c"], "signoff": {"by": "anna", "at": AT, "open": 0}}]
+    assert DD.is_accepted(DD.method_changed(lone, {}, SD, NAMES)[0])
+    assert gs == groups()                                        # the list passed in is untouched
