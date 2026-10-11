@@ -171,6 +171,19 @@ A sample can also be reported from one run: a **single determination**.
 In Report² a single determination gets the information line *single determination* and is not flagged as
 incomplete.
 
+On the double determination page a single determination has nothing to compare, so its rows are coloured by
+the substance instead:
+
+| Colour | Meaning |
+|--------|---------|
+| Grey | Below the reporting limit (not reported by default) |
+| Red | An unknown: no library identification. Identify it or decide whether it is reported |
+| Yellow | A flagged substance (the **Flags** column: new to the lab, elements other than C, H, O, N) |
+| Green | Everything else |
+
+The chips count and filter these colours as for a pair. A pair under **Single determination only** keeps the
+colours of its comparison.
+
 ### Making a single determination by hand
 
 Any sample run can be reported alone, without changing the method: choose it as **A** and pick

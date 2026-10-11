@@ -1188,6 +1188,9 @@ def test_single_determination_by_hand_is_accepted_and_listed_in_report2(qtbot, w
     assert g["members"] == [a] and g["single"] and g["name"] == pair_name
     assert not any(b in x["members"] for x in ws.replicate_groups)          # B stays unused
     assert page.determination().kind == DT.SINGLE and "accept it" in page.banner.text()
+    from gcws.quant import duplicate_view as DV
+    lights = {DV.light_of(r, v) for r, v in zip(page.rows, page.verdicts)}
+    assert "green" in lights and lights <= {"green", "yellow", "red", "grey"}    # coloured by substance
     assert page.b_accept.text() == "Accept single determination" and page.b_accept.isEnabled()
     assert any(r.action == "Single determination made by hand" for r in ws.audit.records)
     page._stack().undo()                                                     # the pair again

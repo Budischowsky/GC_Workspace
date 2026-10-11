@@ -39,8 +39,23 @@ def evaluate(ws, members: list, edits: dict, labels=("A", "B"), policy: str = "a
     rows, problems = DV.compute(ws, members, policy)
     limit, rl = DV.limits(ws)
     unit = ws.quant_unit()
-    verdicts = [DV.plain_verdict(r, limit, rl, tuple(labels), unit) for r in rows]
+    flags = _single_flags(ws, rows) if len(members) == 1 else [""] * len(rows)
+    verdicts = [DV.plain_verdict(r, limit, rl, tuple(labels), unit, f) for r, f in zip(rows, flags)]
     return rows, verdicts, DV.apply_edits(rows, verdicts, edits, rt_tolerance(ws.quant)), problems
+
+
+def _single_flags(ws, rows: list) -> list:
+    """The flags of each row's substance (none for an ISTD): they colour a single determination's rows yellow."""
+    from gcws.quant import substance_flags as SF
+    index = SF.formula_index(ws)
+    out = []
+    for r in rows:
+        if any((s or {}).get("istd") for s in (r.get("source1"), r.get("source2"))):
+            out.append("")
+            continue
+        name, cas = r.get("name", ""), r.get("cas", "")
+        out.append(SF.flags(name, cas, SF.formula_from(index, name, cas))[0])
+    return out
 
 
 def rt_tolerance(quant: dict) -> float:
