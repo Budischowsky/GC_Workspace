@@ -24,7 +24,7 @@ PALETTE_HELP = {
     "copy": "Copies every finished run to a folder on this PC; the method works on the copy (fast on a slow "
             "network). Put between the watched folder and the method by itself.",
     "method": "Processing method: integration, library search, ISTDs, quantification.",
-    "report2": "Report²: accepted automatically, or control needed by the analyst.",
+    "report2": "Report²: the rules' findings; the analyst checks and accepts every report.",
     "report": "The report and its files (Excel, Word, PDF, batch).",
     "folder": "Where the files go. Arrows into it may filter by format or status.",
 }

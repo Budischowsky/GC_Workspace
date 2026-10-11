@@ -12,7 +12,8 @@ from typing import Optional
 
 from gcws.automation import store
 
-STATUS = {"accepted_auto": "No finding (Report²)", "accepted_manual": "Accepted (analyst)",
+STATUS = {"no_findings": "No findings (Report²)", "accepted_auto": "No finding (Report²)",
+          "accepted_manual": "Accepted (analyst)",
           "control": "Control needed", "rejected": "Rejected", "not_processed": "Not processed",
           "failed": "Failed", "waiting": "Waiting", "queued": "Queued", "processing": "Processing"}
 
@@ -50,7 +51,8 @@ def summary_workbook(batch_name: str, entries: list[dict], target: Path) -> Path
     sh.append(head)
     for c in sh[3]:
         c.font = Font(bold=True)
-    fills = {"control": "FFF2CC", "accepted_auto": "E2F0D9", "accepted_manual": "E2F0D9", "rejected": "F8CBAD",
+    fills = {"control": "FFF2CC", "no_findings": "E2F0D9", "accepted_auto": "E2F0D9", "accepted_manual": "E2F0D9",
+             "rejected": "F8CBAD",
              "not_processed": "F8CBAD", "failed": "F8CBAD"}
     for e in entries:
         findings = e.get("findings") or []
@@ -152,7 +154,8 @@ def report_groups(jobs: list, out_dir: Path, batch_name: str, formats=("batch_do
             continue
         ev = dict(ev, rows=PL.slim_rows(res), summary=res.summary, warnings=list(res.warnings))
         result = RU.evaluate(rules, ev)
-        entries.append({"name": group["name"], "state": result.status, "findings": result.to_list(),
+        entries.append({"name": group["name"], "state": RU.NO_FINDINGS if result.clean else RU.CONTROL,
+                        "findings": result.to_list(),
                         "xlsx": str(res.target), "report": str(res.word or res.target)})
     files, more = batch_report(batch_name, entries, out_dir, formats)
     return entries, files, warnings + more

@@ -42,12 +42,6 @@ class JobResult:
         return asdict(self)
 
 
-def checked_state(spec: dict, state: str) -> str:
-    """A report made again from the analyst's (edited) project ("rereport": Update report, Report again) is
-    checked by the analyst: never accepted by itself, whatever the rules and the review step say."""
-    return CONTROL if spec.get("mode") == "rereport" and state == ACCEPTED_AUTO else state
-
-
 def write_result(out_dir: Path, result: JobResult) -> Path:
     return store.atomic_write_json(Path(out_dir) / "result.json", result.to_dict())
 
@@ -299,15 +293,13 @@ def run_job(spec: dict, *, progress: Callable[[str], None] = log.info,
                     reported=reported, double_determination=dd)
     if inspect is not None:
         evidence["inspect"] = inspected
-    if spec.get("has_review", True):
-        ev = RU.evaluate(RU.from_list(spec.get("rules")) if spec.get("rules") is not None else RU.default_rules(),
-                         evidence, bool(spec.get("auto_accept", True)))
-        state, findings = ev.status, ev.to_list()
-    else:
-        state, findings = ACCEPTED_AUTO, []
-    state = checked_state(spec, state)
+    # every report goes to the analyst ("control needed"); without a Report² step no rule looks at it
+    rules = [] if not spec.get("has_review", True) else \
+        RU.from_list(spec.get("rules")) if spec.get("rules") is not None else RU.default_rules()
+    ev = RU.evaluate(rules, evidence)
+    state, findings = ev.status, ev.to_list()
     if not files and spec.get("reports"):
-        state = CONTROL if state == ACCEPTED_AUTO else state
+        findings = [f for f in findings if f["rule"] != RU.NO_FINDINGS]
         if not any(f["rule"] == "processing_warnings" for f in findings):
             findings.append({"rule": "processing_warnings", "level": "control", "text": "no report was made",
                              "member": "", "substance": "", "cas": "", "rt": None, "value": None})

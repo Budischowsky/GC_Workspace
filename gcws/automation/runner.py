@@ -102,7 +102,6 @@ def job_spec(journal: J.Journal, wf: W.Workflow, job: J.Job, method: Callable[[s
             "method_node": m.id, "method": meth, "batch_folder": batch_folder, "source_folder": source_folder,
             "group": {"key": job.group_key, "name": job.group_name, "members": job.members or []},
             "blanks": job.blanks or {}, "reports": reports, "rules": rules,
-            "auto_accept": bool(review.p("auto_accept")) if review is not None else True,
             "has_review": review is not None, "out_dir": str(out_dir), "project_path": prev_project,
             "require_blank": blank_requirement(m, meth), "search": bool(m.p("search")),
             "istd_detect": bool(m.p("istd_detect")), "min_confidence": m.p("min_confidence") or "high",
@@ -146,12 +145,12 @@ def finish(journal: J.Journal, job_id: str, out_dir: Path, tail: str = "", timed
               "pid": None}
     if res.get("project"):
         fields["project_path"] = res["project"]
-    if job.is_batch and state == PL.ACCEPTED_AUTO:
-        # accepted when every sample with a report is accepted (samples not processed are only listed)
-        members = [m for m in (journal.job(j) for j in job.members or []) if m is not None]
-        reported = [m for m in members if m.state != J.NOT_PROCESSED]
-        accepted = bool(reported) and all(m.state in J.ACCEPTED for m in reported)
-        state = J.ACCEPTED_AUTO if accepted else J.CONTROL
+    if state == PL.ACCEPTED_AUTO:
+        # nothing is accepted by itself: the analyst checks and accepts every report, the batch report too
+        # (a job started by a program from before Oct 2026 may still say "accepted_auto")
+        state = J.CONTROL
+    if job.is_batch and state == J.CONTROL and not fields["reason"]:
+        fields["reason"] = "check the batch report and accept it"
     if state == PL.RETRY:
         attempts = int(job.attempts or 0) + 1
         if attempts <= len(BACKOFF_S):
@@ -166,7 +165,7 @@ def finish(journal: J.Journal, job_id: str, out_dir: Path, tail: str = "", timed
         old_keys = {tuple(k) for k in pending.get("findings") or []}
         new_keys = {J.finding_key(f) for f in fields["findings"] if f.get("level", "control") == "control"}
         missing = missing_sample_files(out_dir, fields["files"])
-        generated = (state in (J.CONTROL, J.ACCEPTED_AUTO) and bool(fields["files"])
+        generated = (state == J.CONTROL and bool(fields["files"])
                      and not (fields["evidence"] or {}).get("errors") and not missing)
         fields["review_pending"] = None
         if not generated:
@@ -185,15 +184,14 @@ def finish(journal: J.Journal, job_id: str, out_dir: Path, tail: str = "", timed
             journal.event("info", f"{job.group_name}: updated report made" +
                           (f" ({new} new finding(s))" if new else "") + "; it needs control", job_id=job.id,
                           workflow_id=job.workflow_id, batch_id=job.batch_id, user=pending.get("user") or "")
-    if state not in (J.CONTROL, J.ACCEPTED_AUTO, J.ACCEPTED_MANUAL, J.NOT_PROCESSED, J.FAILED):
+    if state not in (J.CONTROL, J.ACCEPTED_MANUAL, J.NOT_PROCESSED, J.FAILED):
         state = J.FAILED
-    if state in (J.CONTROL, J.ACCEPTED_AUTO) and not pending:
+    if state == J.CONTROL and not pending:
         fields["export_pending"] = 1
     journal.transition(job_id, J.PROCESSING, state, **fields)
-    text = {J.CONTROL: "control needed", J.ACCEPTED_AUTO: "accepted automatically",
-            J.ACCEPTED_MANUAL: "accepted by analyst",
+    text = {J.CONTROL: "control needed", J.ACCEPTED_MANUAL: "accepted by analyst",
             J.NOT_PROCESSED: "not processed", J.FAILED: "failed"}[state]
-    level = "info" if state in (J.ACCEPTED_AUTO, J.ACCEPTED_MANUAL, J.CONTROL) else "error"
+    level = "info" if state in (J.ACCEPTED_MANUAL, J.CONTROL) else "error"
     journal.event(level, f"{job.group_name}: {text}" + (f" - {res.get('reason')}" if res.get("reason") else ""),
                   job_id=job_id, workflow_id=job.workflow_id, batch_id=job.batch_id)
     return {"state": state, "retry": False, "reason": fields["reason"], "findings": fields["findings"]}

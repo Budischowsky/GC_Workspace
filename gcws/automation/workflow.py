@@ -54,9 +54,7 @@ FORMAT_SHORT = {"xlsx": "Excel", "docx": "Word", "pdf": "PDF", "dd": "DD", "batc
 
 #: report states an arrow can let through
 STATUS_FILTERS = {
-    "accepted": "Accepted (automatically or by the analyst)",
-    "accepted_auto": "Accepted automatically",
-    "accepted_manual": "Accepted by the analyst",
+    "accepted": "Accepted by the analyst",
     "control": "Control needed",
 }
 BLANK_REQUIREMENTS = {
@@ -75,7 +73,7 @@ DEFAULT_PARAMS = {
     "copy": {"folder": ""},
     "method": {"method": "", "search": True, "istd_detect": True, "min_confidence": "high",
                "require_blank": "auto", "timeout_min": 30},
-    "report2": {"rules": None, "auto_accept": True, "notify": True},
+    "report2": {"rules": None, "notify": True},
     "report": {"kind": "nias", "formats": ["xlsx", "docx"], "batch_when": "all_accepted", "keep_middle": False},
     "folder": {"path": "", "subfolder": "{batch}", "overwrite": "version", "allow_inside_source": False,
                "target": "path"},
@@ -423,8 +421,7 @@ def summary(node: Node) -> str:
     if t == "report2":
         rules = node.p("rules")
         n = len([r for r in rules if r.get("enabled")]) if isinstance(rules, list) else None
-        return ("default rules" if n is None else f"{n} rules") + \
-            ("" if node.p("auto_accept") else ", no automatic acceptance")
+        return ("default rules" if n is None else f"{n} rules") + "\nthe analyst accepts every report"
     if t == "report":
         return f"{REPORT_KINDS.get(node.p('kind'), node.p('kind'))}\n" + \
             ", ".join(FORMAT_SHORT.get(f, f) for f in node.p("formats") or [])

@@ -1,10 +1,10 @@
-"""Report² rules: when a processed report is accepted automatically and when the analyst must
-check it ("Control needed").
+"""Report² rules: what the analyst is pointed to when checking a processed report.
 
 A rule looks at the evidence of one processed sample (its determinations, ISTDs, blanks, the
 merged substance rows of the report, the report's own summary and warnings) and returns
-findings. A finding of level "control" sends the report to *Control needed*; level "info" is
-only listed. Without such a finding the report is accepted automatically.
+findings. A finding of level "control" is something to check; level "info" is only listed.
+Every report needs the analyst's acceptance (Oct 2026: nothing is accepted automatically); a
+report without a "control" finding says "No findings".
 """
 from __future__ import annotations
 
@@ -16,8 +16,11 @@ from typing import Optional
 from gcws.automation import store
 from gcws.quant import limits as QL
 
-ACCEPTED_AUTO = "accepted_auto"
+ACCEPTED_AUTO = "accepted_auto"               # journals from before Oct 2026 hold it; nothing sets it now
 CONTROL = "control"
+#: the finding of a report no rule found anything in (also the state of such a batch-report entry)
+NO_FINDINGS = "no_findings"
+NO_FINDINGS_TEXT = "No findings: no rule applies - check the report and accept it"
 
 #: rule id -> (title, description, enabled by default, default parameters)
 RULES = {
@@ -101,6 +104,11 @@ class Finding:
 class Evaluation:
     status: str
     findings: list[Finding]
+
+    @property
+    def clean(self) -> bool:
+        """No rule found anything to check (the report still needs the analyst's acceptance)."""
+        return not any(f.level == CONTROL for f in self.findings)
 
     def to_list(self) -> list[dict]:
         return [asdict(f) for f in self.findings]
@@ -407,14 +415,13 @@ CHECKS = {"manual_check": _manual_check, "sml_exceeded": _sml_exceeded,
           "double_determination": _double_determination, "deconvolution": _deconvolution}
 
 
-def evaluate(rules: list[Rule], evidence: dict, auto_accept: bool = True) -> Evaluation:
-    """Findings of all enabled rules and the resulting status."""
+def evaluate(rules: list[Rule], evidence: dict) -> Evaluation:
+    """Findings of all enabled rules. The status is always "control needed": the analyst checks and
+    accepts every report; without a finding to check, the report says so ("No findings")."""
     findings: list[Finding] = []
     for r in rules:
         if r.enabled and r.id in CHECKS:
             findings += CHECKS[r.id](r, evidence or {})
-    control = any(f.level == CONTROL for f in findings)
-    if not control and not auto_accept:
-        findings.append(Finding("auto_accept", CONTROL, "Automatic acceptance is switched off for this step"))
-        control = True
-    return Evaluation(CONTROL if control else ACCEPTED_AUTO, findings)
+    if not any(f.level == CONTROL for f in findings):
+        findings.append(Finding(NO_FINDINGS, "info", NO_FINDINGS_TEXT))
+    return Evaluation(CONTROL, findings)

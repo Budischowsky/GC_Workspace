@@ -49,7 +49,7 @@ def process(spec_path: str, kind: str = "job") -> int:
             from gcws.automation.batch import batch_report
             files, warnings = batch_report(spec["batch_name"], spec["entries"], out_dir, spec.get("formats") or [],
                                            pdf_timeout=float(spec.get("pdf_timeout", 180)))
-            result = PL.JobResult("accepted_auto", "", {spec["report_node"]: files}, warnings=warnings)
+            result = PL.JobResult(PL.CONTROL, "", {spec["report_node"]: files}, warnings=warnings)
         else:
             result = PL.run_job(spec, progress=log.info)
         code = EXIT_RETRY if result.state == PL.RETRY else EXIT_OK

@@ -820,7 +820,9 @@ class WatcherCore(QObject):
         if out is None or out["retry"]:
             return
         if out["state"] == J.CONTROL and not job.is_batch:
-            self.notify.emit("Report² - control needed", f"{job.group_name}: {len(out['findings'])} finding(s)")
+            n = sum(1 for f in out["findings"] if f.get("level", "control") == "control")
+            self.notify.emit("Report² - control needed",
+                             f"{job.group_name}: {n} finding(s)" if n else f"{job.group_name}: no findings")
         elif out["state"] == J.FAILED:
             self.notify.emit("Processing failed", f"{job.group_name}: {out['reason']}")
         self.deliver_pending()

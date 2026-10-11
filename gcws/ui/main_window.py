@@ -2231,7 +2231,7 @@ class MainWindow(QMainWindow):
         entries, files, warnings = result
         self.progress.hide()
         self.ws.log("Batch report", name, str(out_dir), "", f"{len(entries)} samples")
-        flagged = [e["name"] for e in entries if e.get("state") != "accepted_auto"]
+        flagged = [e["name"] for e in entries if e.get("state") not in ("no_findings", "accepted_auto")]
         lines = [f"Batch report of {name}: {len(entries)} sample(s) reported to", str(out_dir), ""]
         lines += [f"{Path(p).name}" for p in files.values()]
         if flagged:

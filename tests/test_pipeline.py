@@ -245,7 +245,7 @@ def test_single_determination_rule():
     assert res.status == RU.CONTROL and "one determination only" in res.findings[0].text
     ev = {"double_determination": {"members": ["a", "b"], "pairing": "features", "text": "a + b: 3 features"}}
     res = RU.evaluate(RU.default_rules(), ev)
-    assert res.status == RU.ACCEPTED_AUTO and res.findings[0].level == "info"
+    assert res.status == RU.CONTROL and res.clean and res.findings[0].level == "info"
 
 
 def test_template_report_in_the_automation(qapp, samples, data, tmp_path):
