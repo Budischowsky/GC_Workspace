@@ -3,33 +3,63 @@ from __future__ import annotations
 
 import traceback
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal as QtSignal
+from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal as QtSignal, Slot
 
 
-class WorkerSignals(QObject):
-    finished = QtSignal(object)
-    failed = QtSignal(str)
-    progress = QtSignal(str)
+class _Relay(QObject):
+    """One QObject for the whole app that carries every job's callbacks to the GUI thread.
+    A QObject per job was lost now and then while its job ran (PySide: "Signal source has
+    been deleted" at the final emit), and the report preview then spun for ever."""
+    call = QtSignal(object)
+
+    def __init__(self):
+        super().__init__()
+        self.call.connect(self._call)
+
+    @Slot(object)
+    def _call(self, fn):
+        fn()
+
+
+_RELAY: _Relay | None = None
+
+
+def _relay() -> _Relay:
+    """Created on first use, from the GUI thread (``submit`` runs there), and kept for good."""
+    global _RELAY
+    if _RELAY is None:
+        _RELAY = _Relay()
+    return _RELAY
 
 
 class Worker(QRunnable):
-    def __init__(self, fn, *args, **kwargs):
+    def __init__(self, fn, *args, on_done=None, on_error=None, on_progress=None, **kwargs):
         super().__init__()
         self.fn, self.args, self.kwargs = fn, args, kwargs
-        self.signals = WorkerSignals()
+        self.on_done, self.on_error, self.on_progress = on_done, on_error, on_progress
+        self.relay = _relay()
 
+    def _post(self, callback, value, last=False):
+        def deliver():
+            if last:
+                _RUNNING.discard(self)
+            if callback is not None:
+                callback(value)
+        self.relay.call.emit(deliver)
+
+    def progress(self, text):
+        self._post(self.on_progress, text)
 
     def run(self):
         try:
             result = self.fn(*self.args, **self.kwargs)
         except Exception as exc:  # noqa: BLE001 - reported to the GUI
-            self.signals.failed.emit(f"{exc}\n\n{traceback.format_exc(limit=4)}")
+            self._post(self.on_error, f"{exc}\n\n{traceback.format_exc(limit=4)}", last=True)
             return
-        self.signals.finished.emit(result)
+        self._post(self.on_done, result, last=True)
 
 
-#: running workers; the Python wrappers (and their signal objects) must stay
-#: alive until the job has reported back, or the result is silently lost
+#: running workers; kept until the job has reported back on the GUI thread
 _RUNNING: set = set()
 
 
@@ -39,20 +69,11 @@ def submit(fn, *args, on_done=None, on_error=None, on_progress=None, with_progre
     With ``with_progress`` the job gets a ``progress(text)`` keyword argument that
     is delivered to ``on_progress`` on the GUI thread.
     """
-    w = Worker(fn, *args, **kwargs)
+    w = Worker(fn, *args, on_done=on_done, on_error=on_error, on_progress=on_progress, **kwargs)
     if with_progress:
-        w.kwargs["progress"] = w.signals.progress.emit
+        w.kwargs["progress"] = w.progress
     w.setAutoDelete(False)
     _RUNNING.add(w)
-    release = lambda *_: _RUNNING.discard(w)
-    if on_done:
-        w.signals.finished.connect(on_done)
-    if on_error:
-        w.signals.failed.connect(on_error)
-    if on_progress:
-        w.signals.progress.connect(on_progress)
-    w.signals.finished.connect(release)
-    w.signals.failed.connect(release)
     QThreadPool.globalInstance().start(w)
     return w
 
