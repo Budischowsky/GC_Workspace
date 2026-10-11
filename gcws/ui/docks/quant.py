@@ -66,6 +66,13 @@ class QuantDock(QScrollArea):
         f.addRow("Unit", self.unit)
         f.addRow("Result unit", self.result_unit)
         f.addRow(self.mode_note)
+        self.single_only = QCheckBox("Single determination only")
+        self.single_only.setToolTip("Each sample is reported from one run: of a pair, A (_A / _1) is the reported "
+                                    "determination and B the control determination, processed and compared but "
+                                    "not in the report. A run without a replicate suffix is always a single "
+                                    "determination.")
+        self.single_only.toggled.connect(lambda on: None if self._loading else self.ws.set_single_only(on))
+        f.addRow(self.single_only)
         lay.addWidget(mode_box)
         from gcws.ui.docks.quant_method import QuantMethodPanel
         self.method_panel = QuantMethodPanel(ws, self)
@@ -208,6 +215,7 @@ class QuantDock(QScrollArea):
         self._loading = True
         q = self.ws.quant
         self.mode.setCurrentIndex(max(0, self.mode.findData(QM.of(q).key)))
+        self.single_only.setChecked(bool(q.get("single_only")))
         mode = QM.named(self.mode.currentData(), q)
         self.rrt_box.setVisible(mode.nias)
         hs = mode.hs

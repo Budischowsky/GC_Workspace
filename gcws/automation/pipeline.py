@@ -19,6 +19,7 @@ from typing import Callable, Optional
 
 from gcws.automation import rules as RU
 from gcws.automation import store
+from gcws.quant import determination as DT
 from gcws.quant import modes as QM
 
 log = logging.getLogger(__name__)
@@ -196,21 +197,24 @@ def run_job(spec: dict, *, progress: Callable[[str], None] = log.info,
                                   for c, k in res.best.items()}
             if any(found.values()):
                 ws.push_quant("Automation: ISTDs detected", ID.with_bindings(ws, found), "ISTD bindings")
-    ws.replicate_groups = [{"id": group.get("key") or "g", "name": group["name"], "members": members,
-                            "policy": group.get("policy", "all")}]
+    # a report again keeps the analyst's group (edits, the reported determination), else a new one
+    kept = next((g for g in ws.replicate_groups if sorted(g.get("members") or []) == sorted(members)), None)         if mode == "rereport" else None
+    ws.replicate_groups = [kept or {"id": group.get("key") or "g", "name": group["name"], "members": members,
+                                    "policy": group.get("policy", "all")}]
+    det = DT.of_workspace(ws, ws.replicate_groups[0])
     dd: dict = {"members": [ws.runs[m].name for m in members], "planned": list(group.get("members") or []),
-                "pairing": "single" if len(members) < 2 else ""}
+                "pairing": "" if det.compared else "single", **determination_evidence(ws, det)}
     ws.recompute_quant()
     # the feature double determination: gap fills and one name per substance, as the analyst's Compare
-    if len(members) >= 2 and mode != "rereport":
+    if det.compared and mode != "rereport":
         t1 = time.time()
         try:
-            dd = run_features(ws, members)
+            dd = dict(dd, **run_features(ws, members))
             if dd.get("note"):
                 warnings.append(dd["note"])
         except Exception as exc:  # noqa: BLE001 - reported as a finding, the reports are still made
             warnings.append(f"Double determination (features) failed: {exc}")
-            dd = {"members": [ws.runs[m].name for m in members], "pairing": "failed", "error": str(exc)}
+            dd = dict(dd, pairing="failed", error=str(exc))
         timings["features"] = round(time.time() - t1, 1)
     if detection:
         from gcws.quant import istd_detect as ID
@@ -316,6 +320,13 @@ def run_job(spec: dict, *, progress: Callable[[str], None] = log.info,
                      warnings + sample_warn + errors_ev, timings)
 
 
+def determination_evidence(ws, det: DT.Determination) -> dict:
+    """Which determination the job made, for the Report² rules: its kind, the reported and the control run."""
+    name = lambda rid: ws.runs[rid].name if rid in ws.runs else rid
+    return {"determination": det.kind, "reported": [name(m) for m in det.reported],
+            "control": name(det.control) if det.control else "", "determination_note": det.note}
+
+
 def run_features(ws, members: list) -> dict:
     """The double determination of an unattended job: pair the determinations by features, make
     the automatic changes (gap fills, names) and harmonise the boundaries (which the panel only
@@ -351,7 +362,7 @@ def run_features(ws, members: list) -> dict:
 def feature_evidence(ws, members: list) -> list[dict]:
     """The feature rows of the determinations (all of them, also those not reported) for Report²."""
     from gcws.quant import duplicate_view as DV
-    if len(members) < 2 or DV.features_table(ws, members) is None:
+    if not DT.of_workspace(ws, {"members": members}).compared or DV.features_table(ws, members) is None:
         return []
     rows, _problems = DV.compute(ws, members, "all")
     out = []

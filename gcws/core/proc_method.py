@@ -38,7 +38,8 @@ SECTIONS = {
     "table": "Peak table (columns, value filter)",
 }
 QUANT_KEYS = ("mode", "unit", "istd_conc_value", "settings", "istd_defs", "istd_options", "solvent_cut", "hs",
-              "ms_solvent", "rrt_reference", "detector", "istd_refs", "istd_detect", "method")
+              "ms_solvent", "rrt_reference", "detector", "istd_refs", "istd_detect", "method",
+              "single_only")
 #: sections that live in ``ws.quant`` under one key
 QUANT_SECTIONS = {"blank": "blank_sub", "deconv": "deconv", "ri": "ri", "migration": "migration",
                   "features": "features", "report_template": "report_template", "learned_rules": "learned_rules"}

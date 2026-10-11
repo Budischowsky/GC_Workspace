@@ -173,3 +173,20 @@ def test_find_for_the_bound_report_or_the_newest_pair_of_this_project(tmp_path):
     s.bind(other.id, 1, tmp_path / "other.gcws", {})
     assert s.find_for(path, ["A.D", "B.D"]).id == other.id    # bound: that report, wherever the project is
     assert s.find_for(path, ["A.D", "C.D"]) is None
+
+
+def test_find_for_a_single_determination_of_this_project(tmp_path):
+    jr, single, path = _report(tmp_path, members=("A.D",), key="single")
+    s = _session(jr)
+    assert s.find_for(path, ["a.d"]).id == single.id and s.find_for(path, ["A.D", "B.D"]) is None
+    assert s.find_for(path, []) is None
+
+
+def test_switching_the_reported_determination_is_a_report_change(tmp_path, monkeypatch):
+    """Issue 05: another reported run of a single determination pair sends the report back to control."""
+    jr, job, path = _report(tmp_path)
+    s = _session(jr)
+    s.bind(job.id, 1, path, {"replicate_groups": [{"id": "g", "members": ["a", "b"]}]})
+    _project(monkeypatch, {"replicate_groups": [{"id": "g", "members": ["a", "b"], "reported": "b"}]})
+    assert s.save(SimpleNamespace(dirty=False, project_path=path))
+    assert jr.job(job.id).state == J.CONTROL and jr.job(job.id).edited == 1

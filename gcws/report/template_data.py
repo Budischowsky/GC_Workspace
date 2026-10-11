@@ -12,6 +12,7 @@ import datetime as _dt
 from dataclasses import dataclass, field
 from typing import Optional
 
+from gcws.quant import determination as DT
 from gcws.quant import modes as QM
 from gcws.report import catalog as C
 from gcws.report import service as RS
@@ -153,7 +154,7 @@ def header_values(ws, members, group, names, *, method_name="", template_name=""
         sample = str(((getattr(s, "meta", None) or {}).get("sample")) or first.run.path.stem)
     blanks = [ws.runs[b].name for m in members if m in ws.runs
               for b in ws.runs[m].blanks + ws.runs[m].blanks_istd if b in ws.runs]
-    det = "single determination" if n == 1 else "double determination" if n == 2 else f"{n}-fold determination"
+    det = DT.of_workspace(ws, dict(group or {}, members=list(members))).label
     return {
         "sample": sample, "samples": "; ".join(names), "group": (group or {}).get("name") or "; ".join(names),
         "determination": det, "n": str(n), "analyst": analyst, "operator": "",

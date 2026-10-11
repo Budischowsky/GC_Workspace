@@ -1154,3 +1154,100 @@ def test_a_change_seen_while_the_journal_was_busy_is_shown_at_the_next_poll(qtbo
     dock._poll()
     assert refreshed
     other.close()
+
+
+def test_single_determination_by_hand_is_accepted_and_listed_in_report2(qtbot, win, samples, tmp_path,
+                                                                        monkeypatch):
+    """"— single determination —" as partner B takes A out of its pair (undoable); Accept single
+    determination signs it off without a comparison and lists it in Report² with an SD info line."""
+    from gcws.automation import journal as J
+    from gcws.automation import manual as MA
+    from gcws.automation import store
+    from gcws.quant import determination as DT
+    from gcws.report import service as RS
+    from test_pipeline import MIGRATION, lib_oracle
+    _load(qtbot, win, samples, ["07_", "08_", "11_"])
+    ws = win.ws
+    lib_oracle(ws, [s.id for s in ws.states() if s.role == "sample"])
+    ws.quant["migration"] = dict(MIGRATION)
+    ws.recompute_quant()
+    a = next(s.id for s in ws.states() if s.name.startswith("07_"))
+    b = next(s.id for s in ws.states() if s.name.startswith("11_"))
+    jr = J.Journal(tmp_path / "journal.sqlite")
+    win.report2._journal = jr
+    monkeypatch.setattr(store, "jobs_dir", lambda: tmp_path / "jobs")
+    monkeypatch.setattr(RS, "docx_to_pdf", _no_word)
+    win.loaded_samples.pairRequested.emit(a, b)
+    page = win.replicates.duplicate
+    assert page.b_accept.text() == "Accept double determination"
+    pair_name = page.group()["name"]
+    # B: "— single determination —" (a suffixed run, taken out of its pair)
+    page._select(page.b, "")
+    page._b_picked()
+    g = page.group()
+    assert g["members"] == [a] and g["single"] and g["name"] == pair_name
+    assert not any(b in x["members"] for x in ws.replicate_groups)          # B stays unused
+    assert page.determination().kind == DT.SINGLE and "accept it" in page.banner.text()
+    from gcws.quant import duplicate_view as DV
+    lights = {DV.light_of(r, v) for r, v in zip(page.rows, page.verdicts)}
+    assert "green" in lights and lights <= {"green", "yellow", "red", "grey"}    # coloured by substance
+    assert page.b_accept.text() == "Accept single determination" and page.b_accept.isEnabled()
+    assert any(r.action == "Single determination made by hand" for r in ws.audit.records)
+    page._stack().undo()                                                     # the pair again
+    assert any(x["members"] == [a, b] and not x.get("single") for x in ws.replicate_groups)
+    page._stack().redo()
+    said = []
+    ws.message.connect(said.append)
+    page.b_accept.click()
+    qtbot.waitUntil(lambda: any("listed in Report²" in t and "not listed" not in t for t in said), timeout=240000)
+    g = page.group()
+    assert g["signoff"]["by"] and page.b_accept.text().startswith("Accepted by")
+    assert any(r.action == "Single determination accepted" for r in ws.audit.records)
+    (job,) = jr.jobs(include_batch=False)
+    assert MA.is_manual(job) and job.state == J.ACCEPTED_MANUAL and job.members == [ws.runs[a].run.path.name]
+    assert job.evidence["double_determination"]["determination"] == DT.SINGLE
+    import openpyxl
+    book = openpyxl.load_workbook(job.files[MA.MANUAL]["xlsx"], read_only=True)
+    assert any("single determination" in str(v) for sh in book.worksheets for row in sh.iter_rows(values_only=True)
+               for v in row if v)                                            # the report says so
+    assert any(f["rule"] == "double_determination" and f["level"] == "info" and f["text"] == "single determination"
+               for f in job.findings)
+    page._stack().undo()                                                     # the sign-off undone
+    assert not page.group().get("signoff")
+    ws.dirty = False
+
+
+def test_switching_the_reported_determination_in_replicates(qtbot, win, samples):
+    """Issue 05: under Single determination only the Replicates panel marks the reported and the control
+    determination; Switch reported determination reports B (undoable, in the audit trail, stales an accept)."""
+    from gcws.quant import double_determination as DD
+    from test_pipeline import MIGRATION, lib_oracle
+    _load(qtbot, win, samples, ["07_", "08_", "11_"])
+    ws = win.ws
+    lib_oracle(ws, [s.id for s in ws.states() if s.role == "sample"])
+    ws.quant["migration"] = dict(MIGRATION)
+    ws.quant["single_only"] = True
+    ws.recompute_quant()
+    a = next(s.id for s in ws.states() if s.name.startswith("07_"))
+    b = next(s.id for s in ws.states() if s.name.startswith("11_"))
+    win.loaded_samples.pairRequested.emit(a, b)
+    page = win.replicates.duplicate
+    assert page.determination().reported == (a,) and page.determination().control == b
+    assert not page.b_switch.isHidden() and not page.reported_note.isHidden()
+    assert page.reported_note.text().startswith(f"Reported: {ws.runs[a].name}")
+    g = page.group()
+    ws.replicate_groups = DD.accept(ws.replicate_groups, g["id"], "anna", "2026-10-11T12:00:00", 0)
+    page.b_switch.click()
+    assert page.determination().reported == (b,) and page.determination().control == a
+    assert page.group()["reported"] == b and page.group()["signoff"]["stale"]
+    assert page.reported_note.text().startswith(f"Reported: {ws.runs[b].name}")
+    assert page.b_accept.text() == "Accept again"
+    rec = next(r for r in ws.audit.records if r.action == "Reported determination switched")
+    assert (rec.before, rec.after) == (ws.runs[a].name, ws.runs[b].name)
+    page._stack().undo()
+    assert page.determination().reported == (a,)
+    ws.quant["single_only"] = False
+    ws.quantChanged.emit()
+    page._update_accept()
+    assert page.b_switch.isHidden()                                          # a double determination: both reported
+    ws.dirty = False

@@ -179,3 +179,30 @@ def test_edits_are_kept_per_unit_for_the_extraction_method():
     assert DV.edits_key({"mode": "extraction"}, "mg/kg") == "extraction_edits:mg/kg"
     assert DV.edits_key({"mode": "hs_screening"}, "µg/HS") == "hs_edits:µg/HS"
     assert DV.edits_key({"mode": "nias_mgkg"}, "mg/kg") == "edits"
+
+
+def test_single_determination_only_checkbox(qtbot, tmp_path, monkeypatch):
+    """Issue 03: the checkbox sets the method's single_only (undoable, saved with the method), and an
+    accepted pair becomes stale."""
+    from pathlib import Path
+    from gcws import paths
+    from gcws.core import proc_method as PM
+    from gcws.quant import double_determination as DD
+    from gcws.ui.docks.quant import QuantDock
+    from gcws.ui.workspace import Workspace
+    monkeypatch.setattr(paths, "DATA", tmp_path)
+    ws = Workspace()
+    dock = QuantDock(ws)
+    qtbot.addWidget(dock)
+    run = lambda name: SimpleNamespace(run=SimpleNamespace(path=Path(name)))
+    monkeypatch.setattr(ws, "runs", {"a": run("07_x_A.D"), "b": run("11_x_B.D")})
+    ws.replicate_groups = [{"id": "g", "name": "x", "members": ["a", "b"], "signoff": {"by": "anna", "at": "t"}}]
+    assert not dock.single_only.isChecked() and not ws.quant.get("single_only")
+    dock.single_only.setChecked(True)
+    assert ws.quant["single_only"] is True and not DD.is_accepted(ws.replicate_groups[0])
+    ws.project_undo.undo()                                     # one step: the flag and the sign-off
+    assert not ws.quant.get("single_only") and DD.is_accepted(ws.replicate_groups[0])
+    assert not dock.single_only.isChecked()
+    method = {"sections": {"quant": {"mode": "nias_mgkg", "single_only": True}}}
+    assert PM.plan_quant({}, method, ["quant"])["single_only"] is True
+    assert "single_only" in PM.QUANT_KEYS

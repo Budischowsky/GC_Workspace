@@ -1796,17 +1796,20 @@ class MainWindow(QMainWindow):
         from gcws.automation import pipeline as PL
         from gcws.automation import store
         from gcws.automation.workflow import new_id
+        from gcws.quant import determination as DT
         from gcws.report import assemble as AS
         from gcws.report import service as RS
         members = [m for m in g["members"] if m in self.ws.runs]
-        if len(members) != 2:
+        if len(members) not in (1, 2):
             return False
         name, hide = g["name"], None
+        det = DT.of_workspace(self.ws, g)
+        what = det.label.capitalize()
         kind = RS.default_kind(self.ws.quant)
         try:
             mem, samples = AS.prepare(self.ws, kind, g)
         except AS.ReportNotPossible as exc:
-            self.ws.message.emit(f"Double determination {name} accepted in the project; not listed in Report²: "
+            self.ws.message.emit(f"{what} {name} accepted in the project; not listed in Report²: "
                                  f"{exc.message.splitlines()[0]} Then accept it again.")
             return False
         try:
@@ -1822,7 +1825,7 @@ class MainWindow(QMainWindow):
                                                MA.free_name(jr, batch["id"], name),
                                                lambda text: MA.clash(jr, batch["id"], text) is not None)
                     if choice is None:
-                        self.ws.message.emit(f"Double determination {name} accepted in the project; not listed "
+                        self.ws.message.emit(f"{what} {name} accepted in the project; not listed "
                                              "in Report² (the name is listed already).")
                         return False
                     if choice[0] == "rename":
@@ -1835,7 +1838,7 @@ class MainWindow(QMainWindow):
                 if entry is None:
                     entry = MA.entry(jr, batch["id"], name)    # deleted once under this name: used again
         except Exception as exc:  # noqa: BLE001 - no journal: the acceptance stays in the project
-            self.ws.message.emit(f"Double determination {name} accepted in the project; Report² is not "
+            self.ws.message.emit(f"{what} {name} accepted in the project; Report² is not "
                                  f"available ({exc}).")
             return False
         jid = entry.id if entry is not None else new_id("j")
@@ -1847,6 +1850,8 @@ class MainWindow(QMainWindow):
         rjob = AS.build_job(self.ws, kind, g, out / f"{stem}{RS.SUFFIXES[kind]}.xlsx", members=mem,
                             samples=samples, record_seen=False, batch_workbook=True)
         evidence = PL.evidence_for(self.ws, mem, kind=kind)
+        evidence["double_determination"] = {"members": [self.ws.runs[m].name for m in members],
+                                            **PL.determination_evidence(self.ws, det)}
         names = [self.ws.runs[m].run.path.name for m in mem]
         own = bool(self.ws.project_path) and Path(self.ws.project_path) == project
         before = self.ws.automation

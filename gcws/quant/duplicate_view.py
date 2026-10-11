@@ -70,7 +70,10 @@ def _fmt(v, digits=4):
     return "-" if v is None else f"{v:.{digits}g}"
 
 
-def plain_verdict(row: dict, limit: float, reporting_limit: float = 0.0, labels=("A", "B"), unit: str = "") -> Verdict:
+def plain_verdict(row: dict, limit: float, reporting_limit: float = 0.0, labels=("A", "B"), unit: str = "",
+                  flags: str = "") -> Verdict:
+    """The verdict of a row; ``flags``: the substance's flags (:mod:`gcws.quant.substance_flags`), which colour
+    a single determination's row yellow."""
     if row.get("light"):
         # the feature double determination has judged the row already (gcws.features.triage)
         from gcws.features.triage import LEVEL
@@ -84,7 +87,7 @@ def plain_verdict(row: dict, limit: float, reporting_limit: float = 0.0, labels=
     note = " Also found in the blank." if blank else ""
     s1, s2 = row.get("source1"), row.get("source2")
     if status.startswith("Einzelbestimmung"):
-        return Verdict("neutral", "Single determination", "Only one determination in this group." + note)
+        return single_verdict(row, reporting_limit, unit, flags, note)
     if status.startswith("Identification conflict"):
         n1 = (s1 or {}).get("name", "?")
         n2 = (s2 or {}).get("name", "?")
@@ -113,6 +116,24 @@ def plain_verdict(row: dict, limit: float, reporting_limit: float = 0.0, labels=
                        "Found in both determinations; identification to review." + note)
     return Verdict("ok", "Confirmed" + (" (in blank)" if blank else ""),
                    (f"Difference {rd:.1f} % (limit {limit:g} %)." if rd is not None else "Found in both.") + note)
+
+
+def single_verdict(row: dict, reporting_limit: float = 0.0, unit: str = "", flags: str = "",
+                   note: str = "") -> Verdict:
+    """A row of a single determination (nothing to compare): grey below the reporting limit, red an unknown
+    (no library hit), yellow a flagged substance (new to the lab, elements other than CHON), else green."""
+    import gc_duplicate as GD
+    from gc_model import is_no_hit
+    if reporting_limit and GD.below_limit(GD.DuplicateRow(row), reporting_limit):
+        return Verdict("neutral", "Below reporting limit",
+                       f"{_fmt(row.get('mean') if row.get('mean') is not None else row.get('c1'))} {unit} is below "
+                       f"the reporting limit {reporting_limit:g}." + note)
+    if (row.get("id_status") or "") == "Unknown" or is_no_hit(row.get("name")):
+        return Verdict("bad", "Unknown", "Single determination: no library identification. Identify it or decide "
+                       "whether it is reported." + note)
+    if flags:
+        return Verdict("warn", f"Flagged: {flags}", "Single determination: check this substance." + note)
+    return Verdict("ok", "Single determination", "Only one determination in this group." + note)
 
 
 #: verdict level -> traffic light, so the classic pairing gets the colours of the feature pairing

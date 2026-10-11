@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+from gcws.quant import determination as DT
 from gcws.quant import modes as QM
 from gcws.report import service as RS
 
@@ -51,7 +52,8 @@ def prepare(ws, kind: str, group: Optional[dict], *, recompute: bool = True,
                                     "Method > Report template....", "information")
     if recompute:
         ws.recompute_quant()
-    members = report_order(ws, group)
+    reported = DT.of_workspace(ws, group).reported
+    members = [m for m in report_order(ws, group) if m in reported]
     samples = [ws.nias_sample(m) for m in members]
     if hs:
         errors = [ws.quant_result.errors[m] for m in members if m in ws.quant_result.errors]
@@ -138,7 +140,7 @@ def feature_table(ws, members: list[str], group: dict):
     Only what is already applied counts; library searches are not started here (cached only)."""
     from gcws.features import service as SV
     from gcws.features.model import PAIRING_FEATURES
-    if len(members) < 2 or SV.pairing(ws) != PAIRING_FEATURES:
+    if DT.of_workspace(ws, dict(group or {}, members=members)).kind != DT.DOUBLE             or SV.pairing(ws) != PAIRING_FEATURES:
         return None
     return SV.build(ws, members, group, search=False)
 

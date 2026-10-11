@@ -1,5 +1,6 @@
 """The double determination's group changes (gcws.quant.double_determination): no GUI, no workspace."""
 import copy
+import pytest
 
 from gcws.quant import double_determination as DD
 
@@ -73,3 +74,81 @@ def test_pair_takes_the_runs_from_other_pairs_and_singles():
     assert next(g for g in out if g["id"] == "g2")["members"] == ["c", "d"]
     out = DD.pair([], ["x", "y"], "fresh")
     assert out[0]["name"] == "fresh" and out[0]["members"] == ["x", "y"] and out[0]["policy"] == "all"
+
+
+def test_make_single_takes_a_run_out_of_its_pair():
+    gs = DD.make_single(groups(), "a", "a alone")
+    (g,) = [g for g in gs if "a" in g["members"]]
+    assert g["id"] == "g1" and g["members"] == ["a"] and g["single"] is True
+    assert g["signoff"]["stale"] and g["signoff"]["by"] == "anna"         # what was accepted changed
+    assert not any("b" in g["members"] for g in gs)                         # B stays unused
+
+
+def test_make_single_of_a_lone_run_and_accepting_it():
+    gs = DD.make_single(groups(), "d", "d")
+    (g,) = [g for g in gs if g["members"] == ["d"]]
+    assert g["name"] == "d" and g["single"] is True and not g.get("signoff")
+    gs = DD.accept(gs, g["id"], "bob", AT, 0)
+    assert DD.is_accepted(next(x for x in gs if x["id"] == g["id"]))
+    again = DD.make_single(gs, "d", "d")                                    # already single: nothing changes
+    assert DD.is_accepted(next(x for x in again if x["id"] == g["id"]))
+
+
+def test_pairing_a_single_determination_again_is_no_longer_single():
+    gs = DD.pair(DD.make_single(groups(), "a", "a"), ["a", "b"], "pair")
+    assert g1(gs)["members"] == ["a", "b"] and "single" not in g1(gs)
+
+
+# -- single determination only (issue 03) ----------------------------------------------------------
+
+NAMES = {"a": "07_x_A.D", "b": "11_x_B.D", "c": "09_sample.D"}
+SD = {"single_only": True}
+
+
+def test_single_determination_only_reports_a_and_keeps_b_as_control():
+    from gcws.quant import determination as DT
+    det = DT.of(SD, {"members": ["b", "a"]}, NAMES)
+    assert (det.kind, det.reported, det.control, det.label) == (DT.SINGLE, ("a",), "b", "single determination")
+    assert det.compared                                         # B is still processed and compared
+    # _1 / _2, and without A / 1 the first by injection
+    assert DT.of(SD, {"members": ["y", "x"]}, {"x": "03_s_1.D", "y": "05_s_2.D"}).reported == ("x",)
+    assert DT.of(SD, {"members": ["y", "x"]}, {"x": "03_s.D", "y": "05_s.D"}).reported == ("x",)
+    # a lone run with a suffix is a single determination, not an incomplete double determination
+    assert DT.of(SD, {"members": ["a"]}, NAMES).kind == DT.SINGLE
+    # flag off: unchanged
+    off = DT.of({}, {"members": ["a", "b"]}, NAMES)
+    assert (off.kind, off.reported, off.control) == (DT.DOUBLE, ("a", "b"), None)
+    assert DT.of({}, {"members": ["a"]}, NAMES).kind == DT.INCOMPLETE
+
+
+def test_toggling_single_determination_only_stales_an_accepted_pair():
+    gs = groups()
+    on = DD.method_changed(gs, {}, SD, NAMES)
+    assert g1(on)["signoff"]["stale"] and g1(on)["signoff"]["by"] == "anna"
+    assert not next(g for g in on if g["id"] == "g2").get("signoff")
+    accepted = DD.accept(on, "g1", "bob", AT, 0)
+    assert g1(DD.method_changed(accepted, SD, {}, NAMES))["signoff"]["stale"]
+    # a run without a suffix is a single determination either way: nothing changes, the acceptance holds
+    lone = [{"id": "g2", "name": "single", "members": ["c"], "signoff": {"by": "anna", "at": AT, "open": 0}}]
+    assert DD.is_accepted(DD.method_changed(lone, {}, SD, NAMES)[0])
+    assert gs == groups()                                        # the list passed in is untouched
+
+
+def test_switching_the_reported_determination_of_a_single_determination_pair():
+    """Issue 05: the analyst reports B instead of A; the choice is kept with the group and stales an acceptance."""
+    from gcws.quant import determination as DT
+    pair_ab = {"id": "g1", "name": "x", "members": ["a", "b"]}
+    assert DT.of(SD, pair_ab, NAMES).reported == ("a",)                     # the default: A
+    gs = DD.set_reported(groups(), "g1", "b")
+    assert g1(gs)["reported"] == "b" and g1(gs)["signoff"]["stale"] and g1(gs)["signoff"]["by"] == "anna"
+    assert (DT.of(SD, g1(gs), NAMES).reported, DT.of(SD, g1(gs), NAMES).control) == (("b",), "a")
+    assert DT.of({}, g1(gs), NAMES).reported == ("a", "b")                  # flag off: both reported
+    accepted = DD.accept(gs, "g1", "bob", AT, 0)
+    assert DD.is_accepted(g1(DD.set_reported(accepted, "g1", "b")))          # the same run again: no change
+    assert g1(DD.set_reported(accepted, "g1", "a"))["signoff"]["stale"]
+    with pytest.raises(ValueError):
+        DD.set_reported(gs, "g1", "c")
+    # other members: the choice no longer applies
+    assert "reported" not in g1(DD.set_members(gs, "g1", ["a", "c"]))
+    assert "reported" not in g1(DD.pair(gs, ["a", "c"], "new"))
+    assert groups() == groups() and "reported" not in g1(groups())

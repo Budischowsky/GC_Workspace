@@ -826,6 +826,30 @@ class Workspace:
         stack.push(ValueCommand(text, lambda: self.quant, setter, new_quant,
                                 lambda t, o, n: self.log(t, "", detail)))
 
+    def set_single_only(self, on: bool) -> None:
+        """Tick or clear the method's **Single determination only** as one undoable step: it changes what an
+        accepted replicate group means, so such a group becomes stale ("Accept again")."""
+        import copy
+        from gcws.core.undo import ValueCommand
+        from gcws.quant import double_determination as DD
+        if bool(self.quant.get("single_only")) == bool(on):
+            return
+        q = copy.deepcopy(self.quant)
+        q["single_only"] = bool(on)
+        names = {rid: st.run.path.name for rid, st in self.runs.items()}
+        groups = DD.method_changed(self.replicate_groups, self.quant, q, names)
+        text = "single determination only " + ("on" if on else "off")
+        stack = self.undo_group.activeStack() or self.project_undo
+        stack.beginMacro(text)
+        self.push_quant(text, q)
+        if groups != self.replicate_groups:
+            def setter(v):
+                self.replicate_groups = copy.deepcopy(v)
+                self.replicatesChanged.emit()
+            stack.push(ValueCommand(text, lambda: self.replicate_groups, setter, groups,
+                                    lambda t, o, n: self.log(t, "", "replicate groups: accepted groups stale")))
+        stack.endMacro()
+
     def _quant_settings_changed(self, old: dict, new: dict) -> None:
         """Sub-settings that feed derived data: only what changed is invalidated."""
         hs_changed = QM.of(old).hs != QM.of(new).hs

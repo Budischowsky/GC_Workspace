@@ -167,13 +167,13 @@ class EditSession:
     # -- which report -----------------------------------------------------------------------------------------
 
     def find_for(self, project_path, names: list) -> Optional[J.Job]:
-        """The Report² report of a double determination of the runs ``names`` (run file names): the bound
+        """The Report² report of a single or double determination of the runs ``names`` (run file names): the bound
         one when it has these runs, else (nothing bound) the newest live pair processed into this project
         file, else None."""
         if self.bound is not None:
             job = self.job()
             return job if same_members(job, names) else None
-        if not project_path or len(names) != 2:
+        if not project_path or not names:
             return None
         try:
             here = Path(project_path).resolve()

@@ -156,6 +156,83 @@ also in the **Report** menu.
 in [How the double determination works](double-determination.md#settings). **Pairing: Classic** switches back
 to the pairing by name and retention time of earlier versions.
 
+## Single determination
+
+A sample can also be reported from one run: a **single determination**.
+
+- A run **without a replicate suffix** (`_A`/`_B`, `_1`/`_2`, `rep1`) is always a single determination. Its
+  report looks like a double determination's - the same layout and header - with one value column, and is
+  labelled *single determination* (the template field `{determination}` too). A batch report lists single
+  and double determinations together.
+- A run **with** a suffix whose partner never came (an `_A` without its `_B`) is an **incomplete double
+  determination**: it is processed and reported alone, but Report² flags it with **Double determination
+  incomplete** so that the missing run is noticed.
+
+In Report² a single determination gets the information line *single determination* and is not flagged as
+incomplete.
+
+On the double determination page a single determination has nothing to compare, so its rows are coloured by
+the substance instead:
+
+| Colour | Meaning |
+|--------|---------|
+| Grey | Below the reporting limit (not reported by default) |
+| Red | An unknown: no library identification. Identify it or decide whether it is reported |
+| Yellow | A flagged substance (the **Flags** column: new to the lab, elements other than C, H, O, N) |
+| Green | Everything else |
+
+The chips count and filter these colours as for a pair. A pair under **Single determination only** keeps the
+colours of its comparison.
+
+### Making a single determination by hand
+
+Any sample run can be reported alone, without changing the method: choose it as **A** and pick
+**— single determination —** as **B**. When the run was part of a pair it is taken out of it (the group keeps
+its name, the other run stays unused); `Ctrl+Z` makes the pair again. A run with a suffix made single this
+way is a single determination, not an incomplete double determination. The audit trail notes *Single
+determination made by hand*.
+
+The button below the list then reads **Accept single determination**. It needs no comparison - the run only
+has to be loaded and quantified. It signs off the single determination just as **Accept double
+determination** signs off a pair: your name, the time, the audit trail (*Single determination accepted*) and
+`Ctrl+Z`. A single determination a workflow processed is accepted in Report² too; one you made yourself is
+**listed in Report²** with its report, labelled *single determination* (**Rename…** / **Overwrite** when the
+name is taken). Accepting an incomplete double determination this way makes it a single determination.
+
+### Single determination only
+
+Some methods report every sample from one run, and B is injected only as a control. Tick **Single
+determination only** in the Quantification panel (it is saved with the processing method, so automation and
+every project using the method follow it). Then:
+
+- both runs of a pair are processed (integration, identification, internal standards, blanks,
+  quantification) and compared on the double determination page as usual;
+- A (`_A` / `_1`, otherwise the first by injection) is the **reported determination**: only its values go into
+  the report, which is labelled *single determination*;
+- B is the **control determination**: it stays in the project and the audit trail, but not in the report;
+- a lone `_A` is a single determination too, not an incomplete double determination.
+
+Automation still waits for B, so the comparison is ready when you open the sample. When the batch is
+finished (the sequence log ended, or the folder was quiet) and B never came, A is reported as a single
+determination without an *incomplete* flag. When only B came, B is reported and Report² shows the information
+line *A missing, B reported*.
+
+In Report² the information line names the control determination. Red substances of the comparison
+(**Double determination: substances to decide**) are only information, because B is only a control; tick
+**Control needed also in a single determination** in that rule to have them checked anyway. Ticking or
+clearing the box changes what an accepted double determination means: it has to be accepted again.
+
+### Switching the reported determination
+
+With **Single determination only** the Replicates panel shows, next to **A** and **B**, which run is reported
+and which is the control (*Reported: … · control: …*). When the control is the better run - A was
+mis-injected, for example - click **Switch reported determination**: the other run goes into the report and the
+first one becomes the control. The choice is saved with the pair in the project; `Ctrl+Z` takes it back, and the
+audit trail notes *Reported determination switched* with the run reported before and after. A pair accepted
+before has to be accepted again (**Accept again**). In a report opened with **Edit in GC Workspace** the switch
+is a change of the report: saving sends it back to control in Report² with a new revision, and **Update
+report** makes it from the run you chose.
+
 ## Three or more determinations
 
 Select a group of three or more in the list **Determinations** on the left: its worksheet shows the means.

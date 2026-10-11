@@ -6853,9 +6853,11 @@ def process_workbook(
     target_ws.title = "NIAS Result"
     target_ws.sheet_view.showGridLines = False
     if duplicate_mode:
+        # GCWS-PATCH: a Doppelbestimmung sheet written from one determination (its second columns hidden)
+        # is labelled single determination too, like an Einzelbestimmung workbook
         copy_duplicate_report_metadata(
             workbook, target_ws, 9 if include_traffic_light_summary else 8,
-            single=single_mode,
+            single=single_mode or _is_single_determination_sheet(source_ws),
         )
     else:
         copy_report_metadata(

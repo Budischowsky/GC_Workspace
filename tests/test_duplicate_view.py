@@ -23,13 +23,31 @@ def row(status, c1=None, c2=None, mean=None, reldiff=None, id_status="Accepted",
      "Identifications differ"),
     (row("Artefact: only determination 1", 1.0, s2=False), "bad", "Only in A"),
     (row("Artefact: only determination 2, also in Blank", None, 1.0, s1=False), "bad", "Only in B"),
-    (row("Einzelbestimmung", 1.0, None, 1.0), "neutral", "Single determination"),
+    (row("Einzelbestimmung", 1.0, None, 1.0), "ok", "Single determination"),
     (row("Valid duplicate", None, None, None, None), "info", "Confirmed, no concentration"),
 ])
 def test_plain_verdict(r, level, text):
     v = DV.plain_verdict(r, 30.0, 0.01, ("A", "B"), "mg/kg")
     assert v.level == level and v.text == text
     assert v.detail
+
+
+def test_single_determination_rows_are_grey_red_yellow_green():
+    """A single determination: grey below the reporting limit, red an unknown, yellow a flagged substance,
+    green the rest."""
+    def light(r, flags=""):
+        return DV.LIGHT_OF_LEVEL[DV.plain_verdict(r, 30.0, 0.01, ("A", "B"), "mg/kg", flags).level]
+    sd = lambda **kw: dict(row("Einzelbestimmung", 1.0, None, 1.0, s2=False), **kw)
+    assert light(sd()) == "green"
+    assert light(sd(c1=0.001, mean=0.001)) == "grey"
+    assert light(sd(c1=0.001, mean=0.001, name="Unknown (m/z 57)")) == "grey"     # below the limit first
+    assert light(sd(name="Unknown (m/z 57)")) == "red"
+    assert light(sd(id_status="Unknown")) == "red"
+    assert light(sd(), "new · Si") == "yellow"
+    assert DV.plain_verdict(sd(), 30.0, 0.01, flags="new").text == "Flagged: new"
+    assert light(sd(name="Unknown"), "new") == "red"                              # an unknown before a flag
+    # a pair is not coloured by the flags
+    assert light(row("Valid duplicate", 1.0, 1.1, 1.05, 9.5), "new") == "green"
 
 
 def test_blank_suffix_reaches_detail():

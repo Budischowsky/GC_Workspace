@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Optional
 
 from gcws.automation import store
+from gcws.quant import determination as DT
 from gcws.quant import limits as QL
 
 ACCEPTED_AUTO = "accepted_auto"
@@ -51,12 +52,15 @@ RULES = {
                        "The feature double determination marked a substance red: found in one determination only "
                        "and not detectable in the other, different spectra at the same retention time, integrated "
                        "as one peak here and two there, or a difference above 1.5 x the limit. Yellow substances "
-                       "(made consistent automatically: gap fill, name from both hit lists) can be listed too.",
-                       True, {"yellow": False}),
+                       "(made consistent automatically: gap fill, name from both hit lists) can be listed too. In a "
+                       "single determination (Single determination only) the red substances are information, unless "
+                       "they are set to need control there too.",
+                       True, {"yellow": False, "single_control": False}),
     "double_determination": ("Double determination incomplete",
-                             "The sample has one determination only, or its determinations could not be paired "
-                             "(feature double determination failed). What the automation did (pairing, gap fills, "
-                             "names, harmonised boundaries) is listed as information.",
+                             "A run with a replicate suffix has no partner (an incomplete double determination), or "
+                             "the determinations could not be paired (feature double determination failed). A "
+                             "single determination is listed as information, and so is what the automation did "
+                             "(pairing, gap fills, names, harmonised boundaries).",
                              True, {"single": True, "summary": True}),
     "deconvolution": ("Automatic deconvolution split",
                       "A peak split automatically by deconvolution whose areas come from the MS component "
@@ -340,10 +344,12 @@ def _no_blank(rule: Rule, ev: dict) -> list[Finding]:
 
 def _feature_review(rule: Rule, ev: dict) -> list[Finding]:
     out = []
+    # the B of a single determination is a control determination: its differences are information
+    single = _determination(ev.get("double_determination") or {}) == DT.SINGLE and not rule.p("single_control")
     for row in ev.get("features") or []:
         light = row.get("light")
         if light == "red":
-            level = rule.level
+            level = "info" if single else rule.level
         elif light == "yellow" and rule.p("yellow"):
             level = "info"
         else:
@@ -358,15 +364,30 @@ def _feature_review(rule: Rule, ev: dict) -> list[Finding]:
     return out
 
 
+def _determination(dd: dict) -> str:
+    """The job's determination kind (``gcws.quant.determination``); evidence older than that: a job with one
+    run (pairing "single") was an incomplete double determination."""
+    if dd.get("determination"):
+        return dd["determination"]
+    return DT.INCOMPLETE if dd.get("pairing") == "single" else DT.DOUBLE
+
+
 def _double_determination(rule: Rule, ev: dict) -> list[Finding]:
     dd = ev.get("double_determination")
     if not dd:
         return []
     out = []
     members = ", ".join(dd.get("members") or [])
-    if dd.get("pairing") == "single" and rule.p("single"):
+    kind = _determination(dd)
+    if kind == DT.INCOMPLETE and rule.p("single"):
         out.append(Finding(rule.id, rule.level, f"one determination only ({members}); no double determination",
                            member=members))
+    elif kind == DT.SINGLE:
+        text = dd.get("determination_note") or "single determination"
+        if dd.get("control"):
+            text += f"; {dd['control']} is the control determination (not reported)"
+        out.append(Finding(rule.id, "info", text,
+                           member=", ".join(dd.get("reported") or []) or members))
     elif dd.get("pairing") == "failed":
         out.append(Finding(rule.id, rule.level, f"the determinations could not be paired: {dd.get('error', '')}",
                            member=members))

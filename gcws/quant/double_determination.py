@@ -1,7 +1,8 @@
 """A double determination: one replicate group of two runs, as the analyst reviews and accepts it.
 
 The group is a plain dict saved with the project (``ws.replicate_groups``): ``id``, ``name``, ``members``,
-``policy``, the analyst's edits under the key of the quantification mode and unit
+``policy``, ``single`` (made a single determination by hand), ``reported`` (the run reported of a pair under
+Single determination only, when the analyst switched it), the analyst's edits under the key of the quantification mode and unit
 (:func:`gcws.quant.duplicate_view.edits_key`) and the ``signoff`` (who accepted, when, how many red rows
 were left open). This module owns the changes to it, and the one rule that binds them: any change of
 what was accepted (an edit, a reset, other members, another validity rule, a name of a substance)
@@ -38,8 +39,23 @@ def evaluate(ws, members: list, edits: dict, labels=("A", "B"), policy: str = "a
     rows, problems = DV.compute(ws, members, policy)
     limit, rl = DV.limits(ws)
     unit = ws.quant_unit()
-    verdicts = [DV.plain_verdict(r, limit, rl, tuple(labels), unit) for r in rows]
+    flags = _single_flags(ws, rows) if len(members) == 1 else [""] * len(rows)
+    verdicts = [DV.plain_verdict(r, limit, rl, tuple(labels), unit, f) for r, f in zip(rows, flags)]
     return rows, verdicts, DV.apply_edits(rows, verdicts, edits, rt_tolerance(ws.quant)), problems
+
+
+def _single_flags(ws, rows: list) -> list:
+    """The flags of each row's substance (none for an ISTD): they colour a single determination's rows yellow."""
+    from gcws.quant import substance_flags as SF
+    index = SF.formula_index(ws)
+    out = []
+    for r in rows:
+        if any((s or {}).get("istd") for s in (r.get("source1"), r.get("source2"))):
+            out.append("")
+            continue
+        name, cas = r.get("name", ""), r.get("cas", "")
+        out.append(SF.flags(name, cas, SF.formula_from(index, name, cas))[0])
+    return out
 
 
 def rt_tolerance(quant: dict) -> float:
@@ -67,6 +83,19 @@ def stale(groups: list, group_id: str) -> list:
     return out
 
 
+def method_changed(groups: list, before: dict, after: dict, names: dict) -> list:
+    """The method's quantification changed from ``before`` to ``after`` (``ws.quant``; ``names``: run id ->
+    file name): an accepted group whose determination changed (Single determination only toggled: other
+    runs reported, another kind) is stale."""
+    from gcws.quant import determination as DT
+    out = copy.deepcopy(groups)
+    for g in out:
+        old, new = DT.of(before, g, names), DT.of(after, g, names)
+        if (old.kind, old.reported, old.control) != (new.kind, new.reported, new.control):
+            _stale(g)
+    return out
+
+
 def pair(groups: list, members: list, name: str) -> list:
     """``groups`` with ``members`` as one group of their own: the group of ``members[0]`` (a pair or a
     single) is reused, else a new one named ``name``. A run belongs to one pair or single, so the
@@ -80,10 +109,40 @@ def pair(groups: list, members: list, name: str) -> list:
         if g is not target and len(g["members"]) <= 2:
             g["members"] = [m for m in g["members"] if m not in members]
     out = [g for g in out if g["members"] or g is target]
-    if list(target["members"]) != list(members) or target.get("policy", "all") != "all":
+    if list(target["members"]) != list(members) or target.get("policy", "all") != "all" or target.get("single"):
         _stale(target)
+    if list(target["members"]) != list(members):
+        target.pop("reported", None)
     target["members"] = list(members)
     target["policy"] = "all"
+    target.pop("single", None)
+    return out
+
+
+def make_single(groups: list, run: str, name: str) -> list:
+    """``groups`` with ``run`` as a single determination made by hand: taken out of its pair (the
+    group is reused, the partner stays unused) or a new group named ``name``. A suffixed run made
+    single is a single determination, not an incomplete double determination."""
+    was = next((g for g in groups if run in g["members"] and len(g["members"]) <= 2), None)
+    if was is not None and list(was["members"]) == [run] and was.get("single"):
+        return copy.deepcopy(groups)
+    out = pair(groups, [run], name)
+    g = next(g for g in out if g["members"] == [run])
+    if was is not None and list(was["members"]) == [run]:
+        _stale(g)                                # an incomplete double determination signed off before
+    g["single"] = True
+    return out
+
+
+def set_reported(groups: list, group_id: str, run: str) -> list:
+    """``run`` is the reported determination of the pair (Single determination only), the other one the
+    control: another run in the report, so an acceptance no longer holds."""
+    out, g = _copy(groups, group_id)
+    if run not in g["members"]:
+        raise ValueError(f"{run} is not a determination of {g['name']}")
+    if g.get("reported") != run:
+        g["reported"] = run
+        _stale(g)
     return out
 
 
@@ -138,6 +197,7 @@ def set_members(groups: list, group_id: str, members: list) -> list:
     out, g = _copy(groups, group_id)
     if list(g["members"]) != list(members):
         g["members"] = list(members)
+        g.pop("reported", None)
         _stale(g)
     return out
 

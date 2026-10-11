@@ -205,6 +205,7 @@ Described task by task in [Blanks, internal standards and quantification](wf-qua
 | **Detector** | **FID** or **TIC (MS)**: the peaks the quantities are computed from. |
 | **ISTD concentration**, **Unit** | For the mode **Internal standard concentration** only. |
 | **Result unit** | For **HS-Screening** only. |
+| **Single determination only** | Each sample is reported from one run. Of a pair, A (`_A` / `_1`) is the **reported determination** and B the **control determination**: both are processed and compared, only A goes into the report. Saved with the processing method. See [Single determination](wf-double.md#single-determination). |
 | **NIAS parameters** | A table of **Parameter**, **Value** and **Unit**: the numbers of the NIAS calculation and of the reports (solvent end, reporting limit, quality limit, duplicate difference limit ...). Edit a value in place. |
 | **Migration conditions...** | Opens the migration conditions. |
 | **Internal standards** | The table of standards: **Code**, **Name**, **Conc.**, **Target RT**, **Quantify**. |
@@ -248,7 +249,8 @@ The double-determination page:
 
 | Control | What it does |
 |---|---|
-| **A**, **B** boxes | The two determinations. |
+| **A**, **B** boxes | The two determinations. **— single determination —** as **B** reports A alone (taken out of its pair; see [Making a single determination by hand](wf-double.md#making-a-single-determination-by-hand)). |
+| **Reported: … · control: …**, **Switch reported determination** | Only with **Single determination only**: which run of the pair goes into the report and which is the control. The button reports the other run (`Ctrl+Z`, audit trail; an accepted pair is accepted again). See [Switching the reported determination](wf-double.md#switching-the-reported-determination). |
 | **⇄** | Swaps A and B. |
 | **Compare** | Pairs the two determinations and fills the list. |
 | **More** | **Settings…** (pairing, gap filling, consensus name), **3+ determinations…** (the worksheet of the first group of three or more) and **Reset all** (undoes every change made in this double determination). |
@@ -260,6 +262,7 @@ The double-determination page:
 | **Report preview** | The report of this pair: the report of the quantification mode, or the Template Report when the method's template says so (**Report buttons preview this report**). Its arrow offers **NIAS report...**, **Fingerprint report...**, **Total extraction report...**, **HS-Screening report...**, **Quantification report...**, **Template report...** and **Export worksheet...**. |
 | **Harmonise boundaries** | Takes over every proposed integration boundary. Shown when there are proposals. |
 | **Accept double determination** | Possible once A and B are compared; red rows still open keep their default (the tooltip counts them). Saves who accepted it and when with the project, writes it to the audit trail and marks the pair ✔ in the list; when the pair is a Report² report (a workflow processed it) it is accepted there too, however the project was opened; otherwise it is listed in Report² with its report (**Rename…** / **Overwrite** when the name is taken). The status bar says which. A later change reopens it (**Accept again**). |
+| **Accept single determination** | Shown instead when B is **— single determination —**: signs off A alone, without a comparison, the same way (who, when, audit trail, `Ctrl+Z`, Report²). |
 
 A right-click on a row offers **Delete row**, **Reset row** and the other row actions (see [Double determination](wf-double.md#decide)).
 
