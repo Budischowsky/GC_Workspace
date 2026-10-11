@@ -12,6 +12,7 @@ token: plain data the panel keeps while it offers "Undo", and gives back to :met
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Iterable, Optional
 
@@ -205,3 +206,39 @@ class Review:
         for jid, state, reason in token.before:
             self.journal.unremove(jid, state, reason)
         return Undone(True, "Restored.", [jid for jid, _, _ in token.before])
+
+
+# -- delivery ------------------------------------------------------------------------------------------
+
+def deliver_due(journal: J.Journal, *, only: Optional[Iterable[str]] = None, final: bool = False,
+                now: Optional[float] = None, find: Optional[Callable] = None) -> list[str]:
+    """Deliver the reports waiting for it (accepted, or needing control) whose undo time is over; returns
+    the ids delivered. A delivery that fails is marked "error" (and logged), the others go on.
+
+    ``only``: just these reports - a Report² panel without a watcher delivers what was decided there, never
+    what someone else accepted in a shared journal. ``final``: their undo already ended (the panel's message
+    is gone), so they go now. ``find(workflow_id)``: the workflow (default: as saved)."""
+    from gcws.automation import export
+    from gcws.automation import workflow as W
+    now = time.time() if now is None else now
+    find = find or W.find
+    if only is None:
+        jobs = journal.to_deliver()
+    else:
+        jobs = [j for j in (journal.job(i) for i in only)
+                if j is not None and j.export_pending and j.state in J.DELIVERABLE]
+    done = []
+    for job in jobs:
+        if not final and float(job.deliver_after or 0) > now:
+            continue                                   # the analyst may still undo it
+        wf = find(job.workflow_id)
+        if wf is None:
+            continue
+        try:
+            export.deliver(journal, wf, job)
+            done.append(job.id)
+        except Exception as exc:  # noqa: BLE001
+            journal.update_job(job.id, export_state="error", export_pending=0)
+            journal.event("error", f"{job.group_name}: delivery failed: {exc}", job_id=job.id,
+                          workflow_id=job.workflow_id, batch_id=job.batch_id)
+    return done

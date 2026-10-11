@@ -188,3 +188,32 @@ def test_undo_of_a_batch_delete(tmp_path):
     rv.undo(token)
     assert not jr.batch_by_id(b["id"])["deleted"] and jr.job(w.id).state == J.WAITING
     assert jr.job(single.id).deleted                               # stays deleted
+
+
+# -- delivery ------------------------------------------------------------------------------------------------
+
+def test_deliver_due_waits_for_the_undo_time_and_keeps_to_its_own(tmp_path, monkeypatch):
+    from gcws.automation import export
+    J, jr, b = _journal(tmp_path)
+    mine = _done(J, jr, b, "Mine", J.CONTROL)
+    other = _done(J, jr, b, "Other", J.CONTROL)
+    broken = _done(J, jr, b, "Broken", J.CONTROL)
+    for j in (mine, other, broken):
+        assert jr.review(j.id, True, grace=J.UNDO_GRACE)
+    sent = []
+
+    def deliver(journal, wf, job):
+        if job.id == broken.id:
+            raise OSError("share gone")
+        sent.append(job.id)
+        journal.update_job(job.id, export_pending=0, export_state="done")
+    monkeypatch.setattr(export, "deliver", deliver)
+    find = lambda wid: object()                                    # noqa: E731 - any workflow
+    assert R.deliver_due(jr, find=find) == []                      # the undo time is not over
+    assert R.deliver_due(jr, only=[mine.id], final=True, find=find) == [mine.id]   # the panel's own, now
+    assert sent == [mine.id] and jr.job(other.id).export_pending
+    later = time.time() + J.UNDO_GRACE + 1
+    assert R.deliver_due(jr, now=later, find=find) == [other.id]
+    assert (jr.job(broken.id).export_state, jr.job(broken.id).export_pending) == ("error", 0)
+    assert any("delivery failed: share gone" in e["text"] for e in jr.events(job_id=broken.id))
+    assert R.deliver_due(jr, now=later, find=lambda wid: None) == []   # no workflow: nothing to do

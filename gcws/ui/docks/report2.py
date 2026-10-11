@@ -1370,21 +1370,9 @@ class Report2Dock(QWidget):
         return done.ok
 
     def deliver_due(self):
-        """Deliver what was accepted here while no watcher runs (once it can no longer be undone)."""
-        from gcws.automation import export
-        from gcws.automation import workflow as W
+        """Deliver what was decided here while no watcher runs (its undo is over: the message is gone)."""
         ids, self._deliver = self._deliver, set()
-        for jid in ids:
-            job = self.journal.job(jid)
-            if job is None or not job.export_pending or job.state not in (J.CONTROL, *J.ACCEPTED):
-                continue
-            wf = W.find(job.workflow_id)
-            if wf is not None:
-                try:
-                    export.deliver(self.journal, wf, job)
-                except Exception as exc:  # noqa: BLE001
-                    self.journal.update_job(jid, export_state="error", export_pending=0)
-                    self.journal.event("error", f"{job.group_name}: delivery failed: {exc}", job_id=jid)
+        R.deliver_due(self.journal, only=ids, final=True)
         if ids:
             self.refresh()
 
