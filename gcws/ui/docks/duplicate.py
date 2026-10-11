@@ -578,7 +578,7 @@ class DuplicatePage(QWidget):
 
     def set_identities(self, changes: list) -> None:
         """``(row, name, cas)`` of several substances as one undo step (None keeps a value)."""
-        from gcws.core.ident import Identification
+        from gcws.core.ident import peak_near, typed_by_analyst
         from gcws.core.undo import IdentCommand, MultiCommand
         per_run: dict = {}                       # one command per run: each command snapshots the set
         for row, name, cas in changes:
@@ -591,18 +591,12 @@ class DuplicatePage(QWidget):
                 res = self.ws.result(rid, self.quant_signal())
                 if res is None or not res.peaks:
                     continue
-                j = min(range(len(res.peaks)), key=lambda q: abs(res.peaks[q].apex_rt - src["rt"]))
-                peak = res.peaks[j]
-                if abs(peak.apex_rt - src["rt"]) > 0.05:
+                j = peak_near(res.peaks, src["rt"])
+                if j is None:
                     continue
+                peak = res.peaks[j]
                 old = st.ident_set(self.quant_signal()).for_peak(peak)
-                ident = Identification(apex_rt=peak.apex_rt,
-                                       name=name if name is not None else (old.name if old else ""),
-                                       cas=cas if cas is not None else (old.cas if old else ""),
-                                       score=old.score if old else None, status="Accepted (analyst)",
-                                       formula=old.formula if old else "", library=old.library if old else "",
-                                       hits=list(old.hits) if old else [], source="double determination",
-                                       manual=True, istd=old.istd if old else "")
+                ident = typed_by_analyst(old, peak.apex_rt, name=name, cas=cas, source="double determination")
                 what = "name" if name is not None else "CAS"
                 value = name if name is not None else cas
                 per_run.setdefault(rid, []).append((peak.apex_rt, ident,
@@ -1620,14 +1614,15 @@ class DuplicatePage(QWidget):
             self.table.scrollToItem(self.table.item(r, C_NAME))
 
     def _source_peak(self, i: int, src):
-        """The integrated peak of determination ``i`` at ``src`` (apex within 0.05 min), or None."""
+        """The integrated peak of determination ``i`` at ``src`` (apex within NEAR_RT), or None."""
         if src is None or i >= len(self.members) or self.members[i] not in self.ws.runs:
             return None
         res = self.ws.result(self.members[i], self.quant_signal())
         if res is None or not res.peaks:
             return None
-        peak = min(res.peaks, key=lambda p: abs(p.apex_rt - src["rt"]))
-        return peak if abs(peak.apex_rt - src["rt"]) <= 0.05 else None
+        from gcws.core.ident import peak_near
+        j = peak_near(res.peaks, src["rt"])
+        return None if j is None else res.peaks[j]
 
     def _draw_bounds(self, row) -> None:
         """Shade the integrated peak of the selected substance in each determination, A above and B
@@ -1738,8 +1733,9 @@ class DuplicatePage(QWidget):
                 self.ws.set_signal_key(self.quant_signal())
             res = self.ws.result(rid, self.quant_signal())
             if res is not None and res.peaks:
-                j = min(range(len(res.peaks)), key=lambda q: abs(res.peaks[q].apex_rt - src["rt"]))
-                if abs(res.peaks[j].apex_rt - src["rt"]) < 0.05:
+                from gcws.core.ident import peak_near
+                j = peak_near(res.peaks, src["rt"])
+                if j is not None:
                     self.ws.select_peak(j)
                     self.ws.peakFocusRequested.emit(j)
             return

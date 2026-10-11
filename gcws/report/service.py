@@ -312,9 +312,8 @@ ID_KEYS = ("cas", "quality", "si", "score")
 def is_unknown(name) -> bool:
     """Whether ``name`` names an unknown ("unknown (m/z 149, 57)", "Unbekannt", "no hit found"). A row
     without a name is not one: it may be reported by its CAS."""
-    import gc_model as M
-    n = M.clean_name(name).casefold()
-    return bool(n) and (M.is_no_hit(n) or n.startswith("unbekannt"))
+    from gcws.core.ident import names_unknown
+    return names_unknown(name)
 
 
 def without_id(row: Optional[dict], unknown: Optional[bool] = None) -> Optional[dict]:

@@ -178,9 +178,8 @@ def _reported(row: dict, limit: float) -> bool:
 
 
 def _is_unidentified(row: dict) -> bool:
-    name = str(row.get("name") or "").strip().casefold()
-    return not name or name.startswith("unknown") or name.startswith("unbekannt") or \
-        str(row.get("id_status") or "").casefold().startswith("unknown")
+    from gcws.core.ident import is_unidentified
+    return is_unidentified(row.get("name"), row.get("id_status") or "")
 
 
 def _manual_check(rule: Rule, ev: dict) -> list[Finding]:
