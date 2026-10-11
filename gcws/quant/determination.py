@@ -87,8 +87,10 @@ def of(quant: Optional[dict], group: Optional[dict], names: dict) -> Determinati
         return Determination(DOUBLE, members, members)
     if not members:
         return Determination(SINGLE, (), ())
-    kind = INCOMPLETE if suffix(names[members[0]]) and not (single_only(quant) or (group or {}).get("single")) else SINGLE
-    return Determination(kind, members, members)
+    suf = suffix(names[members[0]])
+    if suf and single_only(quant):                     # the partner never came: no incomplete state
+        return Determination(SINGLE, members, members, note="" if suf in _FIRST else "A missing, B reported")
+    return Determination(INCOMPLETE if suf and not (group or {}).get("single") else SINGLE, members, members)
 
 
 def of_workspace(ws, group: Optional[dict]) -> Determination:

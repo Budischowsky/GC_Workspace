@@ -92,6 +92,38 @@ def test_planner_without_log_and_aborted_sequence(tmp_path):
     assert plan.groups[0].state == NOT_PROCESSED
 
 
+def test_planner_single_determination_only(tmp_path):
+    """Issue 04: with Single determination only the planner still waits for B; when the batch is finished
+    without B, A is a single determination (not incomplete); only B: B is reported with a note. Flag off:
+    the same plan, but the lone run is an incomplete double determination."""
+    from gcws.automation.planner import READY, WAITING, plan_batch
+    from gcws.io import sequence as SQ
+    from gcws.quant import determination as DT
+    b = tmp_path / "26016605_GIOSUN1635"
+    b.mkdir()
+    _write_log(b, BATCH)
+    plan = plan_batch(_present(b, BATCH[:5]), SQ.read_sequence(b), quiet=False)
+    s1 = plan.groups[0]
+    assert s1.state == WAITING and "11_26016606" in s1.reason                  # B is planned: wait
+    _write_log(b, BATCH, completed=True)
+    single, off = {"single_only": True}, {}
+
+    def det(quant, present):
+        g = next(p for p in plan_batch(_present(b, present), SQ.read_sequence(b), quiet=False).groups
+                 if p.key == s1.key)
+        assert g.state == READY
+        return DT.of(quant, {"members": g.members}, {m: m for m in g.members})
+
+    a_only = [n for n in BATCH if n != BATCH[5]]
+    d = det(single, a_only)
+    assert (d.kind, d.reported, d.note) == (DT.SINGLE, (BATCH[1].casefold(),), "")
+    assert det(off, a_only).kind == DT.INCOMPLETE
+    b_only = [n for n in BATCH if n != BATCH[1]]
+    d = det(single, b_only)
+    assert (d.kind, d.reported, d.note) == (DT.SINGLE, (BATCH[5].casefold(),), "A missing, B reported")
+    assert det(off, b_only).kind == DT.INCOMPLETE
+
+
 def test_scanner_readiness(tmp_path):
     from gcws.automation import scanner as SC
     root = tmp_path / "watch"

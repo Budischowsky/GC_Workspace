@@ -199,6 +199,11 @@ every project using the method follow it). Then:
 - B is the **control determination**: it stays in the project and the audit trail, but not in the report;
 - a lone `_A` is a single determination too, not an incomplete double determination.
 
+Automation still waits for B, so the comparison is ready when you open the sample. When the batch is
+finished (the sequence log ended, or the folder was quiet) and B never came, A is reported as a single
+determination without an *incomplete* flag. When only B came, B is reported and Report² shows the information
+line *A missing, B reported*.
+
 In Report² the information line names the control determination. Red substances of the comparison
 (**Double determination: substances to decide**) are only information, because B is only a control; tick
 **Control needed also in a single determination** in that rule to have them checked anyway. Ticking or

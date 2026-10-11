@@ -396,3 +396,20 @@ def test_single_determination_only_job(qapp, samples, data, tmp_path):
                       for row in ws.iter_rows() for c in row if c.value is not None)
     assert Path(B).stem in sheet and Path(A).stem not in sheet
     assert label_of(again.files["r1"]["xlsx"]) == "PA 26.007, single determination"
+
+
+def test_single_determination_only_b_alone(qapp, samples, data, tmp_path):
+    """Issue 04: with Single determination only and only B in the batch, B is reported as a single
+    determination (not incomplete) and Report² shows the info line "A missing, B reported"."""
+    import copy
+    from gcws.automation import pipeline as PL
+    batch = copy_batch(samples, tmp_path / "watch", ["06_", "08_", "11_", "13_"])
+    method = copy.deepcopy(METHOD)
+    method["sections"]["quant"]["single_only"] = True
+    group = {"key": "26016606:x", "name": "26016606_130m_min_GIOSUN1635", "members": [B]}
+    res = PL.run_job(spec(batch, tmp_path / "sd", method=method, group=group), identify=lib_oracle)
+    assert res.state in (PL.ACCEPTED_AUTO, PL.CONTROL), res.reason
+    dd = res.evidence["double_determination"]
+    assert dd["determination"] == "single" and dd["reported"] == [Path(B).stem] and not dd["control"]
+    found = [f for f in res.findings if f["rule"] == "double_determination"]
+    assert [(f["level"], f["text"]) for f in found] == [("info", "A missing, B reported")]
