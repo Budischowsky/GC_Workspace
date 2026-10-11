@@ -1796,7 +1796,7 @@ class MainWindow(QMainWindow):
         in Report², accepted. The status bar always says what happened."""
         from gcws.automation import journal as J
         from gcws.automation import manual as MA
-        from gcws.ui.docks.report2 import can_accept
+        from gcws.automation import review as R
         g = next((g for g in self.ws.replicate_groups if g["id"] == group_id), None)
         if g is None:
             return False
@@ -1816,7 +1816,7 @@ class MainWindow(QMainWindow):
             self.ws.message.emit("Accepted here; the project could not be saved for Report².")
             return False
         job = self.report2.journal.job(job.id) or job
-        if not can_accept(job):
+        if not R.allowed(job, "accept"):
             state = "being made again" if job.review_pending else J.STATE_LABELS.get(job.state, job.state)
             self.ws.message.emit(f"Accepted here; in Report² {job.group_name} is {state.lower()}, so it was "
                                  "left as it is.")

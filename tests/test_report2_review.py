@@ -88,3 +88,27 @@ def test_status_of_a_report(tmp_path):
     assert (R.bucket(a), R.level(a), R.delivered(a)) == ("accepted", "ok", ("pending", "info"))
     assert (R.bucket(f), R.level(f), R.delivered(f)) == ("failed", "bad", ("", "neutral"))
     assert R.worst([R.level(a), R.level(c)]) == "warn" and R.worst([]) == "neutral"
+
+
+# -- allowed actions -------------------------------------------------------------------------------------
+
+def test_allowed_actions_and_the_journal_refuses_the_same(tmp_path):
+    J, jr, b = _journal(tmp_path)
+    c = _done(J, jr, b, "C", J.CONTROL)
+    a = _done(J, jr, b, "A", J.ACCEPTED_AUTO)
+    q = jr.ensure_job("wf", "m", b["id"], "Q", "Q", ["Q.D"], {}, "fp", state=J.QUEUED)
+    assert R.allowed(c, "accept") and R.allowed(c, "reject") and not R.allowed(c, "set_control")
+    assert not R.allowed(a, "accept") and R.allowed(a, "reject") and R.allowed(a, "set_control")
+    assert not R.allowed(q, "reprocess") and R.allowed(c, "reprocess")
+    # an accepted report is not accepted again: the journal says no as the panel does
+    assert not jr.review(a.id, True) and jr.job(a.id).state == J.ACCEPTED_AUTO
+    jr.delete([c.id])
+    c = jr.job(c.id)
+    assert not R.allowed(c, "accept") and not jr.review(c.id, True)          # deleted: nothing to decide
+    jr.restore([c.id])
+    assert jr.review(c.id, False) and R.allowed(jr.job(c.id), "accept")      # rejected: may be accepted
+    jr.update_job(c.id, review_pending={"user": "a"})
+    assert not any(R.allowed(jr.job(c.id), act) for act in R.ACTIONS)        # being made again
+    import pytest
+    with pytest.raises(ValueError):
+        R.allowed(a, "fly")

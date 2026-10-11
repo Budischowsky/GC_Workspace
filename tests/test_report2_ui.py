@@ -986,8 +986,8 @@ def test_accepted_pair_is_listed_in_report2(qtbot, win, samples, tmp_path, monke
     third = MA.clash(jr, job.batch_id, "Other")
     assert MA.is_manual(third) and third.state == J.ACCEPTED_MANUAL
     # Report² never processes or delivers such an entry again
-    from gcws.ui.docks.report2 import can_reprocess
-    assert not can_reprocess(third)
+    from gcws.automation import review as R
+    assert not R.allowed(third, "reprocess")
     ws.dirty = False
 
 

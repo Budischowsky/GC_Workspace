@@ -2,8 +2,9 @@
 
 The journal (:mod:`gcws.automation.journal`) stores the rows and their state transitions; this module
 answers the questions every view asks of them - which filter chip a report counts for, its colour, whether
-it is delivered, whether it is done, whether its batch is closed (Report²'s Archive). Report², the
-automation overview and the Automation panel all ask here, so they always agree.
+it is delivered, whether it is done, whether its batch is closed (Report²'s Archive) - and which actions the
+analyst may take on it (:func:`allowed`; the journal's verbs refuse the same). Report², the automation
+overview, the Automation panel and the main window all ask here, so they always agree.
 """
 from __future__ import annotations
 
@@ -61,6 +62,33 @@ def is_done(job: J.Job) -> bool:
     if job.workflow_id == J.MANUAL_WORKFLOW:
         return True
     return not job.export_pending and job.export_state == "done"
+
+
+#: the analyst's actions on a report (:func:`allowed`)
+ACTIONS = ("accept", "reject", "set_control", "reprocess")
+
+
+def allowed(job: J.Job, action: str) -> bool:
+    """May the analyst take ``action`` on this report? Never on a deleted one, nor while it is being made
+    again after an edit.
+
+    - accept: from control needed or rejected (an edited report is made again first, then accepted);
+    - reject: from control needed or accepted;
+    - set_control (Set status > Control needed): an accepted or rejected sample report is checked again;
+    - reprocess (Process or report again): anything not queued or being processed, made by a workflow (an
+      entry accepted by hand is accepted again in Replicates instead).
+    """
+    if job.deleted or job.review_pending:
+        return False
+    if action == "accept":
+        return job.state in J.ACCEPT_FROM
+    if action == "reject":
+        return job.state in J.REJECT_FROM
+    if action == "set_control":
+        return not job.is_batch and job.state in J.SET_CONTROL_FROM
+    if action == "reprocess":
+        return job.state not in (J.QUEUED, J.PROCESSING) and job.workflow_id != J.MANUAL_WORKFLOW
+    raise ValueError(f"unknown action {action!r}; one of {ACTIONS}")
 
 
 def batch_closed(batch: dict, jobs: list) -> bool:

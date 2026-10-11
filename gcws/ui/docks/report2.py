@@ -47,26 +47,6 @@ REGISTER = ["Sample", "Batch", "Workflow", "Status", "Done", "Reviewed by", "Dec
 DONE_FILTERS = {"all": "Done and not done", "done": "Done", "open": "Not done"}
 
 
-def can_accept(job: J.Job) -> bool:
-    return not job.deleted and not job.review_pending and job.state in (J.CONTROL, J.REJECTED)
-
-
-def can_reject(job: J.Job) -> bool:
-    return not job.deleted and not job.review_pending and job.state in (J.CONTROL, *J.ACCEPTED)
-
-
-def can_set_control(job: J.Job) -> bool:
-    """Set status > Control needed: an accepted (or rejected) report is checked again."""
-    return not job.deleted and not job.is_batch and not job.review_pending and job.state in (*J.ACCEPTED, J.REJECTED)
-
-
-def can_reprocess(job: J.Job) -> bool:
-    """Process or report again: a workflow does it, so never an entry accepted by hand (accept it again in
-    Replicates instead)."""
-    return not job.deleted and not job.review_pending and job.state not in (J.QUEUED, J.PROCESSING) \
-        and job.workflow_id != J.MANUAL_WORKFLOW
-
-
 def activity(job: J.Job) -> float:
     return max(float(job.reviewed_at or 0), float(job.finished or 0), float(job.created or 0))
 
@@ -1076,17 +1056,18 @@ class Report2Dock(QWidget):
     def _update_actions(self, jobs: list):
         one = jobs[0] if len(jobs) == 1 else None
         live = [j for j in jobs if not j.deleted]
-        self.a_accept.setEnabled(any(can_accept(j) for j in jobs))
+        self.a_accept.setEnabled(any(R.allowed(j, "accept") for j in jobs))
         self.a_accept_comment.setEnabled(self.a_accept.isEnabled())
         self.a_status_accepted.setEnabled(self.a_accept.isEnabled())
-        self.a_status_control.setEnabled(any(can_set_control(j) for j in jobs))
-        self.b_reject.setEnabled(any(can_reject(j) for j in jobs))
+        self.a_status_control.setEnabled(any(R.allowed(j, "set_control") for j in jobs))
+        self.b_reject.setEnabled(any(R.allowed(j, "reject") for j in jobs))
         self.b_project.setEnabled(one is not None and not one.is_batch and not one.review_pending and
                                   bool(one.project_path) and Path(one.project_path).exists())
         self.a_project.setEnabled(self.b_project.isEnabled())
         self.a_replicates.setEnabled(one is not None and self._is_pair(one) and not one.review_pending)
-        self.a_rereport.setEnabled(any(bool(j.project_path) and not j.is_batch and can_reprocess(j) for j in jobs))
-        self.a_reprocess.setEnabled(any(can_reprocess(j) for j in jobs))
+        self.a_rereport.setEnabled(any(bool(j.project_path) and not j.is_batch and R.allowed(j, "reprocess")
+                                       for j in jobs))
+        self.a_reprocess.setEnabled(any(R.allowed(j, "reprocess") for j in jobs))
         self.a_noblank.setEnabled(one is not None and one.state == J.NOT_PROCESSED and not one.deleted)
         self.a_remove.setEnabled(any(j.state in J.REMOVABLE for j in live))
         self.a_export.setEnabled(one is not None and not one.deleted and one.workflow_id != J.MANUAL_WORKFLOW and
@@ -1144,7 +1125,7 @@ class Report2Dock(QWidget):
         menu.addAction(self.a_accept_comment)
         rm = menu.addMenu("Reject")
         rm.aboutToShow.connect(lambda: self._fill_reject_menu(rm, self.reject))
-        rm.setEnabled(any(can_reject(j) for j in jobs))
+        rm.setEnabled(any(R.allowed(j, "reject") for j in jobs))
         sm = menu.addMenu("Set status")
         sm.addAction(self.a_status_accepted)
         sm.addAction(self.a_status_control)
@@ -1183,14 +1164,14 @@ class Report2Dock(QWidget):
         if local:                                      # the workflow copies the runs to this PC
             menu.addAction("Open the local copy", lambda: self.open_path(local)).setEnabled(os.path.isdir(local))
         menu.addSeparator()
-        n = sum(j.state == J.CONTROL and can_accept(j) for j in jobs)
+        n = sum(j.state == J.CONTROL and R.allowed(j, "accept") for j in jobs)
         menu.addAction(f'Accept all "control needed" ({n})...',
                        lambda: self.accept_batch(bid)).setEnabled(bool(n) and not b.get("deleted"))
         rm = menu.addMenu("Reject batch")
         rm.aboutToShow.connect(lambda: self._fill_reject_menu(rm, lambda reason: self.reject_batch(bid, reason)))
-        rm.setEnabled(any(can_reject(j) for j in jobs) and not b.get("deleted"))
+        rm.setEnabled(any(R.allowed(j, "reject") for j in jobs) and not b.get("deleted"))
         menu.addAction("Process batch again...", lambda: self.reprocess_batch(bid)).setEnabled(
-            any(can_reprocess(j) and not j.is_batch for j in jobs) and not b.get("deleted"))
+            any(R.allowed(j, "reprocess") and not j.is_batch for j in jobs) and not b.get("deleted"))
         menu.addSeparator()
         if self.mode == "archive":
             menu.addAction("Reopen", lambda: self.reopen_batch(bid))
@@ -1413,11 +1394,11 @@ class Report2Dock(QWidget):
         Undo is offered for a few seconds; then the next report needing control is selected."""
         ids = list(job_ids) if job_ids is not None else [j.id for j in self.selected_jobs()]
         self.dismiss_message()                    # the previous decision is final now
-        allowed = can_accept if accept else can_reject
+        action = "accept" if accept else "reject"
         done, before, regenerated = [], [], []
         for jid in ids:
             job = self.journal.job(jid)
-            if job is None or not allowed(job):
+            if job is None or not R.allowed(job, action):
                 continue
             if self.prepare_review is not None and not self.prepare_review(jid):
                 continue
@@ -1479,7 +1460,7 @@ class Report2Dock(QWidget):
         (what was delivered already stays in the target folders)."""
         ids = list(job_ids) if job_ids is not None else [j.id for j in self.selected_jobs()]
         self.dismiss_message()
-        done = [jid for jid in ids if (job := self.journal.job(jid)) is not None and can_set_control(job)
+        done = [jid for jid in ids if (job := self.journal.job(jid)) is not None and R.allowed(job, "set_control")
                 and self.journal.set_control(jid)]
         if done and not self._watcher_running():
             self._deliver.update(done)
@@ -1531,7 +1512,7 @@ class Report2Dock(QWidget):
 
     def accept_with_comment(self) -> bool:
         from gcws.ui.dialogs.report2 import ReviewDialog
-        jobs = [j for j in self.selected_jobs() if can_accept(j)]
+        jobs = [j for j in self.selected_jobs() if R.allowed(j, "accept")]
         if not jobs:
             return False
         dlg = ReviewDialog(True, self._names(jobs), sum(len(j.findings or []) for j in jobs), self)
@@ -1544,7 +1525,7 @@ class Report2Dock(QWidget):
         if reason is None:
             from gcws.ui.dialogs.report2 import ReviewDialog
             jobs = [j for j in (self.selected_jobs() if job_ids is None else
-                                [self.journal.job(i) for i in job_ids]) if j is not None and can_reject(j)]
+                                [self.journal.job(i) for i in job_ids]) if j is not None and R.allowed(j, "reject")]
             if not jobs:
                 return False
             dlg = ReviewDialog(False, self._names(jobs), sum(len(j.findings or []) for j in jobs), self)
@@ -1554,7 +1535,8 @@ class Report2Dock(QWidget):
         return self.review(False, reason, job_ids)
 
     def reprocess(self, mode: str = "full", override: Optional[dict] = None) -> bool:
-        jobs = [j for j in self.selected_jobs() if can_reprocess(j) and (mode != "rereport" or j.project_path)]
+        jobs = [j for j in self.selected_jobs()
+                if R.allowed(j, "reprocess") and (mode != "rereport" or j.project_path)]
         ok = [j for j in jobs if self.journal.request(j.id, mode, override)]
         if not ok:
             self.notify("This report is already being processed.", level="warn")
@@ -1615,7 +1597,7 @@ class Report2Dock(QWidget):
         return [j for j in self.journal.jobs(batch_id=bid) if not j.deleted]
 
     def accept_batch(self, bid, confirm: bool = True) -> bool:
-        jobs = [j for j in self._batch_jobs(bid) if j.state == J.CONTROL and can_accept(j)]
+        jobs = [j for j in self._batch_jobs(bid) if j.state == J.CONTROL and R.allowed(j, "accept")]
         name = self._batches.get(bid, {}).get("name", "")
         if not jobs:
             return False
@@ -1626,7 +1608,7 @@ class Report2Dock(QWidget):
         return self.review(True, "", [j.id for j in jobs])
 
     def reject_batch(self, bid, reason: Optional[str], confirm: bool = True) -> bool:
-        jobs = [j for j in self._batch_jobs(bid) if can_reject(j)]
+        jobs = [j for j in self._batch_jobs(bid) if R.allowed(j, "reject")]
         name = self._batches.get(bid, {}).get("name", "")
         if not jobs:
             return False
@@ -1637,7 +1619,7 @@ class Report2Dock(QWidget):
         return self.reject(reason, [j.id for j in jobs])
 
     def reprocess_batch(self, bid, confirm: bool = True) -> bool:
-        jobs = [j for j in self._batch_jobs(bid) if can_reprocess(j) and not j.is_batch]
+        jobs = [j for j in self._batch_jobs(bid) if R.allowed(j, "reprocess") and not j.is_batch]
         name = self._batches.get(bid, {}).get("name", "")
         if not jobs:
             return False
