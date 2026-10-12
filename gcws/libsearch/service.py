@@ -19,7 +19,7 @@ from typing import Callable, Optional
 import numpy as np
 
 import gcws.libsearch  # noqa: F401  (vendor on sys.path)
-from gcws.libsearch import store
+from gcws.libsearch import cache_clean, store
 from gcws.libsearch.norms import DiskNorms, NormFolds, rust_folds
 
 import engine as _atlas_engine        # vendored SpectrAtlas modules
@@ -96,6 +96,7 @@ class LocalEngine(_atlas_engine.Engine):
         self.count = self.native_count = 0
         self._sqrt = {}
         specs = [s for s in specs if s.enabled]
+        native_files, msp_files = [], []
         for spec in [s for s in specs if s.kind in READERS]:
             cls, kind = READERS[spec.kind]
             progress(f"Loading library {spec.name}")
@@ -111,6 +112,7 @@ class LocalEngine(_atlas_engine.Engine):
                 if skipped:
                     self.sources[-1]["skipped"] = len(skipped)
                 self.count += reader.count
+                native_files.append(reader.files)
             except (ValueError, OSError, KeyError, IndexError, struct.error) as error:
                 self.library_warnings.append(f"{spec.name}: {error}")
                 self.sources.append(dict(name=spec.name, count=0, kind=kind, path=spec.path, status="Unavailable",
@@ -129,11 +131,16 @@ class LocalEngine(_atlas_engine.Engine):
                 self.sources.append(dict(name=spec.name, count=len(kept), stored=records.count, kind="MSP library",
                                          path=spec.path, status="Ready" if kept else "Empty library"))
                 self.count += len(kept)
+                msp_files.append(spec.path)
             except (ValueError, OSError) as error:
                 self.library_warnings.append(f"{spec.name}: {error}")
                 self.sources.append(dict(name=spec.name, count=0, kind="MSP library", path=spec.path,
                                          status="Unavailable", error=str(error)))
         progress(f"Libraries ready · {self.count:,} reference spectra")
+        try:
+            cache_clean.clean(self.root, cache_clean.used_folders(self.root, native_files, msp_files))
+        except Exception:  # noqa: BLE001 - a failed clean-up never stops the search
+            pass
 
     @lru_cache(maxsize=1)
     def statistics(self):
