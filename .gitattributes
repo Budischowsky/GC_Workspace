@@ -1,0 +1,5 @@
+# Line endings: LF in the repo and in the working tree, so edits never flip a file's endings.
+# cmd.exe needs CRLF in batch files.
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf

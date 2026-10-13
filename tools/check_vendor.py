@@ -61,7 +61,8 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 
 
 def sha(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+    # line endings ignored: the repo keeps LF (.gitattributes), the origins may use CRLF
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()[:16]
 
 
 def files(folder: Path):
